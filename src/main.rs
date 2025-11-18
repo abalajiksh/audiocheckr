@@ -1,5 +1,5 @@
 // src/main.rs
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::Parser;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
