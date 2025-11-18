@@ -67,7 +67,7 @@ fn main() -> Result<()> {
 
 fn collect_audio_files(path: &Path) -> Result<Vec<PathBuf>> {
     let mut files = Vec::new();
-    let audio_extensions = ["flac", "wav", "mp3", "ogg", "m4a", "aac"];
+    let audio_extensions = ["flac", "wav", "mp3", "ogg", "m4a", "aac", "opus"];
 
     if path.is_file() {
         if let Some(ext) = path.extension() {
@@ -146,6 +146,8 @@ fn format_defect(defect: &DefectType) -> String {
             format!("Likely Ogg Vorbis transcode (cutoff at {} Hz)", cutoff_hz),
         DefectType::AacTranscode { cutoff_hz } => 
             format!("Possible AAC/M4A transcode (cutoff at {} Hz)", cutoff_hz),
+        DefectType::OpusTranscode { cutoff_hz, mode } =>  // NEW
+            format!("Likely Opus transcode - {} mode (cutoff at {} Hz)", mode, cutoff_hz),
         DefectType::BitDepthMismatch { claimed, actual } => 
             format!("Bit depth mismatch: claimed {}-bit, actually {}-bit", claimed, actual),
         DefectType::Upsampled { from, to } => 
