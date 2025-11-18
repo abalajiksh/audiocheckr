@@ -17,8 +17,8 @@ use detector::{QualityReport, DefectType};
 #[command(name = "audio-quality-checker")]
 #[command(about = "Detect fake lossless, transcodes, and upsampled audio files")]
 struct Args {
-    /// Input file or directory
-    #[arg(short, long)]
+    /// Input file or directory (defaults to current directory if not specified)
+    #[arg(short, long, default_value = ".")]
     input: PathBuf,
 
     /// Expected bit depth (16 or 24)
@@ -29,11 +29,11 @@ struct Args {
     #[arg(short, long)]
     spectrogram: bool,
 
-    /// Output directory for spectrograms
-    #[arg(short, long, default_value = "spectrograms")]
-    output: PathBuf,
+    /// Output mode: "source" (same as audio file), "current" (current directory), or custom path
+    #[arg(short, long, default_value = "source")]
+    output: String,
 
-    /// Check for upsampling (e.g., 44100->96000, 96000->192000)
+    /// Check for upsampling
     #[arg(short = 'u', long)]
     check_upsampling: bool,
 
@@ -45,7 +45,8 @@ struct Args {
 fn main() -> Result<()> {
     let args = Args::parse();
 
-    if args.spectrogram {
+    // Only create output dir if not using "source" mode
+    if args.spectrogram && args.output != "source" {
         std::fs::create_dir_all(&args.output)?;
     }
 
@@ -64,6 +65,7 @@ fn main() -> Result<()> {
 
     Ok(())
 }
+
 
 fn collect_audio_files(path: &Path) -> Result<Vec<PathBuf>> {
     let mut files = Vec::new();
@@ -102,9 +104,33 @@ fn process_file(file_path: &Path, args: &Args) -> Result<()> {
     print_report(&report, args.verbose);
 
     if args.spectrogram {
-        let output_path = args.output.join(
-            format!("{}.png", file_path.file_stem().unwrap().to_str().unwrap())
-        );
+        let output_path = match args.output.as_str() {
+            "source" => {
+                // Save next to the audio file
+                let parent = file_path.parent().unwrap_or(Path::new("."));
+                parent.join(format!(
+                    "{}_spectrogram.png",
+                    file_path.file_stem().unwrap().to_str().unwrap()
+                ))
+            },
+            "current" => {
+                // Save in current working directory
+                std::env::current_dir()?.join(format!(
+                    "{}_spectrogram.png",
+                    file_path.file_stem().unwrap().to_str().unwrap()
+                ))
+            },
+            custom_path => {
+                // Save in specified directory
+                let out_dir = PathBuf::from(custom_path);
+                std::fs::create_dir_all(&out_dir)?;
+                out_dir.join(format!(
+                    "{}.png",
+                    file_path.file_stem().unwrap().to_str().unwrap()
+                ))
+            }
+        };
+
         analyzer.generate_spectrogram(&output_path)?;
         println!("  Spectrogram saved to: {}", output_path.display());
     }
