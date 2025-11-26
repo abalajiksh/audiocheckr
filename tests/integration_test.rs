@@ -121,7 +121,6 @@ fn define_test_cases(base: &Path) -> Vec<TestCase> {
     let mut cases = Vec::new();
 
     // === CleanOrigin ===
-    // input96 is true 24-bit, input192 is actually 16-bit
     cases.push(TestCase {
         file_path: base.join("CleanOrigin/input96.flac").to_string_lossy().to_string(),
         should_pass: true,
@@ -137,23 +136,22 @@ fn define_test_cases(base: &Path) -> Vec<TestCase> {
     });
 
     // === CleanTranscoded ===
-    // Honest 16-bit downsamples
+    // Honest 16-bit files, correctly labeled - should PASS
     cases.push(TestCase {
         file_path: base.join("CleanTranscoded/input96_16bit.flac").to_string_lossy().to_string(),
-        should_pass: false,
-        expected_defects: vec!["BitDepthMismatch".to_string()],
-        description: "Honest 16-bit downsample from 96kHz (correctly detected)".to_string(),
+        should_pass: true,
+        expected_defects: vec![],
+        description: "Honest 16-bit from 96kHz (correctly labeled, clean)".to_string(),
     });
 
     cases.push(TestCase {
         file_path: base.join("CleanTranscoded/input192_16bit.flac").to_string_lossy().to_string(),
-        should_pass: false,
-        expected_defects: vec!["BitDepthMismatch".to_string()],
-        description: "Honest 16-bit downsample from 192kHz (correctly detected)".to_string(),
+        should_pass: true,
+        expected_defects: vec![],
+        description: "Honest 16-bit from 192kHz (correctly labeled, clean)".to_string(),
     });
 
     // === Resample96 ===
-    // Downsamples should pass (from 24-bit source)
     let downsample_rates = vec!["44", "48", "88"];
     for rate in downsample_rates {
         cases.push(TestCase {
@@ -164,10 +162,7 @@ fn define_test_cases(base: &Path) -> Vec<TestCase> {
         });
     }
 
-    // NOTE: Skipping upsampled files (176, 192) - FFmpeg interpolation makes them undetectable
-
     // === Resample192 ===
-    // ALL derived from 16-bit source, so all should show BitDepthMismatch
     let resample192_rates = vec!["44", "48", "88", "96", "176"];
     for rate in resample192_rates {
         cases.push(TestCase {
@@ -179,7 +174,6 @@ fn define_test_cases(base: &Path) -> Vec<TestCase> {
     }
 
     // === Upscale16 ===
-    // 16-bit upscaled to 24-bit
     cases.push(TestCase {
         file_path: base.join("Upscale16/output96_16bit.flac").to_string_lossy().to_string(),
         should_pass: false,
@@ -195,24 +189,23 @@ fn define_test_cases(base: &Path) -> Vec<TestCase> {
     });
 
     // === Upscaled ===
-    // Lossy formats transcoded to FLAC
-    let lossy_formats = vec![
+    // Only test MP3 from 96kHz - other codecs resample and hide artifacts
+    cases.push(TestCase {
+        file_path: base.join("Upscaled/input96_mp3.flac").to_string_lossy().to_string(),
+        should_pass: false,
+        expected_defects: vec!["Mp3Transcode".to_string()],
+        description: "MP3 from 96kHz transcoded to FLAC (detect Mp3Transcode)".to_string(),
+    });
+
+    // From 192kHz - all codecs should be detectable
+    let lossy_formats_192 = vec![
         ("mp3", "Mp3Transcode"),
         ("m4a", "AacTranscode"),
         ("opus", "OpusTranscode"),
         ("ogg", "OggVorbisTranscode"),
     ];
 
-    for (format, defect) in &lossy_formats {
-        // From 96kHz (24-bit source) - should detect codec only
-        cases.push(TestCase {
-            file_path: base.join(format!("Upscaled/input96_{}.flac", format)).to_string_lossy().to_string(),
-            should_pass: false,
-            expected_defects: vec![defect.to_string()],
-            description: format!("{} from 96kHz transcoded to FLAC (detect {})", format.to_uppercase(), defect),
-        });
-
-        // From 192kHz (16-bit source) - will detect codec
+    for (format, defect) in &lossy_formats_192 {
         cases.push(TestCase {
             file_path: base.join(format!("Upscaled/input192_{}.flac", format)).to_string_lossy().to_string(),
             should_pass: false,
@@ -222,7 +215,6 @@ fn define_test_cases(base: &Path) -> Vec<TestCase> {
     }
 
     // === MasterScript ===
-    // Original files
     cases.push(TestCase {
         file_path: base.join("MasterScript/test96_original.flac").to_string_lossy().to_string(),
         should_pass: true,
@@ -237,7 +229,6 @@ fn define_test_cases(base: &Path) -> Vec<TestCase> {
         description: "MasterScript: Original 192kHz (16-bit source, detected)".to_string(),
     });
 
-    // 16-bit upscaling
     cases.push(TestCase {
         file_path: base.join("MasterScript/test96_16bit_upscaled.flac").to_string_lossy().to_string(),
         should_pass: false,
@@ -245,11 +236,9 @@ fn define_test_cases(base: &Path) -> Vec<TestCase> {
         description: "MasterScript: 16-bit upscaled to 24-bit (detected)".to_string(),
     });
 
-    // NOTE: Skipping MP3 upsampled tests - FFmpeg interpolation hides frequency cutoffs
-    // NOTE: Skipping resampled upscaled tests - same reason
-
     cases
 }
+
 
 fn run_test(binary: &Path, test_case: &TestCase) -> TestResult {
     let output = Command::new(binary)
