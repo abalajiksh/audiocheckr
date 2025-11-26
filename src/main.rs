@@ -1,4 +1,5 @@
 // src/main.rs
+
 use anyhow::Result;
 use clap::Parser;
 use std::path::{Path, PathBuf};
@@ -29,6 +30,10 @@ struct Args {
     #[arg(short, long)]
     spectrogram: bool,
 
+    /// Use linear frequency scale instead of mel scale (produces longer spectrograms)
+    #[arg(long)]
+    linear_scale: bool,
+
     /// Output mode: "source" (same as audio file), "current" (current directory), or custom path
     #[arg(short, long, default_value = "source")]
     output: String,
@@ -51,7 +56,7 @@ fn main() -> Result<()> {
     }
 
     let audio_files = collect_audio_files(&args.input)?;
-    
+
     if audio_files.is_empty() {
         println!("{}", "No audio files found!".red());
         return Ok(());
@@ -65,7 +70,6 @@ fn main() -> Result<()> {
 
     Ok(())
 }
-
 
 fn collect_audio_files(path: &Path) -> Result<Vec<PathBuf>> {
     let mut files = Vec::new();
@@ -97,7 +101,7 @@ fn collect_audio_files(path: &Path) -> Result<Vec<PathBuf>> {
 
 fn process_file(file_path: &Path, args: &Args) -> Result<()> {
     println!("Analyzing: {}", file_path.display().to_string().cyan());
-    
+
     let analyzer = AudioAnalyzer::new(file_path)?;
     let report = analyzer.analyze(args.bit_depth, args.check_upsampling)?;
 
@@ -131,7 +135,7 @@ fn process_file(file_path: &Path, args: &Args) -> Result<()> {
             }
         };
 
-        analyzer.generate_spectrogram(&output_path)?;
+        analyzer.generate_spectrogram(&output_path, args.linear_scale)?;
         println!("  Spectrogram saved to: {}", output_path.display());
     }
 
@@ -146,7 +150,7 @@ fn print_report(report: &QualityReport, verbose: bool) {
     println!("  Duration: {:.2}s", report.duration_secs);
     println!("  Frequency Cutoff: {:.0} Hz", report.frequency_cutoff);
     println!("  Dynamic Range: {:.1} dB", report.dynamic_range);
-    
+
     if report.defects.is_empty() {
         println!("  Status: {}", "✓ CLEAN".green());
     } else {
@@ -166,21 +170,22 @@ fn print_report(report: &QualityReport, verbose: bool) {
 
 fn format_defect(defect: &DefectType) -> String {
     match defect {
-        DefectType::Mp3Transcode { cutoff_hz } => 
+        DefectType::Mp3Transcode { cutoff_hz } =>
             format!("Likely MP3 transcode (cutoff at {} Hz)", cutoff_hz),
-        DefectType::OggVorbisTranscode { cutoff_hz } => 
+        DefectType::OggVorbisTranscode { cutoff_hz } =>
             format!("Likely Ogg Vorbis transcode (cutoff at {} Hz)", cutoff_hz),
-        DefectType::AacTranscode { cutoff_hz } => 
+        DefectType::AacTranscode { cutoff_hz } =>
             format!("Possible AAC/M4A transcode (cutoff at {} Hz)", cutoff_hz),
-        DefectType::OpusTranscode { cutoff_hz, mode } =>  // NEW
+        DefectType::OpusTranscode { cutoff_hz, mode } =>
             format!("Likely Opus transcode - {} mode (cutoff at {} Hz)", mode, cutoff_hz),
-        DefectType::BitDepthMismatch { claimed, actual } => 
+        DefectType::BitDepthMismatch { claimed, actual } =>
             format!("Bit depth mismatch: claimed {}-bit, actually {}-bit", claimed, actual),
-        DefectType::Upsampled { from, to } => 
+        DefectType::Upsampled { from, to } =>
             format!("Upsampled from {} Hz to {} Hz", from, to),
-        DefectType::SpectralArtifacts => 
+        DefectType::SpectralArtifacts =>
             "Spectral artifacts detected".to_string(),
-        DefectType::LowQuality => 
+        DefectType::LowQuality =>
             "Poor quality encoding detected".to_string(),
     }
 }
+

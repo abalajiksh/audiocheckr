@@ -19,7 +19,10 @@ impl AudioAnalyzer {
         detect_quality_issues(&self.audio_data, expected_bit_depth, check_upsampling)
     }
 
-    pub fn generate_spectrogram(&self, output_path: &Path) -> Result<()> {
-        generate_spectrogram_image(&self.audio_data, output_path)
+    // Update the generate_spectrogram method signature:
+    pub fn generate_spectrogram(&self, output_path: &Path, use_linear_scale: bool) -> Result<()> {
+        spectrogram::generate_spectrogram_image(&self.audio_data, output_path, use_linear_scale)
+    }
+
     }
 }
