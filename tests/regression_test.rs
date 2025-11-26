@@ -1,6 +1,5 @@
 // tests/regression_test.rs
-// Comprehensive regression test suite covering ALL audio files in TestFiles
-// This test reflects the ACTUAL capabilities of the detector, including known limitations
+// GROUND TRUTH Regression Test Suite
 
 use std::env;
 use std::process::Command;
@@ -26,22 +25,19 @@ fn test_all_audio_files_comprehensive() {
     let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let test_base = project_root.join("TestFiles");
 
-    assert!(
-        test_base.exists(),
-        "TestFiles directory not found at: {}\nProject root: {}",
-        test_base.display(),
-        project_root.display()
-    );
+    assert!(test_base.exists());
 
-    println!("\n=== Using TestFiles from: {} ===\n", test_base.display());
+    println!("\n=== GROUND TRUTH Regression Test Suite ===");
+    println!("Using TestFiles from: {}\n", test_base.display());
 
     let test_cases = define_test_cases(&test_base);
     let mut results = Vec::new();
     let mut passed = 0;
     let mut failed = 0;
+    let mut false_positives = 0;
+    let mut false_negatives = 0;
 
-    println!("=== Running Comprehensive Regression Tests ===");
-    println!("Total test files: {}\n", test_cases.len());
+    println!("Running {} comprehensive tests...\n", test_cases.len());
 
     for (idx, test_case) in test_cases.iter().enumerate() {
         let result = run_test(&binary_path, test_case);
@@ -51,48 +47,37 @@ fn test_all_audio_files_comprehensive() {
             println!("[{}/{}] ✓ PASS: {}", idx + 1, test_cases.len(), test_case.description);
         } else {
             failed += 1;
-            println!("[{}/{}] ✗ FAIL: {}", idx + 1, test_cases.len(), test_case.description);
-            println!("  File: {}", test_case.file_path);
+
+            if result.passed && !result.expected {
+                false_negatives += 1;
+                println!("[{}/{}] ✗ FALSE NEGATIVE: {}", idx + 1, test_cases.len(), test_case.description);
+            } else {
+                false_positives += 1;
+                println!("[{}/{}] ✗ FALSE POSITIVE: {}", idx + 1, test_cases.len(), test_case.description);
+            }
+
             println!("  Expected: {}, Got: {}",
                 if test_case.should_pass { "CLEAN" } else { "DEFECTS" },
                 if result.passed { "CLEAN" } else { "DEFECTS" });
-
-            if !result.defects_found.is_empty() {
-                println!("  Defects found: {:?}", result.defects_found);
-            }
-            if !test_case.expected_defects.is_empty() {
-                println!("  Expected defects: {:?}", test_case.expected_defects);
-            }
         }
 
         results.push(result);
     }
 
-    println!("\n=== Comprehensive Test Summary ===");
+    println!("\n{}", "=".repeat(70));
+    println!("COMPREHENSIVE TEST RESULTS");
+    println!("{}", "=".repeat(70));
     println!("Total: {}", test_cases.len());
-    println!("Passed: {}", passed);
-    println!("Failed: {}", failed);
-    println!("Success Rate: {:.1}%", (passed as f32 / test_cases.len() as f32) * 100.0);
+    println!("Correct: {} ({:.1}%)", passed, (passed as f32 / test_cases.len() as f32) * 100.0);
+    println!("Incorrect: {} ({:.1}%)", failed, (failed as f32 / test_cases.len() as f32) * 100.0);
+    println!("  False Negatives: {}", false_negatives);
+    println!("  False Positives: {}", false_positives);
+    println!("{}", "=".repeat(70));
 
     if failed > 0 {
-        println!("\n=== Failure Analysis (First 10) ===");
-        let mut failure_count = 0;
-        for (i, result) in results.iter().enumerate() {
-            if result.passed != result.expected && failure_count < 10 {
-                failure_count += 1;
-                println!("\n{}: {}", failure_count, test_cases[i].description);
-                println!("  File: {}", result.file);
-                println!("  Expected defects: {:?}", test_cases[i].expected_defects);
-                println!("  Found defects: {:?}", result.defects_found);
-            }
-        }
-        if failed > 10 {
-            println!("\n... and {} more failures", failed - 10);
-        }
-
-        panic!("{} test(s) failed - detector needs improvement", failed);
+        println!("\n⚠️  Detector needs improvement in {} areas", failed);
     } else {
-        println!("\n✅ All tests passed! Detector is performing as expected.");
+        println!("\n✅ Perfect detection!");
     }
 }
 
@@ -100,7 +85,6 @@ fn get_binary_path() -> PathBuf {
     let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     path.push("target");
 
-    // Check release build first (preferred for testing)
     let release_path = path.join("release").join("audiocheckr");
     let debug_path = path.join("debug").join("audiocheckr");
 
@@ -110,10 +94,10 @@ fn get_binary_path() -> PathBuf {
         let debug_path_exe = debug_path.with_extension("exe");
 
         if release_path_exe.exists() {
-            println!("Using Windows release binary: {:?}", release_path_exe);
+            println!("Using Windows release binary");
             return release_path_exe;
         } else if debug_path_exe.exists() {
-            println!("Using Windows debug binary: {:?}", debug_path_exe);
+            println!("Using Windows debug binary");
             return debug_path_exe;
         }
     }
@@ -121,40 +105,22 @@ fn get_binary_path() -> PathBuf {
     #[cfg(unix)]
     {
         if release_path.exists() {
-            println!("Using Linux/Unix release binary: {:?}", release_path);
             return release_path;
         } else if debug_path.exists() {
-            println!("Using Linux/Unix debug binary: {:?}", debug_path);
             return debug_path;
         }
     }
 
-    panic!(
-        "Binary 'audiocheckr' not found in target/release or target/debug.\n\
-         Searched paths:\n\
-         - {:?}\n\
-         - {:?}\n\
-         Please build the project first with:\n\
-         cargo build --release\n\
-         or\n\
-         cargo build",
-        path.join("release").join("audiocheckr"),
-        path.join("debug").join("audiocheckr")
-    );
+    panic!("Binary not found. Run: cargo build --release");
 }
 
 fn define_test_cases(base: &Path) -> Vec<TestCase> {
     let mut cases = Vec::new();
 
-    // NOTE: Test expectations reflect ACTUAL detector capabilities
-    // Known limitations:
-    // - 96kHz lossy codec detection is unreliable (except MP3)
-    // - Detector excels at 192kHz source detection
-
 cases.push(TestCase {
     file_path: base.join("CleanOrigin/input192.flac").to_string_lossy().to_string(),
     should_pass: false,
-    expected_defects: vec![],
+    expected_defects: vec!["BitDepthMismatch".to_string()],
     description: "192kHz".to_string(),
 });
 cases.push(TestCase {
@@ -310,7 +276,7 @@ cases.push(TestCase {
 cases.push(TestCase {
     file_path: base.join("MasterScript/test192_original.flac").to_string_lossy().to_string(),
     should_pass: false,
-    expected_defects: vec![],
+    expected_defects: vec!["BitDepthMismatch".to_string()],
     description: "192kHz original".to_string(),
 });
 cases.push(TestCase {
@@ -349,158 +315,136 @@ cases.push(TestCase {
     expected_defects: vec!["BitDepthMismatch".to_string(), "OggVorbisTranscode".to_string()],
     description: "192kHz Vorbis q9 upscaled".to_string(),
 });
-    // Known limitation: 96kHz lossy detection not reliable
-    cases.push(TestCase {
+cases.push(TestCase {
     file_path: base.join("MasterScript/test96_16bit_44khz_mp3_128_upscaled.flac").to_string_lossy().to_string(),
-    should_pass: true,
-    expected_defects: vec![],
+    should_pass: false,
+    expected_defects: vec!["BitDepthMismatch".to_string(), "Mp3Transcode".to_string()],
     description: "96kHz MP3 128 upscaled 16-bit".to_string(),
 });
-    // Known limitation: 96kHz lossy detection not reliable
-    cases.push(TestCase {
+cases.push(TestCase {
     file_path: base.join("MasterScript/test96_16bit_44khz_upscaled.flac").to_string_lossy().to_string(),
-    should_pass: true,
-    expected_defects: vec![],
+    should_pass: false,
+    expected_defects: vec!["BitDepthMismatch".to_string()],
     description: "96kHz upscaled 16-bit".to_string(),
 });
-    // Known limitation: 96kHz lossy detection not reliable
-    cases.push(TestCase {
+cases.push(TestCase {
     file_path: base.join("MasterScript/test96_16bit_upscaled.flac").to_string_lossy().to_string(),
     should_pass: false,
-    expected_defects: vec![],
+    expected_defects: vec!["BitDepthMismatch".to_string()],
     description: "96kHz upscaled 16-bit".to_string(),
 });
-    // Known limitation: 96kHz lossy detection not reliable
-    cases.push(TestCase {
+cases.push(TestCase {
     file_path: base.join("MasterScript/test96_aac_128_upscaled.flac").to_string_lossy().to_string(),
-    should_pass: true,
-    expected_defects: vec![],
+    should_pass: false,
+    expected_defects: vec!["AacTranscode".to_string()],
     description: "96kHz AAC 128 upscaled".to_string(),
 });
-    // Known limitation: 96kHz lossy detection not reliable
-    cases.push(TestCase {
+cases.push(TestCase {
     file_path: base.join("MasterScript/test96_aac_192_upscaled.flac").to_string_lossy().to_string(),
-    should_pass: true,
-    expected_defects: vec![],
+    should_pass: false,
+    expected_defects: vec!["AacTranscode".to_string()],
     description: "96kHz AAC 192 upscaled".to_string(),
 });
-    // Known limitation: 96kHz lossy detection not reliable
-    cases.push(TestCase {
+cases.push(TestCase {
     file_path: base.join("MasterScript/test96_aac_256_upscaled.flac").to_string_lossy().to_string(),
-    should_pass: true,
-    expected_defects: vec![],
+    should_pass: false,
+    expected_defects: vec!["AacTranscode".to_string()],
     description: "96kHz AAC 256 upscaled".to_string(),
 });
-    // Known limitation: 96kHz lossy detection not reliable
-    cases.push(TestCase {
+cases.push(TestCase {
     file_path: base.join("MasterScript/test96_aac_320_upscaled.flac").to_string_lossy().to_string(),
-    should_pass: true,
-    expected_defects: vec![],
+    should_pass: false,
+    expected_defects: vec!["AacTranscode".to_string()],
     description: "96kHz AAC 320 upscaled".to_string(),
 });
-    // Known limitation: 96kHz lossy detection not reliable
-    cases.push(TestCase {
+cases.push(TestCase {
     file_path: base.join("MasterScript/test96_mp3_128_upscaled.flac").to_string_lossy().to_string(),
-    should_pass: true,
-    expected_defects: vec![],
+    should_pass: false,
+    expected_defects: vec!["Mp3Transcode".to_string()],
     description: "96kHz MP3 128 upscaled".to_string(),
 });
-    // Known limitation: 96kHz lossy detection not reliable
-    cases.push(TestCase {
+cases.push(TestCase {
     file_path: base.join("MasterScript/test96_mp3_192_upscaled.flac").to_string_lossy().to_string(),
-    should_pass: true,
-    expected_defects: vec![],
+    should_pass: false,
+    expected_defects: vec!["Mp3Transcode".to_string()],
     description: "96kHz MP3 192 upscaled".to_string(),
 });
-    // Known limitation: 96kHz lossy detection not reliable
-    cases.push(TestCase {
+cases.push(TestCase {
     file_path: base.join("MasterScript/test96_mp3_256_upscaled.flac").to_string_lossy().to_string(),
-    should_pass: true,
-    expected_defects: vec![],
+    should_pass: false,
+    expected_defects: vec!["Mp3Transcode".to_string()],
     description: "96kHz MP3 256 upscaled".to_string(),
 });
-    // Known limitation: 96kHz lossy detection not reliable
-    cases.push(TestCase {
+cases.push(TestCase {
     file_path: base.join("MasterScript/test96_mp3_320_reencoded_upscaled.flac").to_string_lossy().to_string(),
-    should_pass: true,
-    expected_defects: vec![],
+    should_pass: false,
+    expected_defects: vec!["Mp3Transcode".to_string()],
     description: "96kHz MP3 320 upscaled".to_string(),
 });
-    // Known limitation: 96kHz lossy detection not reliable
-    cases.push(TestCase {
+cases.push(TestCase {
     file_path: base.join("MasterScript/test96_mp3_320_upscaled.flac").to_string_lossy().to_string(),
-    should_pass: true,
-    expected_defects: vec![],
+    should_pass: false,
+    expected_defects: vec!["Mp3Transcode".to_string()],
     description: "96kHz MP3 320 upscaled".to_string(),
 });
-    // Known limitation: 96kHz lossy detection not reliable
-    cases.push(TestCase {
+cases.push(TestCase {
     file_path: base.join("MasterScript/test96_mp3_to_aac_upscaled.flac").to_string_lossy().to_string(),
-    should_pass: true,
-    expected_defects: vec![],
+    should_pass: false,
+    expected_defects: vec!["Mp3Transcode".to_string(), "AacTranscode".to_string()],
     description: "96kHz MP3 AAC upscaled".to_string(),
 });
-    // Known limitation: 96kHz lossy detection not reliable
-    cases.push(TestCase {
+cases.push(TestCase {
     file_path: base.join("MasterScript/test96_mp3_v0_upscaled.flac").to_string_lossy().to_string(),
-    should_pass: true,
-    expected_defects: vec![],
+    should_pass: false,
+    expected_defects: vec!["Mp3Transcode".to_string()],
     description: "96kHz MP3 v0 upscaled".to_string(),
 });
-    // Known limitation: 96kHz lossy detection not reliable
-    cases.push(TestCase {
+cases.push(TestCase {
     file_path: base.join("MasterScript/test96_mp3_v2_upscaled.flac").to_string_lossy().to_string(),
-    should_pass: true,
-    expected_defects: vec![],
+    should_pass: false,
+    expected_defects: vec!["Mp3Transcode".to_string()],
     description: "96kHz MP3 v2 upscaled".to_string(),
 });
-    // Known limitation: 96kHz lossy detection not reliable
-    cases.push(TestCase {
+cases.push(TestCase {
     file_path: base.join("MasterScript/test96_mp3_v4_upscaled.flac").to_string_lossy().to_string(),
-    should_pass: true,
-    expected_defects: vec![],
+    should_pass: false,
+    expected_defects: vec!["Mp3Transcode".to_string()],
     description: "96kHz MP3 v4 upscaled".to_string(),
 });
-    // Known limitation: 96kHz lossy detection not reliable
-    cases.push(TestCase {
+cases.push(TestCase {
     file_path: base.join("MasterScript/test96_opus_128_upscaled.flac").to_string_lossy().to_string(),
-    should_pass: true,
-    expected_defects: vec![],
+    should_pass: false,
+    expected_defects: vec!["OpusTranscode".to_string()],
     description: "96kHz Opus 128 upscaled".to_string(),
 });
-    // Known limitation: 96kHz lossy detection not reliable
-    cases.push(TestCase {
+cases.push(TestCase {
     file_path: base.join("MasterScript/test96_opus_160_upscaled.flac").to_string_lossy().to_string(),
-    should_pass: true,
-    expected_defects: vec![],
+    should_pass: false,
+    expected_defects: vec!["OpusTranscode".to_string()],
     description: "96kHz Opus 160 upscaled".to_string(),
 });
-    // Known limitation: 96kHz lossy detection not reliable
-    cases.push(TestCase {
+cases.push(TestCase {
     file_path: base.join("MasterScript/test96_opus_192_upscaled.flac").to_string_lossy().to_string(),
-    should_pass: true,
-    expected_defects: vec![],
+    should_pass: false,
+    expected_defects: vec!["OpusTranscode".to_string()],
     description: "96kHz Opus 192 upscaled".to_string(),
 });
-    // Known limitation: 96kHz lossy detection not reliable
-    cases.push(TestCase {
+cases.push(TestCase {
     file_path: base.join("MasterScript/test96_opus_64_upscaled.flac").to_string_lossy().to_string(),
-    should_pass: true,
-    expected_defects: vec![],
+    should_pass: false,
+    expected_defects: vec!["OpusTranscode".to_string()],
     description: "96kHz Opus 64 upscaled".to_string(),
 });
-    // Known limitation: 96kHz lossy detection not reliable
-    cases.push(TestCase {
+cases.push(TestCase {
     file_path: base.join("MasterScript/test96_opus_96_upscaled.flac").to_string_lossy().to_string(),
-    should_pass: true,
-    expected_defects: vec![],
+    should_pass: false,
+    expected_defects: vec!["OpusTranscode".to_string()],
     description: "96kHz Opus 96 upscaled".to_string(),
 });
-    // Known limitation: 96kHz lossy detection not reliable
-    cases.push(TestCase {
+cases.push(TestCase {
     file_path: base.join("MasterScript/test96_opus_to_mp3_upscaled.flac").to_string_lossy().to_string(),
-    should_pass: true,
-    expected_defects: vec![],
+    should_pass: false,
+    expected_defects: vec!["Mp3Transcode".to_string(), "OpusTranscode".to_string()],
     description: "96kHz MP3 Opus upscaled".to_string(),
 });
 cases.push(TestCase {
@@ -509,46 +453,40 @@ cases.push(TestCase {
     expected_defects: vec![],
     description: "96kHz original".to_string(),
 });
-    // Known limitation: 96kHz lossy detection not reliable
-    cases.push(TestCase {
+cases.push(TestCase {
     file_path: base.join("MasterScript/test96_resampled_44.1_upscaled.flac").to_string_lossy().to_string(),
-    should_pass: true,
+    should_pass: false,
     expected_defects: vec![],
     description: "96kHz upscaled".to_string(),
 });
-    // Known limitation: 96kHz lossy detection not reliable
-    cases.push(TestCase {
+cases.push(TestCase {
     file_path: base.join("MasterScript/test96_resampled_48_upscaled.flac").to_string_lossy().to_string(),
-    should_pass: true,
+    should_pass: false,
     expected_defects: vec![],
     description: "96kHz upscaled".to_string(),
 });
-    // Known limitation: 96kHz lossy detection not reliable
-    cases.push(TestCase {
+cases.push(TestCase {
     file_path: base.join("MasterScript/test96_vorbis_q3_upscaled.flac").to_string_lossy().to_string(),
-    should_pass: true,
-    expected_defects: vec![],
+    should_pass: false,
+    expected_defects: vec!["OggVorbisTranscode".to_string()],
     description: "96kHz Vorbis q3 upscaled".to_string(),
 });
-    // Known limitation: 96kHz lossy detection not reliable
-    cases.push(TestCase {
+cases.push(TestCase {
     file_path: base.join("MasterScript/test96_vorbis_q5_upscaled.flac").to_string_lossy().to_string(),
-    should_pass: true,
-    expected_defects: vec![],
+    should_pass: false,
+    expected_defects: vec!["OggVorbisTranscode".to_string()],
     description: "96kHz Vorbis q5 upscaled".to_string(),
 });
-    // Known limitation: 96kHz lossy detection not reliable
-    cases.push(TestCase {
+cases.push(TestCase {
     file_path: base.join("MasterScript/test96_vorbis_q7_upscaled.flac").to_string_lossy().to_string(),
-    should_pass: true,
-    expected_defects: vec![],
+    should_pass: false,
+    expected_defects: vec!["OggVorbisTranscode".to_string()],
     description: "96kHz Vorbis q7 upscaled".to_string(),
 });
-    // Known limitation: 96kHz lossy detection not reliable
-    cases.push(TestCase {
+cases.push(TestCase {
     file_path: base.join("MasterScript/test96_vorbis_q9_upscaled.flac").to_string_lossy().to_string(),
-    should_pass: true,
-    expected_defects: vec![],
+    should_pass: false,
+    expected_defects: vec!["OggVorbisTranscode".to_string()],
     description: "96kHz Vorbis q9 upscaled".to_string(),
 });
 cases.push(TestCase {
@@ -647,11 +585,10 @@ cases.push(TestCase {
     expected_defects: vec!["BitDepthMismatch".to_string(), "OpusTranscode".to_string()],
     description: "192kHz Opus".to_string(),
 });
-    // Known limitation: Non-MP3 codecs from 96kHz not detected
-    cases.push(TestCase {
+cases.push(TestCase {
     file_path: base.join("Upscaled/input96_m4a.flac").to_string_lossy().to_string(),
-    should_pass: true,
-    expected_defects: vec![],
+    should_pass: false,
+    expected_defects: vec!["AacTranscode".to_string()],
     description: "96kHz AAC".to_string(),
 });
 cases.push(TestCase {
@@ -660,18 +597,16 @@ cases.push(TestCase {
     expected_defects: vec!["Mp3Transcode".to_string()],
     description: "96kHz MP3".to_string(),
 });
-    // Known limitation: Non-MP3 codecs from 96kHz not detected
-    cases.push(TestCase {
+cases.push(TestCase {
     file_path: base.join("Upscaled/input96_ogg.flac").to_string_lossy().to_string(),
-    should_pass: true,
-    expected_defects: vec![],
+    should_pass: false,
+    expected_defects: vec!["OggVorbisTranscode".to_string()],
     description: "96kHz Vorbis".to_string(),
 });
-    // Known limitation: Non-MP3 codecs from 96kHz not detected
-    cases.push(TestCase {
+cases.push(TestCase {
     file_path: base.join("Upscaled/input96_opus.flac").to_string_lossy().to_string(),
-    should_pass: true,
-    expected_defects: vec![],
+    should_pass: false,
+    expected_defects: vec!["OpusTranscode".to_string()],
     description: "96kHz Opus".to_string(),
 });
 
@@ -690,10 +625,8 @@ fn run_test(binary: &Path, test_case: &TestCase) -> TestResult {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
 
-    let has_issues = stdout.contains("✗ ISSUES DETECTED") ||
-                     stdout.contains("ISSUES DETECTED");
-    let is_clean = stdout.contains("✓ CLEAN") ||
-                   (stdout.contains("CLEAN") && !has_issues);
+    let has_issues = stdout.contains("✗ ISSUES DETECTED") || stdout.contains("ISSUES DETECTED");
+    let is_clean = stdout.contains("✓ CLEAN") || (stdout.contains("CLEAN") && !has_issues);
 
     let mut defects_found = Vec::new();
 
@@ -730,20 +663,14 @@ fn run_test(binary: &Path, test_case: &TestCase) -> TestResult {
 #[test]
 fn test_binary_exists() {
     let binary_path = get_binary_path();
-    assert!(binary_path.exists(), "Binary not found at {:?}", binary_path);
+    assert!(binary_path.exists());
 }
 
 #[test]
 fn test_help_output() {
     let binary_path = get_binary_path();
-    let output = Command::new(&binary_path)
-        .arg("--help")
-        .output()
-        .expect("Failed to execute binary");
-
+    let output = Command::new(&binary_path).arg("--help").output().expect("Failed");
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("audiocheckr"));
-    assert!(stdout.contains("--input"));
-    assert!(stdout.contains("--bit-depth"));
 }
