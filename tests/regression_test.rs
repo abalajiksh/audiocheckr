@@ -366,7 +366,7 @@ cases.push(TestCase {
     // Known limitation: 96kHz lossy detection not reliable
     cases.push(TestCase {
     file_path: base.join("MasterScript/test96_16bit_upscaled.flac").to_string_lossy().to_string(),
-    should_pass: true,
+    should_pass: false,
     expected_defects: vec![],
     description: "96kHz upscaled 16-bit".to_string(),
 });
