@@ -1,5 +1,5 @@
 [package]
-name = "audio-quality-checker"
+name = "audiocheckr"
 version = "0.2.0"
 edition = "2021"
 description = "Detect fake lossless files, transcodes, and upsampled audio with advanced spectral analysis"

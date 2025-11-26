@@ -87,8 +87,8 @@ fn get_binary_path() -> PathBuf {
     let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     path.push("target");
     
-    let release_path = path.join("release").join("audio-quality-checker");
-    let debug_path = path.join("debug").join("audio-quality-checker");
+    let release_path = path.join("release").join("audiocheckr");
+    let debug_path = path.join("debug").join("audiocheckr");
     
     #[cfg(windows)]
     {
@@ -298,7 +298,7 @@ fn test_help_output() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("audio-quality-checker"));
+    assert!(stdout.contains("audiocheckr"));
     assert!(stdout.contains("--input"));
     assert!(stdout.contains("--bit-depth"));
 }
