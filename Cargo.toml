@@ -16,11 +16,3 @@ colorful = "0.2"
 
 [dependencies.spectrum-analyzer]
 version = "1.5"
-
-[[test]]
-name = "validation_test"
-path = "tests/validation_test.rs"
-
-[[test]]
-name = "regression_test"
-path = "tests/regression_test.rs"
