@@ -90,32 +90,50 @@ fn get_binary_path() -> PathBuf {
     let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     path.push("target");
     
-    let release_path = path.join("release").join("audio-quality-checker");
-    let debug_path = path.join("debug").join("audio-quality-checker");
+    // Check release build first (preferred for testing)
+    let release_path = path.join("release").join("audiocheckr");
+    let debug_path = path.join("debug").join("audiocheckr");
     
     #[cfg(windows)]
     {
-        let release_path = release_path.with_extension("exe");
-        let debug_path = debug_path.with_extension("exe");
+        let release_path_exe = release_path.with_extension("exe");
+        let debug_path_exe = debug_path.with_extension("exe");
         
-        if release_path.exists() {
-            return release_path;
-        } else if debug_path.exists() {
-            return debug_path;
+        if release_path_exe.exists() {
+            println!("Using Windows release binary: {:?}", release_path_exe);
+            return release_path_exe;
+        } else if debug_path_exe.exists() {
+            println!("Using Windows debug binary: {:?}", debug_path_exe);
+            return debug_path_exe;
         }
     }
     
-    #[cfg(not(windows))]
+    #[cfg(unix)]
     {
         if release_path.exists() {
+            println!("Using Linux/Unix release binary: {:?}", release_path);
             return release_path;
         } else if debug_path.exists() {
+            println!("Using Linux/Unix debug binary: {:?}", debug_path);
             return debug_path;
         }
     }
     
-    panic!("Binary not found. Please build the project first with: cargo build --release");
+    // More helpful error message for debugging
+    panic!(
+        "Binary 'audiocheckr' not found in target/release or target/debug.\n\
+         Searched paths:\n\
+         - {:?}\n\
+         - {:?}\n\
+         Please build the project first with:\n\
+         cargo build --release\n\
+         or\n\
+         cargo build",
+        path.join("release").join("audiocheckr"),
+        path.join("debug").join("audiocheckr")
+    );
 }
+
 
 fn define_test_cases(base: &Path) -> Vec<TestCase> {
     let mut cases = Vec::new();
