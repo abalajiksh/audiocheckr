@@ -11,6 +11,9 @@ pipeline {
         SONAR_PROJECT_KEY = 'audiocheckr'
         SONAR_PROJECT_NAME = 'AudioCheckr'
         SONAR_SOURCES = 'src'
+        
+        // Add user bin and cargo to PATH
+        PATH = "$HOME/bin:$HOME/.cargo/bin:$PATH"
     }
     
     triggers {
@@ -19,6 +22,34 @@ pipeline {
     }
     
     stages {
+        stage('Setup Tools') {
+            steps {
+                sh '''
+                    # Create user bin directory if it doesn't exist
+                    mkdir -p $HOME/bin
+                    
+                    # Install MinIO client if not present
+                    if ! command -v mc &> /dev/null; then
+                        echo "Installing MinIO client..."
+                        wget -q https://dl.min.io/client/mc/release/linux-amd64/mc -O $HOME/bin/mc
+                        chmod +x $HOME/bin/mc
+                    fi
+                    
+                    # Install Rust if not present
+                    if ! command -v cargo &> /dev/null; then
+                        echo "Installing Rust..."
+                        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+                        source $HOME/.cargo/env
+                    fi
+                    
+                    # Verify installations
+                    mc --version
+                    cargo --version
+                    rustc --version
+                '''
+            }
+        }
+        
         stage('Checkout') {
             steps {
                 checkout scm
@@ -45,13 +76,6 @@ pipeline {
                         passwordVariable: 'MINIO_SECRET_KEY'
                     )]) {
                         sh '''
-                            # Install mc (MinIO client) if not present
-                            if ! command -v mc &> /dev/null; then
-                                wget https://dl.min.io/client/mc/release/linux-amd64/mc
-                                chmod +x mc
-                                sudo mv mc /usr/local/bin/
-                            fi
-                            
                             # Configure MinIO client
                             mc alias set myminio ${MINIO_ENDPOINT} ${MINIO_ACCESS_KEY} ${MINIO_SECRET_KEY}
                             
@@ -69,9 +93,6 @@ pipeline {
         stage('Build') {
             steps {
                 sh '''
-                    # Ensure Rust is in PATH
-                    export PATH="$HOME/.cargo/bin:$PATH"
-                    
                     # Build release binary
                     cargo build --release
                     
@@ -122,9 +143,6 @@ pipeline {
             }
             steps {
                 sh '''
-                    # Ensure Rust is in PATH
-                    export PATH="$HOME/.cargo/bin:$PATH"
-                    
                     echo "Running validation tests (22 representative files)..."
                     cargo test --test validation_test -- --nocapture
                 '''
@@ -166,9 +184,6 @@ pipeline {
             }
             steps {
                 sh '''
-                    # Ensure Rust is in PATH
-                    export PATH="$HOME/.cargo/bin:$PATH"
-                    
                     echo "Running full regression tests (82 files with ground truth)..."
                     cargo test --test regression_test_ground_truth -- --nocapture
                 '''
