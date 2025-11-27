@@ -1,5 +1,6 @@
 // tests/regression_test.rs
 // GROUND TRUTH Regression Test Suite
+//Not so sure about all of this
 
 use std::env;
 use std::process::Command;
