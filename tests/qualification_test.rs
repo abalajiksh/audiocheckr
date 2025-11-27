@@ -26,6 +26,7 @@ struct TestCase {
     description: String,
 }
 
+#[derive(Debug)]
 struct TestResult {
     passed: bool,
     expected: bool,
