@@ -213,7 +213,7 @@ pipeline {
                 script {
                     def scannerHome = tool 'SonarQube-LXC'
                     
-                    withSonarQubeEnv('slxc') {
+                    withSonarQubeEnv('SonarQube-LXC') {
                         sh """
                             ${scannerHome}/bin/sonar-scanner \
                                 -Dsonar.projectKey=${SONAR_PROJECT_KEY} \
