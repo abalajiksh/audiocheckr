@@ -367,7 +367,6 @@ PYTHON_SCRIPT
     post {
         success {
             echo 'Build and tests completed successfully!'
-            archiveArtifacts artifacts: 'target/release/audiocheckr', fingerprint: true
         }
         unstable {
             echo 'Build completed but some tests failed. Check test results.'
@@ -376,6 +375,13 @@ PYTHON_SCRIPT
             echo 'Build or tests failed. Check logs for details.'
         }
         always {
+            // Archive the binary (on success or unstable)
+            script {
+                if (currentBuild.result != 'FAILURE') {
+                    archiveArtifacts artifacts: 'target/release/audiocheckr', fingerprint: true, allowEmptyArchive: true
+                }
+            }
+            
             // Publish JUnit test results (shows in Jenkins UI)
             junit(
                 allowEmptyResults: true,
