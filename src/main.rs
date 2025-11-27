@@ -3,6 +3,8 @@
 // Audio Quality Checker - Detect fake lossless, transcodes, and upsampled audio.
 // Uses advanced DSP techniques for comprehensive audio analysis.
 
+#![allow(dead_code)] // Binary uses different subset than library
+
 use anyhow::Result;
 use clap::Parser;
 use std::path::{Path, PathBuf};
@@ -27,7 +29,7 @@ use analyzer::AudioAnalyzer;
 use detector::{QualityReport, DetectedDefect, DefectType, DetectionConfig};
 
 #[derive(Parser, Debug)]
-#[command(name = "audio-quality-checker")]
+#[command(name = "audiocheckr")]
 #[command(version = "0.2.0")]
 #[command(about = "Detect fake lossless, transcodes, and upsampled audio files with advanced spectral analysis")]
 struct Args {

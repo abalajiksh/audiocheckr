@@ -96,107 +96,125 @@ pipeline {
             }
         }
         
-        stage('Setup Tools') {
-            steps {
-                sh '''
-                    mkdir -p $HOME/bin
-                    
-                    if ! command -v cc >/dev/null 2>&1; then
-                        echo "ERROR: C compiler not found!"
-                        exit 1
-                    fi
-                    
-                    if ! command -v mc >/dev/null 2>&1; then
-                        echo "Installing MinIO client..."
-                        wget -q https://dl.min.io/client/mc/release/linux-amd64/mc -O $HOME/bin/mc
-                        chmod +x $HOME/bin/mc
-                    fi
-                    
-                    if ! command -v cargo >/dev/null 2>&1; then
-                        echo "Installing Rust..."
-                        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-                        . $HOME/.cargo/env
-                    fi
-                    
-                    echo "=== Tool Versions ==="
-                    mc --version
-                    cargo --version
-                    rustc --version
-                    echo "===================="
-                '''
-            }
-        }
-        
-        stage('Checkout') {
-            steps {
-                checkout scm
-                script {
-                    env.GIT_COMMIT_MSG = sh(script: 'git log -1 --pretty=%B', returnStdout: true).trim()
-                    env.GIT_COMMIT_SHORT = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
-                    env.GIT_AUTHOR = sh(script: 'git log -1 --pretty=%an', returnStdout: true).trim()
-                    
-                    echo "Commit: ${env.GIT_COMMIT_SHORT} by ${env.GIT_AUTHOR}"
-                    echo "Message: ${env.GIT_COMMIT_MSG}"
-                }
-            }
-        }
-        
-        stage('Download Test Files') {
-            steps {
-                script {
-                    withCredentials([
-                        usernamePassword(
-                            credentialsId: 'noIdea',
-                            usernameVariable: 'MINIO_ACCESS_KEY',
-                            passwordVariable: 'MINIO_SECRET_KEY'
-                        ),
-                        string(
-                            credentialsId: 'minio-endpoint',
-                            variable: 'MINIO_ENDPOINT'
-                        )
-                    ]) {
-                        def zipFile = (env.TEST_TYPE == 'REGRESSION') ? env.MINIO_FILE_FULL : env.MINIO_FILE_COMPACT
-                        def expectedSize = (env.TEST_TYPE == 'REGRESSION') ? '~8.5GB' : '~1.4GB'
-                        
+        stage('Setup & Checkout') {
+            parallel {
+                stage('Setup Tools') {
+                    steps {
                         sh '''
-                            set -e
-                            mc alias set myminio "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
+                            mkdir -p $HOME/bin
                             
-                            echo "=========================================="
-                            echo "Downloading ''' + zipFile + ''' (''' + expectedSize + ''')"
-                            echo "=========================================="
-                            mc cp myminio/${MINIO_BUCKET}/''' + zipFile + ''' .
-                            
-                            echo "Extracting test files..."
-                            unzip -q -o ''' + zipFile + '''
-                            
-                            # Rename CompactTestFiles to TestFiles if needed
-                            if [ -d "CompactTestFiles" ]; then
-                                mv CompactTestFiles TestFiles
+                            if ! command -v cc >/dev/null 2>&1; then
+                                echo "ERROR: C compiler not found!"
+                                exit 1
                             fi
                             
-                            # Delete ZIP immediately to save space
-                            rm -f ''' + zipFile + '''
+                            if ! command -v mc >/dev/null 2>&1; then
+                                echo "Installing MinIO client..."
+                                wget -q https://dl.min.io/client/mc/release/linux-amd64/mc -O $HOME/bin/mc
+                                chmod +x $HOME/bin/mc
+                            fi
                             
-                            echo "Test files ready:"
-                            find TestFiles -type f -name "*.flac" | wc -l
-                            du -sh TestFiles
+                            if ! command -v cargo >/dev/null 2>&1; then
+                                echo "Installing Rust..."
+                                curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+                                . $HOME/.cargo/env
+                            fi
+                            
+                            echo "=== Tool Versions ==="
+                            mc --version
+                            cargo --version
+                            rustc --version
+                            echo "===================="
                         '''
+                    }
+                }
+                
+                stage('Checkout') {
+                    steps {
+                        checkout scm
+                        script {
+                            env.GIT_COMMIT_MSG = sh(script: 'git log -1 --pretty=%B', returnStdout: true).trim()
+                            env.GIT_COMMIT_SHORT = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
+                            env.GIT_AUTHOR = sh(script: 'git log -1 --pretty=%an', returnStdout: true).trim()
+                            
+                            echo "Commit: ${env.GIT_COMMIT_SHORT} by ${env.GIT_AUTHOR}"
+                            echo "Message: ${env.GIT_COMMIT_MSG}"
+                        }
                     }
                 }
             }
         }
         
-        stage('Build') {
-            steps {
-                sh '''
-                    echo "Building Rust project..."
-                    cargo build --release
-                    
-                    echo "=== Build Artifact ==="
-                    ls -lh target/release/audiocheckr
-                    echo "======================"
-                '''
+        stage('Build & Prepare') {
+            parallel {
+                stage('Build') {
+                    steps {
+                        sh '''
+                            echo "Building Rust project..."
+                            cargo build --release 2>&1 | tee build_output.txt
+                            
+                            # Check for warnings (informational, doesn't fail build)
+                            if grep -q "warning:" build_output.txt; then
+                                echo ""
+                                echo "=== Build Warnings Summary ==="
+                                grep -c "warning:" build_output.txt || true
+                                echo "warnings found (see above for details)"
+                                echo "=============================="
+                            fi
+                            
+                            echo ""
+                            echo "=== Build Artifact ==="
+                            ls -lh target/release/audiocheckr
+                            echo "======================"
+                        '''
+                    }
+                }
+                
+                stage('Download Test Files') {
+                    steps {
+                        script {
+                            withCredentials([
+                                usernamePassword(
+                                    credentialsId: 'noIdea',
+                                    usernameVariable: 'MINIO_ACCESS_KEY',
+                                    passwordVariable: 'MINIO_SECRET_KEY'
+                                ),
+                                string(
+                                    credentialsId: 'minio-endpoint',
+                                    variable: 'MINIO_ENDPOINT'
+                                )
+                            ]) {
+                                def zipFile = (env.TEST_TYPE == 'REGRESSION') ? env.MINIO_FILE_FULL : env.MINIO_FILE_COMPACT
+                                def expectedSize = (env.TEST_TYPE == 'REGRESSION') ? '~8.5GB' : '~1.4GB'
+                                
+                                sh '''
+                                    set -e
+                                    mc alias set myminio "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
+                                    
+                                    echo "=========================================="
+                                    echo "Downloading ''' + zipFile + ''' (''' + expectedSize + ''')"
+                                    echo "=========================================="
+                                    mc cp myminio/${MINIO_BUCKET}/''' + zipFile + ''' .
+                                    
+                                    echo "Extracting test files..."
+                                    unzip -q -o ''' + zipFile + '''
+                                    
+                                    # Rename CompactTestFiles to TestFiles if needed
+                                    if [ -d "CompactTestFiles" ]; then
+                                        mv CompactTestFiles TestFiles
+                                    fi
+                                    
+                                    # Delete ZIP immediately to save space
+                                    rm -f ''' + zipFile + '''
+                                    
+                                    echo "Test files ready:"
+                                    find TestFiles -type f -name "*.flac" | wc -l
+                                    du -sh TestFiles
+                                '''
+                            }
+                        }
+                    }
+                }
             }
         }
         
@@ -258,6 +276,31 @@ pipeline {
                 
                 stage('Tests') {
                     stages {
+                        stage('Integration Tests') {
+                            steps {
+                                script {
+                                    echo "=========================================="
+                                    echo "Running Integration Tests"
+                                    echo "=========================================="
+                                    
+                                    def integrationResult = sh(
+                                        script: '''
+                                            set +e
+                                            cargo test --test integration_test -- --nocapture 2>&1 | tee target/test-results/integration_output.txt
+                                            exit ${PIPESTATUS[0]}
+                                        ''',
+                                        returnStatus: true
+                                    )
+                                    
+                                    if (integrationResult != 0) {
+                                        echo "Integration tests had failures (exit code: ${integrationResult})"
+                                    } else {
+                                        echo "Integration tests passed!"
+                                    }
+                                }
+                            }
+                        }
+                        
                         stage('Run Tests') {
                             steps {
                                 script {

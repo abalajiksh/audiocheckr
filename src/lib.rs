@@ -3,6 +3,8 @@
 // Audio Quality Checker Library
 // Detect fake lossless, transcodes, and upsampled audio using advanced DSP.
 
+#![allow(dead_code)] // Many items are part of the public API even if not used internally
+
 pub mod analyzer;
 pub mod decoder;
 pub mod dsp;
