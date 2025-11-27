@@ -4,19 +4,19 @@
 //
 // Test Philosophy:
 // - CleanOrigin: Original master files → PASS (genuine high-res)
-//   - input96.flac: True 24-bit → PASS
-//   - input192.flac: 16-bit source → FAIL (BitDepthMismatch)
 // - CleanTranscoded: 24→16 bit honest transcodes → PASS (genuinely 16-bit)
 // - Resample96: 96kHz → lower rates = PASS, 96kHz → higher rates = FAIL (interpolated)
 // - Upscale16: 16-bit → 24-bit padding = FAIL (fake bit depth)
 // - Upscaled: Lossy → Lossless = FAIL (lossy artifacts detected)
 
+use std::env;
 use std::process::Command;
 use std::path::{Path, PathBuf};
 
 struct TestCase {
     file_path: String,
     should_pass: bool,
+    expected_defects: Vec<String>,
     description: String,
 }
 
@@ -24,8 +24,8 @@ struct TestResult {
     passed: bool,
     expected: bool,
     defects_found: Vec<String>,
-    is_lossless: bool,
-    quality_score: f32,
+    #[allow(dead_code)]
+    file: String,
 }
 
 /// Main qualification test - runs against TestFiles subset
@@ -38,7 +38,7 @@ fn test_qualification_suite() {
     assert!(
         test_base.exists(),
         "TestFiles directory not found at: {}. \
-         Download CompactTestFiles.zip from MinIO for qualification tests.",
+         Download TestFiles.zip from MinIO for qualification tests.",
         test_base.display()
     );
 
@@ -67,11 +67,11 @@ fn test_qualification_suite() {
             if result.passed && !result.expected {
                 false_negatives += 1;
                 println!("[{:2}/{}] ✗ FALSE NEGATIVE: {}", idx + 1, test_cases.len(), test_case.description);
-                println!("        Expected defects but got CLEAN (score: {:.1}%)", result.quality_score * 100.0);
+                println!("        Expected defects but got CLEAN");
             } else {
                 false_positives += 1;
                 println!("[{:2}/{}] ✗ FALSE POSITIVE: {}", idx + 1, test_cases.len(), test_case.description);
-                println!("        Expected CLEAN but detected: {:?}", result.defects_found);
+                println!("        Expected CLEAN but detected defects: {:?}", result.defects_found);
             }
         }
     }
@@ -108,7 +108,7 @@ fn get_binary_path() -> PathBuf {
         }
     }
 
-    #[cfg(not(windows))]
+    #[cfg(unix)]
     {
         if release_path.exists() {
             return release_path;
@@ -124,49 +124,55 @@ fn define_qualification_tests(base: &Path) -> Vec<TestCase> {
     let mut cases = Vec::new();
 
     // =========================================================================
-    // CLEANORIGIN - Original master files
+    // CLEANORIGIN - Original master files (should all PASS)
+    // These are genuine high-resolution source files
     // =========================================================================
     
-    // Genuine 24-bit master → PASS
     cases.push(TestCase {
         file_path: base.join("CleanOrigin/input96.flac").to_string_lossy().to_string(),
         should_pass: true,
+        expected_defects: vec![],
         description: "CleanOrigin: 96kHz 24-bit original master".to_string(),
     });
 
-    // 16-bit source in 24-bit container → FAIL (BitDepthMismatch)
+    // Note: input192.flac is 16-bit source, so it should fail bit depth check when
+    // claiming to be 24-bit. If the file genuinely has 24-bit samples, change to true.
     cases.push(TestCase {
         file_path: base.join("CleanOrigin/input192.flac").to_string_lossy().to_string(),
-        should_pass: false,
+        should_pass: false,  // 16-bit source upscaled to 24-bit container
+        expected_defects: vec!["BitDepthMismatch".to_string()],
         description: "CleanOrigin: 192kHz (16-bit source in 24-bit container)".to_string(),
     });
 
     // =========================================================================
-    // CLEANTRANSCODED - Honest bit depth reduction → PASS
-    // These are genuinely 16-bit files in 16-bit containers
+    // CLEANTRANSCODED - Honest bit depth reduction (should PASS)
+    // 24-bit → 16-bit transcode, genuinely 16-bit data in 16-bit container
     // =========================================================================
     
     cases.push(TestCase {
         file_path: base.join("CleanTranscoded/input96_16bit.flac").to_string_lossy().to_string(),
         should_pass: true,
+        expected_defects: vec![],
         description: "CleanTranscoded: 96kHz honest 16-bit transcode".to_string(),
     });
 
     cases.push(TestCase {
         file_path: base.join("CleanTranscoded/input192_16bit.flac").to_string_lossy().to_string(),
         should_pass: true,
+        expected_defects: vec![],
         description: "CleanTranscoded: 192kHz honest 16-bit transcode".to_string(),
     });
 
     // =========================================================================
     // RESAMPLE96 - Sample rate changes from 96kHz source
-    // Downsampling = PASS (genuine data), Upsampling = FAIL (interpolated)
+    // Downsampling (96→lower) = PASS, Upsampling (96→higher) = FAIL
     // =========================================================================
     
-    // Downsample: 96kHz → 44.1kHz (genuine) → PASS
+    // Downsample: 96kHz → 44.1kHz (genuine, no interpolation) → PASS
     cases.push(TestCase {
         file_path: base.join("Resample96/input96_44.flac").to_string_lossy().to_string(),
         should_pass: true,
+        expected_defects: vec![],
         description: "Resample96: 96→44.1kHz downsampled (genuine)".to_string(),
     });
 
@@ -174,6 +180,7 @@ fn define_qualification_tests(base: &Path) -> Vec<TestCase> {
     cases.push(TestCase {
         file_path: base.join("Resample96/input96_48.flac").to_string_lossy().to_string(),
         should_pass: true,
+        expected_defects: vec![],
         description: "Resample96: 96→48kHz downsampled (genuine)".to_string(),
     });
 
@@ -181,42 +188,47 @@ fn define_qualification_tests(base: &Path) -> Vec<TestCase> {
     cases.push(TestCase {
         file_path: base.join("Resample96/input96_88.flac").to_string_lossy().to_string(),
         should_pass: true,
+        expected_defects: vec![],
         description: "Resample96: 96→88.2kHz downsampled (genuine)".to_string(),
     });
 
-    // Upsample: 96kHz → 176.4kHz (interpolated) → FAIL
+    // Upsample: 96kHz → 176.4kHz (interpolated data) → FAIL
     cases.push(TestCase {
         file_path: base.join("Resample96/input96_176.flac").to_string_lossy().to_string(),
         should_pass: false,
+        expected_defects: vec!["Upsampled".to_string()],
         description: "Resample96: 96→176.4kHz upsampled (interpolated)".to_string(),
     });
 
-    // Upsample: 96kHz → 192kHz (interpolated) → FAIL
+    // Upsample: 96kHz → 192kHz (interpolated data) → FAIL
     cases.push(TestCase {
         file_path: base.join("Resample96/input96_192.flac").to_string_lossy().to_string(),
         should_pass: false,
+        expected_defects: vec!["Upsampled".to_string()],
         description: "Resample96: 96→192kHz upsampled (interpolated)".to_string(),
     });
 
     // =========================================================================
-    // UPSCALE16 - 16-bit to 24-bit padding → FAIL
+    // UPSCALE16 - 16-bit to 24-bit padding (should FAIL)
     // Fake bit depth: zero-padded LSBs
     // =========================================================================
     
     cases.push(TestCase {
         file_path: base.join("Upscale16/output96_16bit.flac").to_string_lossy().to_string(),
         should_pass: false,
+        expected_defects: vec!["BitDepthMismatch".to_string()],
         description: "Upscale16: 96kHz 16→24-bit upscaled (fake depth)".to_string(),
     });
 
     cases.push(TestCase {
         file_path: base.join("Upscale16/output192_16bit.flac").to_string_lossy().to_string(),
         should_pass: false,
+        expected_defects: vec!["BitDepthMismatch".to_string()],
         description: "Upscale16: 192kHz 16→24-bit upscaled (fake depth)".to_string(),
     });
 
     // =========================================================================
-    // UPSCALED - Lossy codec transcodes to FLAC → FAIL
+    // UPSCALED - Lossy codec transcodes to FLAC (should FAIL)
     // Each codec has characteristic artifacts
     // =========================================================================
     
@@ -224,12 +236,14 @@ fn define_qualification_tests(base: &Path) -> Vec<TestCase> {
     cases.push(TestCase {
         file_path: base.join("Upscaled/input96_mp3.flac").to_string_lossy().to_string(),
         should_pass: false,
+        expected_defects: vec!["Mp3Transcode".to_string()],
         description: "Upscaled: 96kHz from MP3 (lossy artifacts)".to_string(),
     });
 
     cases.push(TestCase {
         file_path: base.join("Upscaled/input192_mp3.flac").to_string_lossy().to_string(),
         should_pass: false,
+        expected_defects: vec!["Mp3Transcode".to_string()],
         description: "Upscaled: 192kHz from MP3 (lossy artifacts)".to_string(),
     });
 
@@ -237,12 +251,14 @@ fn define_qualification_tests(base: &Path) -> Vec<TestCase> {
     cases.push(TestCase {
         file_path: base.join("Upscaled/input96_m4a.flac").to_string_lossy().to_string(),
         should_pass: false,
+        expected_defects: vec!["AacTranscode".to_string()],
         description: "Upscaled: 96kHz from AAC/M4A (lossy artifacts)".to_string(),
     });
 
     cases.push(TestCase {
         file_path: base.join("Upscaled/input192_m4a.flac").to_string_lossy().to_string(),
         should_pass: false,
+        expected_defects: vec!["AacTranscode".to_string()],
         description: "Upscaled: 192kHz from AAC/M4A (lossy artifacts)".to_string(),
     });
 
@@ -250,12 +266,14 @@ fn define_qualification_tests(base: &Path) -> Vec<TestCase> {
     cases.push(TestCase {
         file_path: base.join("Upscaled/input96_opus.flac").to_string_lossy().to_string(),
         should_pass: false,
+        expected_defects: vec!["OpusTranscode".to_string()],
         description: "Upscaled: 96kHz from Opus (lossy artifacts)".to_string(),
     });
 
     cases.push(TestCase {
         file_path: base.join("Upscaled/input192_opus.flac").to_string_lossy().to_string(),
         should_pass: false,
+        expected_defects: vec!["OpusTranscode".to_string()],
         description: "Upscaled: 192kHz from Opus (lossy artifacts)".to_string(),
     });
 
@@ -263,12 +281,14 @@ fn define_qualification_tests(base: &Path) -> Vec<TestCase> {
     cases.push(TestCase {
         file_path: base.join("Upscaled/input96_ogg.flac").to_string_lossy().to_string(),
         should_pass: false,
+        expected_defects: vec!["OggVorbisTranscode".to_string()],
         description: "Upscaled: 96kHz from Vorbis/OGG (lossy artifacts)".to_string(),
     });
 
     cases.push(TestCase {
         file_path: base.join("Upscaled/input192_ogg.flac").to_string_lossy().to_string(),
         should_pass: false,
+        expected_defects: vec!["OggVorbisTranscode".to_string()],
         description: "Upscaled: 192kHz from Vorbis/OGG (lossy artifacts)".to_string(),
     });
 
@@ -287,17 +307,11 @@ fn run_test(binary: &Path, test_case: &TestCase) -> TestResult {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
 
-    // Parse output for v0.2 format
-    let has_issues = stdout.contains("ISSUES DETECTED") || stdout.contains("✗");
-    let is_clean = stdout.contains("CLEAN") && !has_issues;
-    let is_lossless = stdout.contains("likely lossless");
-
-    // Extract quality score if present
-    let quality_score = extract_quality_score(&stdout);
+    let has_issues = stdout.contains("✗ ISSUES DETECTED") || stdout.contains("ISSUES DETECTED");
+    let is_clean = stdout.contains("✓ CLEAN") || (stdout.contains("CLEAN") && !has_issues);
 
     let mut defects_found = Vec::new();
 
-    // Check for various defect types in output
     if stdout.contains("MP3") || stdout.contains("Mp3") {
         defects_found.push("Mp3Transcode".to_string());
     }
@@ -310,40 +324,19 @@ fn run_test(binary: &Path, test_case: &TestCase) -> TestResult {
     if stdout.contains("Vorbis") || stdout.contains("Ogg") {
         defects_found.push("OggVorbisTranscode".to_string());
     }
-    if stdout.contains("Bit depth mismatch") || stdout.contains("bit depth") || stdout.contains("BitDepth") {
+    if stdout.contains("Bit depth mismatch") || stdout.contains("BitDepth") || stdout.contains("bit depth") {
         defects_found.push("BitDepthMismatch".to_string());
     }
-    if stdout.contains("Upsampled") || stdout.contains("upsampled") {
+    if stdout.contains("Upsampled") || stdout.contains("upsampled") || stdout.contains("interpolat") {
         defects_found.push("Upsampled".to_string());
-    }
-    if stdout.contains("Spectral artifacts") {
-        defects_found.push("SpectralArtifacts".to_string());
-    }
-    if stdout.contains("Pre-echo") {
-        defects_found.push("PreEcho".to_string());
     }
 
     TestResult {
-        passed: is_clean || is_lossless,
+        passed: is_clean,
         expected: test_case.should_pass,
         defects_found,
-        is_lossless,
-        quality_score,
+        file: test_case.file_path.clone(),
     }
-}
-
-fn extract_quality_score(output: &str) -> f32 {
-    // Look for "Quality Score: XX%" pattern
-    if let Some(pos) = output.find("Quality Score:") {
-        let after = &output[pos + 14..];
-        if let Some(end) = after.find('%') {
-            let score_str = after[..end].trim();
-            if let Ok(score) = score_str.parse::<f32>() {
-                return score / 100.0;
-            }
-        }
-    }
-    0.0
 }
 
 #[test]
@@ -363,8 +356,5 @@ fn test_help_output() {
     assert!(output.status.success(), "Help command failed");
     
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        stdout.contains("audio") || stdout.contains("Audio") || stdout.contains("audiocheckr"),
-        "Help output should mention audio or audiocheckr"
-    );
+    assert!(stdout.contains("audiocheckr"), "Help output should mention audiocheckr");
 }
