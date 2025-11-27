@@ -3,7 +3,7 @@ pipeline {
     
     environment {
         // MinIO configuration - using Jenkins global credentials
-        MINIO_ENDPOINT = 'http://your-minio-lxc-ip:9000'
+        MINIO_ENDPOINT = 'http://192.168.178.107:9000'
         MINIO_BUCKET = 'audiocheckr'
         MINIO_FILE = 'TestFiles.zip'
         
@@ -85,7 +85,7 @@ pipeline {
             steps {
                 script {
                     // SonarQube scanner tool configured in Jenkins Global Tool Configuration
-                    def scannerHome = tool 'SonarQubeScanner'
+                    def scannerHome = tool 'SonarQube-LXC'
                     
                     // withSonarQubeEnv uses the SonarQube server configured in Jenkins System Configuration
                     // and automatically uses the token stored in Jenkins credentials
