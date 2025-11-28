@@ -201,7 +201,7 @@ pipeline {
                                     variable: 'MINIO_ENDPOINT'
                                 )
                             ]) {
-                                if (env.TEST_TYPE == 'REGRESSION' || env.TEST_TYPE == 'REGRESSION_GENRE') {
+                                if (env.TEST_TYPE == 'REGRESSION') {
                                     sh '''
                                         set -e
                                         mc alias set myminio "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
@@ -210,21 +210,34 @@ pipeline {
                                         echo "Downloading REGRESSION test files"
                                         echo "=========================================="
                                         
-                                        # Download and extract TestFiles
+                                        # Download and extract TestFiles only
                                         echo "Downloading ${MINIO_FILE_FULL} (~8.5GB)"
                                         mc cp myminio/${MINIO_BUCKET}/${MINIO_FILE_FULL} .
                                         unzip -q -o ${MINIO_FILE_FULL}
                                         rm -f ${MINIO_FILE_FULL}
                                         
-                                        # Download and extract TestSuite
-                                        echo "Downloading ${MINIO_FILE_GENRE_FULL} (~2.5GB)"
+                                        echo "Test files ready"
+                                        find TestFiles -type f -name "*.flac" 2>/dev/null | wc -l || echo "0"
+                                        du -sh TestFiles 2>/dev/null || true
+                                    '''
+                                } else if (env.TEST_TYPE == 'REGRESSION_GENRE') {
+                                    sh '''
+                                        set -e
+                                        mc alias set myminio "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
+                                        
+                                        echo "=========================================="
+                                        echo "Downloading REGRESSION GENRE test files"
+                                        echo "=========================================="
+                                        
+                                        # Download and extract TestSuite only
+                                        echo "Downloading ${MINIO_FILE_GENRE_FULL} (~19.4GB)"
                                         mc cp myminio/${MINIO_BUCKET}/${MINIO_FILE_GENRE_FULL} .
                                         unzip -q -o ${MINIO_FILE_GENRE_FULL}
                                         rm -f ${MINIO_FILE_GENRE_FULL}
                                         
                                         echo "Test files ready"
-                                        find TestFiles TestSuite -type f -name "*.flac" 2>/dev/null | wc -l || echo "0"
-                                        du -sh TestFiles TestSuite 2>/dev/null || true
+                                        find TestSuite -type f -name "*.flac" 2>/dev/null | wc -l || echo "0"
+                                        du -sh TestSuite 2>/dev/null || true
                                     '''
                                 } else {
                                     sh '''
@@ -273,10 +286,10 @@ pipeline {
                         
                         withSonarQubeEnv('SonarQube-LXC') {
                             sh """
-                                ${scannerHome}/bin/sonar-scanner \
-                                    -Dsonar.projectKey=${SONAR_PROJECT_KEY} \
-                                    -Dsonar.projectName=${SONAR_PROJECT_NAME} \
-                                    -Dsonar.sources=${SONAR_SOURCES} \
+                                ${scannerHome}/bin/sonar-scanner \\
+                                    -Dsonar.projectKey=${SONAR_PROJECT_KEY} \\
+                                    -Dsonar.projectName=${SONAR_PROJECT_NAME} \\
+                                    -Dsonar.sources=${SONAR_SOURCES} \\
                                     -Dsonar.exclusions=**/target/**,**/TestFiles/**,**/TestSuite/**,**/GenreTestSuiteLite/**
                             """
                         }
