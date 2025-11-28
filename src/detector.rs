@@ -2,6 +2,9 @@
 //
 // Main detection logic combining all analysis modules.
 // Produces comprehensive quality reports with confidence scores.
+//
+// CORRECTED v2: Fixed false positives on high sample rate files (88.2kHz+)
+// by using absolute frequency thresholds instead of ratio-based detection.
 
 use anyhow::Result;
 use crate::decoder::AudioData;
@@ -177,7 +180,7 @@ pub fn detect_quality_issues(
     let mut spectral_analyzer = SpectralAnalyzer::new(8192, 2048, audio.sample_rate);
     let spectral_analysis = spectral_analyzer.analyze(audio)?;
     
-    // Detect transcodes from spectral signature
+    // Detect transcodes from spectral signature (CORRECTED v2)
     detect_transcode_from_spectral(&spectral_analysis, audio, &mut defects);
     
     // ===== Bit Depth Analysis =====
@@ -395,85 +398,178 @@ pub fn detect_quality_issues(
     })
 }
 
-/// Detect transcodes from spectral analysis
+// =============================================================================
+// CORRECTED v2: Transcode detection with proper high sample rate handling
+// =============================================================================
+
+/// Detect transcodes from spectral analysis - CORRECTED VERSION
+/// 
+/// KEY INSIGHT: For high sample rate files (88.2kHz+), we must use ABSOLUTE
+/// frequency thresholds, not ratio-based detection. Music content naturally
+/// stops around 20kHz (human hearing limit), so a 96kHz file with content
+/// to 20kHz has only a 42% cutoff ratio - which would trigger false positives
+/// with the old 85% threshold.
 fn detect_transcode_from_spectral(
     spectral: &SpectralAnalysis,
     audio: &AudioData,
     defects: &mut Vec<DetectedDefect>,
 ) {
     let nyquist = audio.sample_rate as f32 / 2.0;
-    let cutoff_ratio = spectral.frequency_cutoff / nyquist;
+    let cutoff_hz = spectral.frequency_cutoff;
+    let cutoff_ratio = cutoff_hz / nyquist;
     
-    // Only check if cutoff is significantly below Nyquist
-    if cutoff_ratio >= 0.85 {
-        return;  // Cutoff too high to indicate transcode
-    }
+    let is_high_sample_rate = audio.sample_rate >= 88200;
     
-    // Confidence decreases as cutoff approaches Nyquist
-    let base_confidence = (0.85 - cutoff_ratio) / 0.35;  // 0.0 at 85%, 1.0 at 50%
-    let base_confidence = base_confidence.clamp(0.0, 1.0);
-    
-    // Adjust confidence based on brick wall and rolloff steepness
-    let confidence = if spectral.has_brick_wall {
-        (base_confidence * 0.7 + 0.3).min(0.95)
+    // =========================================================================
+    // HIGH SAMPLE RATE FILES (88.2kHz+): Use absolute frequency thresholds
+    // =========================================================================
+    if is_high_sample_rate {
+        // Content up to 22kHz is NORMAL for any sample rate
+        // (human hearing tops out at ~20kHz, instruments rarely exceed 22kHz)
+        if cutoff_hz > 22000.0 {
+            return;  // Normal high-res content
+        }
+        
+        // 20-22kHz: need VERY strong evidence (brick-wall AND steep rolloff)
+        if cutoff_hz >= 20000.0 {
+            if !(spectral.has_brick_wall && spectral.rolloff_steepness > 80.0) {
+                return;  // Likely natural rolloff at hearing limit
+            }
+        }
+        
+        // 18-20kHz: need strong evidence (brick-wall OR very steep rolloff)
+        if cutoff_hz >= 18000.0 {
+            if !spectral.has_brick_wall && spectral.rolloff_steepness < 60.0 {
+                return;  // Could be mastering choice or natural content
+            }
+        }
+        
+        // 15-18kHz: require multiple signals
+        if cutoff_hz >= 15000.0 {
+            let evidence_count = 
+                (if spectral.has_brick_wall { 1 } else { 0 }) +
+                (if spectral.rolloff_steepness > 50.0 { 1 } else { 0 }) +
+                (if spectral.has_shelf_pattern { 1 } else { 0 });
+            
+            if evidence_count < 2 {
+                return;  // Insufficient evidence
+            }
+        }
+        
+        // 10-15kHz: look for codec-specific signatures, not just low cutoff
+        // Renaissance choral, old jazz, ambient music can legitimately be here
+        if cutoff_hz < 15000.0 && cutoff_hz >= 10000.0 {
+            if !has_codec_signature(spectral, cutoff_hz) {
+                return;  // Low content but no codec signature
+            }
+        }
+        
+        // Below 10kHz: still check for natural causes
+        if cutoff_hz < 10000.0 {
+            if !spectral.has_brick_wall {
+                return;  // Not a sharp cutoff - might be natural
+            }
+        }
+        
     } else {
-        base_confidence * 0.6
-    };
-    
-    if confidence < 0.4 {
-        return;  // Not confident enough
+        // =====================================================================
+        // STANDARD SAMPLE RATES (44.1/48kHz): Use ratio-based thresholds
+        // but more conservative than before
+        // =====================================================================
+        
+        // At 44.1kHz, Nyquist is 22.05kHz
+        // Content to 20kHz = 91% ratio - normal
+        // Content to 18kHz = 82% ratio - could be MP3 320k or mastering
+        // Content to 16kHz = 73% ratio - likely lossy transcode
+        
+        if cutoff_ratio >= 0.80 {
+            return;  // Normal for standard sample rate
+        }
+        
+        // 70-80% range: need evidence
+        if cutoff_ratio >= 0.70 {
+            if !spectral.has_brick_wall && spectral.rolloff_steepness < 40.0 {
+                return;  // Probably natural rolloff
+            }
+        }
     }
     
-    let cutoff_hz = spectral.frequency_cutoff as u32;
+    // =========================================================================
+    // CONFIDENCE CALCULATION
+    // =========================================================================
     
-    // Determine codec type based on characteristics
-    let defect_type = if spectral.has_brick_wall && spectral.rolloff_steepness > 25.0 {
-        // Sharp cutoff suggests MP3
-        let bitrate = estimate_mp3_bitrate(cutoff_hz);
-        DefectType::Mp3Transcode { 
-            cutoff_hz, 
-            estimated_bitrate: bitrate,
-        }
-    } else if spectral.has_shelf_pattern {
-        // Shelf pattern suggests AAC
-        let bitrate = estimate_aac_bitrate(cutoff_hz);
-        DefectType::AacTranscode {
-            cutoff_hz,
-            estimated_bitrate: bitrate,
-        }
-    } else if cutoff_hz >= 7500 && cutoff_hz <= 12500 && spectral.has_brick_wall {
-        // Low cutoff with brick wall suggests Opus
-        let mode = if cutoff_hz <= 8500 {
-            "Wideband (8kHz)".to_string()
+    let base_confidence = if is_high_sample_rate {
+        // For high sample rate: confidence based on absolute cutoff + evidence
+        if cutoff_hz < 12000.0 {
+            0.90
+        } else if cutoff_hz < 15000.0 {
+            0.75
+        } else if cutoff_hz < 18000.0 {
+            0.60
         } else {
-            "Super-wideband (12kHz)".to_string()
-        };
-        DefectType::OpusTranscode { cutoff_hz, mode }
+            0.50
+        }
     } else {
-        // Default to Vorbis for softer rolloffs
-        let quality = estimate_vorbis_quality(cutoff_hz);
-        DefectType::OggVorbisTranscode {
-            cutoff_hz,
-            estimated_quality: quality,
+        // For standard sample rate: ratio-based confidence
+        if cutoff_ratio < 0.60 {
+            0.90
+        } else if cutoff_ratio < 0.70 {
+            0.75
+        } else {
+            0.55
         }
     };
     
-    // Try to match against known signatures
-    let signature_match = match_signature(spectral);
+    // Evidence boost
+    let evidence_boost = 
+        (if spectral.has_brick_wall { 0.15 } else { 0.0 }) +
+        (if spectral.rolloff_steepness > 60.0 { 0.10 } else { 0.0 }) +
+        (if spectral.has_shelf_pattern { 0.10 } else { 0.0 });
     
+    let confidence = (base_confidence + evidence_boost).min(0.95);
+    
+    // Confidence floor - raised from 0.4 to 0.55
+    if confidence < 0.55 {
+        return;
+    }
+    
+    // =========================================================================
+    // CODEC CLASSIFICATION (v2 - no default fallback)
+    // =========================================================================
+    
+    let cutoff_hz_u32 = cutoff_hz as u32;
+    
+    let defect_type = match classify_codec_type_v2(spectral, cutoff_hz_u32) {
+        Some(dt) => dt,
+        None => return,  // Can't identify codec - DON'T FLAG
+    };
+    
+    // Build evidence list
     let mut evidence = vec![
-        format!("Frequency cutoff: {} Hz", cutoff_hz),
-        format!("Rolloff steepness: {:.1} dB/octave", spectral.rolloff_steepness),
+        format!("Frequency cutoff: {:.0} Hz", cutoff_hz),
     ];
     
-    if spectral.has_brick_wall {
-        evidence.push("Brick-wall cutoff detected".to_string());
-    }
-    if spectral.has_shelf_pattern {
-        evidence.push("Shelf pattern detected".to_string());
+    if is_high_sample_rate {
+        evidence.push(format!(
+            "High sample rate file ({}kHz) - content stops at {:.1}kHz", 
+            audio.sample_rate / 1000,
+            cutoff_hz / 1000.0
+        ));
+    } else {
+        evidence.push(format!("Cutoff at {:.1}% of Nyquist", cutoff_ratio * 100.0));
     }
     
-    if let Some((name, sig_conf)) = signature_match {
+    evidence.push(format!("Rolloff steepness: {:.1} dB/octave", spectral.rolloff_steepness));
+    
+    if spectral.has_brick_wall {
+        evidence.push("Brick-wall filter detected".to_string());
+    }
+    if spectral.has_shelf_pattern {
+        evidence.push("Pre-cutoff shelf pattern (AAC characteristic)".to_string());
+    }
+    
+    // Try to match against known signatures
+    if let Some((name, sig_conf)) = match_signature(spectral) {
         evidence.push(format!("Matches {} signature ({:.0}%)", name, sig_conf * 100.0));
     }
     
@@ -482,6 +578,164 @@ fn detect_transcode_from_spectral(
         confidence,
         evidence,
     });
+}
+
+/// Check for codec-specific spectral signatures beyond just cutoff frequency
+fn has_codec_signature(spectral: &SpectralAnalysis, cutoff_hz: f32) -> bool {
+    // Brick-wall filter is strong indicator of lossy codec
+    if spectral.has_brick_wall && spectral.rolloff_steepness > 40.0 {
+        return true;
+    }
+    
+    // AAC shelf pattern
+    if spectral.has_shelf_pattern {
+        return true;
+    }
+    
+    // Opus has very specific bandwidth modes
+    let opus_modes = [8000.0, 12000.0, 20000.0];
+    for mode in opus_modes {
+        if (cutoff_hz - mode).abs() < 500.0 && spectral.has_brick_wall {
+            return true;
+        }
+    }
+    
+    // MP3 has specific bitrate-to-cutoff mapping
+    let mp3_cutoffs = [
+        (16000.0, 128),  // 128 kbps
+        (18500.0, 192),  // 192 kbps
+        (19500.0, 256),  // 256 kbps
+        (20000.0, 320),  // 320 kbps
+    ];
+    for (freq, _) in mp3_cutoffs {
+        if (cutoff_hz - freq).abs() < 500.0 && spectral.rolloff_steepness > 50.0 {
+            return true;
+        }
+    }
+    
+    false
+}
+
+/// Classify codec type - version 2 with better discrimination and NO DEFAULT FALLBACK
+fn classify_codec_type_v2(
+    spectral: &SpectralAnalysis,
+    cutoff_hz: u32,
+) -> Option<DefectType> {
+    
+    // =========================================================================
+    // MP3 Detection
+    // Strong indicators: Brick-wall + very steep rolloff (>50 dB/oct)
+    // Typical cutoffs: 15.5-20.5 kHz depending on bitrate
+    // =========================================================================
+    if spectral.has_brick_wall && spectral.rolloff_steepness > 50.0 {
+        if cutoff_hz >= 15000 && cutoff_hz <= 20500 {
+            let bitrate = estimate_mp3_bitrate(cutoff_hz);
+            return Some(DefectType::Mp3Transcode { 
+                cutoff_hz, 
+                estimated_bitrate: bitrate,
+            });
+        }
+    }
+    
+    // MP3 with slightly softer evidence (very steep rolloff alone)
+    if spectral.rolloff_steepness > 70.0 && cutoff_hz >= 15000 && cutoff_hz <= 20500 {
+        let bitrate = estimate_mp3_bitrate(cutoff_hz);
+        return Some(DefectType::Mp3Transcode { 
+            cutoff_hz, 
+            estimated_bitrate: bitrate,
+        });
+    }
+    
+    // =========================================================================
+    // AAC Detection
+    // Strong indicator: Shelf pattern before cutoff
+    // =========================================================================
+    if spectral.has_shelf_pattern {
+        let bitrate = estimate_aac_bitrate(cutoff_hz);
+        return Some(DefectType::AacTranscode {
+            cutoff_hz,
+            estimated_bitrate: bitrate,
+        });
+    }
+    
+    // =========================================================================
+    // Opus Detection
+    // Very specific bandwidth modes with brick-wall
+    // =========================================================================
+    if spectral.has_brick_wall {
+        // Wideband mode (8kHz)
+        if cutoff_hz >= 7500 && cutoff_hz <= 8500 {
+            return Some(DefectType::OpusTranscode { 
+                cutoff_hz, 
+                mode: "Wideband (8kHz)".to_string(),
+            });
+        }
+        // Super-wideband mode (12kHz)
+        if cutoff_hz >= 11500 && cutoff_hz <= 12500 {
+            return Some(DefectType::OpusTranscode { 
+                cutoff_hz, 
+                mode: "Super-wideband (12kHz)".to_string(),
+            });
+        }
+        // Fullband mode - harder to distinguish from MP3 320k
+        if cutoff_hz >= 19500 && cutoff_hz <= 20500 {
+            // Opus fullband typically has less steep rolloff than MP3
+            if spectral.rolloff_steepness < 60.0 {
+                return Some(DefectType::OpusTranscode { 
+                    cutoff_hz, 
+                    mode: "Fullband (20kHz)".to_string(),
+                });
+            }
+        }
+    }
+    
+    // =========================================================================
+    // Vorbis Detection
+    // ONLY flag if we have positive Vorbis-specific evidence
+    // NO MORE DEFAULT FALLBACK!
+    // =========================================================================
+    // Vorbis characteristics:
+    // - Softer rolloff than MP3 (typically 20-40 dB/oct)
+    // - No sharp brick-wall
+    // - Quality-dependent cutoff (Q3 ~14kHz, Q6 ~19kHz, Q10 ~22kHz)
+    
+    if !spectral.has_brick_wall 
+        && spectral.rolloff_steepness >= 15.0 
+        && spectral.rolloff_steepness <= 45.0 
+        && cutoff_hz >= 12000 
+        && cutoff_hz <= 19000 
+    {
+        // Estimate quality from cutoff
+        let estimated_quality = if cutoff_hz < 14000 {
+            Some(3)
+        } else if cutoff_hz < 16000 {
+            Some(5)
+        } else if cutoff_hz < 18000 {
+            Some(6)
+        } else {
+            Some(7)
+        };
+        
+        // Only confident about lower quality settings
+        if let Some(q) = estimated_quality {
+            if q <= 6 {
+                return Some(DefectType::OggVorbisTranscode {
+                    cutoff_hz,
+                    estimated_quality,
+                });
+            }
+        }
+    }
+    
+    // =========================================================================
+    // NO DEFAULT FALLBACK
+    // If we can't positively identify a codec, don't flag.
+    // This prevents false positives on:
+    // - Naturally band-limited content (ambient, classical, old recordings)
+    // - Mastering choices that limit HF content
+    // - High sample rate files with content only to 20kHz
+    // =========================================================================
+    None
 }
 
 /// Estimate MP3 bitrate from cutoff frequency
@@ -508,20 +762,6 @@ fn estimate_aac_bitrate(cutoff_hz: u32) -> Option<u32> {
         16501..=18000 => Some(192),
         18001..=19500 => Some(256),
         19501..=21000 => Some(320),
-        _ => None,
-    }
-}
-
-/// Estimate Vorbis quality from cutoff frequency
-fn estimate_vorbis_quality(cutoff_hz: u32) -> Option<u32> {
-    match cutoff_hz {
-        0..=15500 => Some(4),
-        15501..=16500 => Some(5),
-        16501..=17500 => Some(6),
-        17501..=18500 => Some(7),
-        18501..=19500 => Some(8),
-        19501..=20500 => Some(9),
-        20501..=22050 => Some(10),
         _ => None,
     }
 }

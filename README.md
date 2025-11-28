@@ -1,4 +1,4 @@
-# Audio Quality Checker v0.2.0
+# Audio Quality Checker v0.2.1
 
 Advanced audio analysis tool for detecting fake lossless files, transcodes, upsampled audio, and various audio quality issues. Uses pure DSP algorithms - no machine learning.
 
@@ -14,6 +14,19 @@ Advanced audio analysis tool for detecting fake lossless files, transcodes, upsa
 - **True Peak Analysis**: ITU-R BS.1770 compliant true peak measurement
 - **Spectral Artifacts**: Detects unusual spectral patterns and notches
 
+### v0.2.1 Improvements
+
+**Fixed false positives on high sample rate files (88.2kHz+)**
+
+The previous version used ratio-based detection (cutoff / Nyquist) which caused massive false positive rates on high-res files. For example, a genuine 96kHz file with content up to 20kHz has a cutoff ratio of only 42% - well below the old 85% threshold.
+
+The new algorithm:
+- Uses **absolute frequency thresholds** for high sample rate files (≥88.2kHz)
+- Treats content up to 22kHz as normal for any sample rate
+- Requires **positive codec identification** (brick-wall, steepness, shelf pattern) before flagging
+- **No default fallback** - if a codec can't be positively identified, the file isn't flagged
+- Maintains ratio-based detection for standard sample rates (44.1/48kHz)
+
 ### Analysis Methods
 
 Each detection uses multiple algorithms with confidence scoring:
@@ -25,6 +38,33 @@ Each detection uses multiple algorithms with confidence scoring:
 - **Brick-wall detection**: Sharp cutoffs characteristic of MP3
 - **Shelf pattern detection**: Characteristic of AAC encoding
 - **Encoder signature matching**: Compares against known codec signatures
+
+#### Transcode Detection (`detector.rs`)
+
+**For high sample rate files (88.2kHz+):**
+
+| Cutoff Frequency | Evidence Required | Rationale |
+|------------------|-------------------|-----------|
+| > 22 kHz | None - pass | Normal high-res content |
+| 20-22 kHz | Brick-wall AND >80 dB/oct | Could be MP3 320k or natural |
+| 18-20 kHz | Brick-wall OR >60 dB/oct | Suspicious but needs evidence |
+| 15-18 kHz | 2+ signals (brick-wall, steepness, shelf) | More suspicious |
+| 10-15 kHz | Codec-specific signature | Low content, check for codec |
+| < 10 kHz | Brick-wall required | Very suspicious if sharp cutoff |
+
+**For standard sample rates (44.1/48kHz):**
+
+| Cutoff Ratio | Evidence Required |
+|--------------|-------------------|
+| ≥ 80% | None - pass |
+| 70-80% | Brick-wall OR >40 dB/oct |
+| < 70% | Flag with ratio-based confidence |
+
+**Codec Classification (must match one to flag):**
+- **MP3**: Brick-wall + steepness >50 dB/oct, cutoff 15-20.5 kHz
+- **AAC**: Shelf pattern detected
+- **Opus**: Brick-wall at specific frequencies (8kHz, 12kHz, 20kHz modes)
+- **Vorbis**: Soft rolloff (15-45 dB/oct), no brick-wall, cutoff 12-19 kHz, quality ≤6
 
 #### Bit Depth Analysis (`bit_depth.rs`)
 Four independent detection methods:
@@ -81,16 +121,16 @@ cargo build --release
 ### Basic Usage
 ```bash
 # Analyze a single file
-audio-quality-checker -i audio.flac
+audiocheckr -i audio.flac
 
 # Analyze directory recursively  
-audio-quality-checker -i /path/to/music/
+audiocheckr -i /path/to/music/
 
 # Generate spectrogram
-audio-quality-checker -i audio.flac -s
+audiocheckr -i audio.flac -s
 
 # Full analysis with all checks
-audio-quality-checker -i audio.flac -u --stereo --transients --phase -v
+audiocheckr -i audio.flac -u --stereo --transients --phase -v
 ```
 
 ### Command Line Options
@@ -116,16 +156,16 @@ OPTIONS:
 
 ```bash
 # Quick check for transcodes
-audio-quality-checker -i album/ -q
+audiocheckr -i album/ -q
 
 # Full analysis with spectrogram
-audio-quality-checker -i "track.flac" -s -u --stereo --transients -v
+audiocheckr -i "track.flac" -s -u --stereo --transients -v
 
 # Batch analysis with JSON output
-audio-quality-checker -i music_library/ --json > results.json
+audiocheckr -i music_library/ --json > results.json
 
 # Check if upsampled from CD quality
-audio-quality-checker -i hi-res-album/ -u -v
+audiocheckr -i hi-res-album/ -u -v
 ```
 
 ## Output Interpretation
@@ -167,6 +207,16 @@ The detector uses a derivative-based approach:
 
 This is more robust than single-frame analysis which can miss quiet passages or be fooled by transients.
 
+### High Sample Rate Handling (v0.2.1)
+
+**The Problem:** At 96kHz sample rate, Nyquist is 48kHz. Music content naturally stops around 20kHz (human hearing limit), giving a cutoff ratio of only 42%. The old 85% threshold flagged everything.
+
+**The Solution:** For files ≥88.2kHz, use absolute frequency thresholds:
+- Content to 22kHz is **normal** regardless of sample rate
+- Require **codec-specific evidence** (brick-wall, steepness pattern, shelf) to flag
+- Never flag based on cutoff alone
+- No default "must be Vorbis" fallback
+
 ### Bit Depth Detection
 
 The four-method approach handles edge cases:
@@ -198,15 +248,15 @@ MP3/AAC use MDCT which spreads energy across a ~25ms window. Before transients, 
 ### Encoder Signatures
 
 Known characteristics:
-- **MP3**: Brick-wall cutoff, ~15-20kHz depending on bitrate
-- **AAC**: Softer rolloff, often shows "shelf" pattern
-- **Vorbis**: Variable cutoff, smoother rolloff
+- **MP3**: Brick-wall cutoff, ~15-20kHz depending on bitrate, steep rolloff (>50 dB/oct)
+- **AAC**: Softer rolloff, often shows "shelf" pattern before cutoff
+- **Vorbis**: Variable cutoff, smoother rolloff (15-45 dB/oct), no brick-wall
 - **Opus**: Very sharp cutoff at specific frequencies (8kHz, 12kHz, 20kHz modes)
 
 ## Library Usage
 
 ```rust
-use audio_quality_checker::{AudioAnalyzer, AnalyzerBuilder, is_likely_lossless};
+use audiocheckr::{AudioAnalyzer, AnalyzerBuilder, is_likely_lossless};
 use std::path::Path;
 
 // Quick check
@@ -253,6 +303,7 @@ let analyzer = AnalyzerBuilder::new()
 - **Sophisticated upsampling**: Modern resamplers with steep anti-aliasing may fool the detector
 - **Short files**: Less reliable on clips under 5 seconds
 - **Synthesized audio**: Electronic music may show unusual but legitimate spectral characteristics
+- **Naturally band-limited content**: Some recordings (old jazz, classical, ambient) legitimately have limited high-frequency content
 
 ### Performance
 
@@ -261,6 +312,18 @@ let analyzer = AnalyzerBuilder::new()
 - Spectrogram generation adds ~1-3 seconds
 - Memory usage: ~100MB for typical 5-minute track
 
+## Changelog
+
+### v0.2.1
+- **Fixed**: False positives on high sample rate files (88.2kHz, 96kHz, 176.4kHz, 192kHz)
+- **Changed**: Use absolute frequency thresholds instead of ratio-based for high-res files
+- **Changed**: Require positive codec identification before flagging transcodes
+- **Removed**: Default "Vorbis" fallback for unidentified cutoffs
+- **Improved**: More conservative thresholds for borderline cases
+
+### v0.2.0
+- Initial release with comprehensive audio analysis
+
 ## Building from Source
 
 Requirements:
@@ -268,8 +331,8 @@ Requirements:
 - ~300MB disk space for dependencies
 
 ```bash
-git clone https://github.com/yourusername/audio-quality-checker
-cd audio-quality-checker
+git clone https://github.com/yourusername/audiocheckr
+cd audiocheckr
 cargo build --release
 ```
 
