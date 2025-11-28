@@ -6,6 +6,9 @@
 // 2. Public APIs are accessible and work as documented
 // 3. Data flows correctly between components
 // 4. Error handling works properly
+//
+// IMPORTANT: Tests use temp directories instead of "." to avoid scanning
+// large directories like target/ which causes tests to run for 50+ minutes.
 
 use std::env;
 use std::path::PathBuf;
@@ -41,6 +44,19 @@ fn get_binary_path() -> PathBuf {
     }
 
     panic!("Binary not found. Run: cargo build --release");
+}
+
+/// Create a temporary empty directory for testing
+fn create_temp_test_dir(name: &str) -> PathBuf {
+    let temp_dir = std::env::temp_dir().join(format!("audiocheckr_test_{}", name));
+    let _ = std::fs::remove_dir_all(&temp_dir); // Clean up any previous run
+    let _ = std::fs::create_dir_all(&temp_dir);
+    temp_dir
+}
+
+/// Cleanup a temporary test directory
+fn cleanup_temp_dir(path: &PathBuf) {
+    let _ = std::fs::remove_dir_all(path);
 }
 
 // =============================================================================
@@ -105,11 +121,12 @@ fn test_cli_missing_file() {
 #[test]
 fn test_cli_json_output_format() {
     let binary = get_binary_path();
+    let temp_dir = create_temp_test_dir("json_output");
     
     // Test JSON output flag doesn't crash even without valid input
     let output = Command::new(&binary)
         .arg("--input")
-        .arg(".")
+        .arg(&temp_dir)
         .arg("--json")
         .output()
         .expect("Failed to execute with --json");
@@ -123,22 +140,28 @@ fn test_cli_json_output_format() {
         let parse_result: Result<serde_json::Value, _> = serde_json::from_str(&stdout);
         assert!(parse_result.is_ok(), "JSON output should be valid JSON: {}", stdout);
     }
+    
+    cleanup_temp_dir(&temp_dir);
 }
 
 #[test]
 fn test_cli_invalid_bit_depth() {
     let binary = get_binary_path();
+    let temp_dir = create_temp_test_dir("invalid_bit_depth");
+    
     let output = Command::new(&binary)
         .arg("--bit-depth")
         .arg("99")  // Invalid bit depth
         .arg("--input")
-        .arg(".")
+        .arg(&temp_dir)
         .output()
         .expect("Failed to execute with invalid bit depth");
 
     // Program should handle this gracefully (either accept it or error)
     // Just ensure it doesn't crash
     let _ = output.status;
+    
+    cleanup_temp_dir(&temp_dir);
 }
 
 // =============================================================================
@@ -285,10 +308,7 @@ mod format_tests {
 #[test]
 fn test_empty_directory_handling() {
     let binary = get_binary_path();
-    
-    // Create a temp directory
-    let temp_dir = std::env::temp_dir().join("audiocheckr_test_empty");
-    let _ = std::fs::create_dir_all(&temp_dir);
+    let temp_dir = create_temp_test_dir("empty_dir");
     
     let output = Command::new(&binary)
         .arg("--input")
@@ -302,8 +322,7 @@ fn test_empty_directory_handling() {
         "Should handle empty directories gracefully"
     );
     
-    // Cleanup
-    let _ = std::fs::remove_dir(&temp_dir);
+    cleanup_temp_dir(&temp_dir);
 }
 
 #[test]
@@ -351,32 +370,38 @@ mod spectrogram_tests {
     #[test]
     fn test_spectrogram_flag_accepted() {
         let binary = get_binary_path();
+        let temp_dir = create_temp_test_dir("spectrogram");
         
         // Just verify the flag is accepted (no crash)
         let output = Command::new(&binary)
             .arg("--input")
-            .arg(".")
+            .arg(&temp_dir)
             .arg("--spectrogram")
             .output()
             .expect("--spectrogram flag should be accepted");
 
         // Should not crash
         let _ = output.status;
+        
+        cleanup_temp_dir(&temp_dir);
     }
 
     #[test]
     fn test_linear_scale_flag() {
         let binary = get_binary_path();
+        let temp_dir = create_temp_test_dir("linear_scale");
         
         let output = Command::new(&binary)
             .arg("--input")
-            .arg(".")
+            .arg(&temp_dir)
             .arg("--spectrogram")
             .arg("--linear-scale")
             .output()
             .expect("--linear-scale flag should be accepted");
 
         let _ = output.status;
+        
+        cleanup_temp_dir(&temp_dir);
     }
 }
 
