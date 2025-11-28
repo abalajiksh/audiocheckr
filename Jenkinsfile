@@ -251,217 +251,205 @@ pipeline {
             }
         }
         
-        stage('Analysis & Tests') {
-            parallel {
-                stage('SonarQube') {
-                    when {
-                        expression { return !params.SKIP_SONARQUBE }
+        stage('SonarQube Analysis') {
+            when {
+                expression { return !params.SKIP_SONARQUBE }
+            }
+            steps {
+                script {
+                    try {
+                        def scannerHome = tool 'SonarQube-LXC'
+                        
+                        withSonarQubeEnv('SonarQube-LXC') {
+                            sh """
+                                ${scannerHome}/bin/sonar-scanner \
+                                    -Dsonar.projectKey=${SONAR_PROJECT_KEY} \
+                                    -Dsonar.projectName=${SONAR_PROJECT_NAME} \
+                                    -Dsonar.sources=${SONAR_SOURCES} \
+                                    -Dsonar.exclusions=**/target/**,**/TestFiles/**,**/TestSuite/**,**/GenreTestSuiteLite/**
+                            """
+                        }
+                        echo "SonarQube analysis uploaded successfully"
+                    } catch (Exception e) {
+                        echo "SonarQube analysis failed: ${e.message}"
                     }
-                    stages {
-                        stage('SonarQube Analysis') {
-                            steps {
-                                script {
-                                    try {
-                                        def scannerHome = tool 'SonarQube-LXC'
-                                        
-                                        withSonarQubeEnv('SonarQube-LXC') {
-                                            sh """
-                                                ${scannerHome}/bin/sonar-scanner \
-                                                    -Dsonar.projectKey=${SONAR_PROJECT_KEY} \
-                                                    -Dsonar.projectName=${SONAR_PROJECT_NAME} \
-                                                    -Dsonar.sources=${SONAR_SOURCES} \
-                                                    -Dsonar.exclusions=**/target/**,**/TestFiles/**,**/TestSuite/**,**/GenreTestSuiteLite/**
-                                            """
-                                        }
-                                        echo "SonarQube analysis uploaded successfully"
-                                    } catch (Exception e) {
-                                        echo "SonarQube analysis failed: ${e.message}"
-                                    }
-                                }
+                }
+            }
+        }
+        
+        stage('Quality Gate') {
+            when {
+                expression { return !params.SKIP_SONARQUBE }
+            }
+            steps {
+                script {
+                    try {
+                        timeout(time: 10, unit: 'MINUTES') {
+                            def qg = waitForQualityGate abortPipeline: false
+                            if (qg.status != 'OK') {
+                                echo "Quality Gate: ${qg.status}"
+                            } else {
+                                echo "Quality Gate: PASSED"
                             }
                         }
-                        
-                        stage('Quality Gate') {
-                            steps {
-                                script {
-                                    try {
-                                        timeout(time: 10, unit: 'MINUTES') {
-                                            def qg = waitForQualityGate abortPipeline: false
-                                            if (qg.status != 'OK') {
-                                                echo "Quality Gate: ${qg.status}"
-                                            } else {
-                                                echo "Quality Gate: PASSED"
-                                            }
-                                        }
-                                    } catch (Exception e) {
-                                        echo "Quality Gate skipped: ${e.message}"
-                                        echo "Tip: Configure webhook in SonarQube > Project Settings > Webhooks"
-                                        echo "URL: http://YOUR_JENKINS_URL/sonarqube-webhook/"
-                                    }
-                                }
+                    } catch (Exception e) {
+                        echo "Quality Gate skipped: ${e.message}"
+                        echo "Tip: Configure webhook in SonarQube > Project Settings > Webhooks"
+                        echo "URL: http://YOUR_JENKINS_URL/sonarqube-webhook/"
+                    }
+                }
+            }
+        }
+        
+        stage('Integration Tests') {
+            steps {
+                script {
+                    echo "=========================================="
+                    echo "Running Integration Tests"
+                    echo "=========================================="
+                    
+                    sh 'mkdir -p target/test-results'
+                    
+                    def integrationResult = sh(
+                        script: '''
+                            set +e
+                            cargo test --test integration_test -- --nocapture 2>&1 | tee target/test-results/integration_output.txt
+                            exit ${PIPESTATUS[0]}
+                        ''',
+                        returnStatus: true
+                    )
+                    
+                    if (integrationResult != 0) {
+                        echo "Integration tests had failures (exit code: ${integrationResult})"
+                    } else {
+                        echo "Integration tests passed!"
+                    }
+                }
+            }
+        }
+        
+        stage('Qualification Tests') {
+            when {
+                expression { return env.TEST_TYPE == 'QUALIFICATION' }
+            }
+            parallel {
+                stage('Qualification Test') {
+                    steps {
+                        script {
+                            sh 'mkdir -p target/test-results'
+                            
+                            echo "=========================================="
+                            echo "Running QUALIFICATION tests"
+                            echo "=========================================="
+                            
+                            def testResult = sh(
+                                script: """
+                                    set +e
+                                    cargo test --test qualification_test -- --nocapture 2>&1 | tee target/test-results/qualification_output.txt
+                                    exit \${PIPESTATUS[0]}
+                                """,
+                                returnStatus: true
+                            )
+                            
+                            if (testResult != 0) {
+                                echo "Qualification tests completed with failures"
+                                currentBuild.result = 'UNSTABLE'
+                            } else {
+                                echo "Qualification tests passed!"
                             }
                         }
                     }
                 }
                 
-                stage('Tests') {
-                    stages {
-                        stage('Integration Tests') {
-                            steps {
-                                script {
-                                    echo "=========================================="
-                                    echo "Running Integration Tests"
-                                    echo "=========================================="
-                                    
-                                    sh 'mkdir -p target/test-results'
-                                    
-                                    def integrationResult = sh(
-                                        script: '''
-                                            set +e
-                                            cargo test --test integration_test -- --nocapture 2>&1 | tee target/test-results/integration_output.txt
-                                            exit ${PIPESTATUS[0]}
-                                        ''',
-                                        returnStatus: true
-                                    )
-                                    
-                                    if (integrationResult != 0) {
-                                        echo "Integration tests had failures (exit code: ${integrationResult})"
-                                    } else {
-                                        echo "Integration tests passed!"
-                                    }
-                                }
+                stage('Qualification Genre Test') {
+                    steps {
+                        script {
+                            sh 'mkdir -p target/test-results'
+                            
+                            echo "=========================================="
+                            echo "Running QUALIFICATION GENRE tests"
+                            echo "=========================================="
+                            
+                            def testResult = sh(
+                                script: """
+                                    set +e
+                                    cargo test --test qualification_genre_tests -- --nocapture 2>&1 | tee target/test-results/qualification_genre_output.txt
+                                    exit \${PIPESTATUS[0]}
+                                """,
+                                returnStatus: true
+                            )
+                            
+                            if (testResult != 0) {
+                                echo "Qualification genre tests completed with failures"
+                                currentBuild.result = 'UNSTABLE'
+                            } else {
+                                echo "Qualification genre tests passed!"
                             }
                         }
-                        
-                        stage('Run Test Suites') {
-                            parallel {
-                                stage('Qualification Tests') {
-                                    when {
-                                        expression { return env.TEST_TYPE == 'QUALIFICATION' }
-                                    }
-                                    steps {
-                                        script {
-                                            sh 'mkdir -p target/test-results'
-                                            
-                                            echo "=========================================="
-                                            echo "Running QUALIFICATION tests"
-                                            echo "=========================================="
-                                            
-                                            def testResult = sh(
-                                                script: """
-                                                    set +e
-                                                    cargo test --test qualification_test -- --nocapture 2>&1 | tee target/test-results/qualification_output.txt
-                                                    exit \${PIPESTATUS[0]}
-                                                """,
-                                                returnStatus: true
-                                            )
-                                            
-                                            if (testResult != 0) {
-                                                echo "Qualification tests completed with failures"
-                                                currentBuild.result = 'UNSTABLE'
-                                            } else {
-                                                echo "Qualification tests passed!"
-                                            }
-                                        }
-                                    }
-                                }
-                                
-                                stage('Qualification Genre Tests') {
-                                    when {
-                                        expression { return env.TEST_TYPE == 'QUALIFICATION' }
-                                    }
-                                    steps {
-                                        script {
-                                            sh 'mkdir -p target/test-results'
-                                            
-                                            echo "=========================================="
-                                            echo "Running QUALIFICATION GENRE tests"
-                                            echo "=========================================="
-                                            
-                                            def testResult = sh(
-                                                script: """
-                                                    set +e
-                                                    cargo test --test qualification_genre_tests -- --nocapture 2>&1 | tee target/test-results/qualification_genre_output.txt
-                                                    exit \${PIPESTATUS[0]}
-                                                """,
-                                                returnStatus: true
-                                            )
-                                            
-                                            if (testResult != 0) {
-                                                echo "Qualification genre tests completed with failures"
-                                                currentBuild.result = 'UNSTABLE'
-                                            } else {
-                                                echo "Qualification genre tests passed!"
-                                            }
-                                        }
-                                    }
-                                }
-                                
-                                stage('Regression Tests') {
-                                    when {
-                                        expression { return env.TEST_TYPE == 'REGRESSION' }
-                                    }
-                                    steps {
-                                        script {
-                                            sh 'mkdir -p target/test-results'
-                                            
-                                            echo "=========================================="
-                                            echo "Running REGRESSION tests"
-                                            echo "=========================================="
-                                            
-                                            def testResult = sh(
-                                                script: """
-                                                    set +e
-                                                    cargo test --test regression_test -- --nocapture 2>&1 | tee target/test-results/regression_output.txt
-                                                    exit \${PIPESTATUS[0]}
-                                                """,
-                                                returnStatus: true
-                                            )
-                                            
-                                            if (testResult != 0) {
-                                                echo "Regression tests completed with failures"
-                                                currentBuild.result = 'UNSTABLE'
-                                            } else {
-                                                echo "Regression tests passed!"
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        
-                        stage('Regression Genre Tests') {
-                            when {
-                                expression { 
-                                    return env.TEST_TYPE == 'REGRESSION_GENRE' || params.RUN_GENRE_REGRESSION == true
-                                }
-                            }
-                            steps {
-                                script {
-                                    sh 'mkdir -p target/test-results'
-                                    
-                                    echo "=========================================="
-                                    echo "Running REGRESSION GENRE tests (MANUAL ONLY)"
-                                    echo "=========================================="
-                                    
-                                    def testResult = sh(
-                                        script: """
-                                            set +e
-                                            cargo test --test regression_genre_tests -- --nocapture 2>&1 | tee target/test-results/regression_genre_output.txt
-                                            exit \${PIPESTATUS[0]}
-                                        """,
-                                        returnStatus: true
-                                    )
-                                    
-                                    if (testResult != 0) {
-                                        echo "Regression genre tests completed with failures"
-                                        currentBuild.result = 'UNSTABLE'
-                                    } else {
-                                        echo "Regression genre tests passed!"
-                                    }
-                                }
-                            }
-                        }
+                    }
+                }
+            }
+        }
+        
+        stage('Regression Tests') {
+            when {
+                expression { return env.TEST_TYPE == 'REGRESSION' }
+            }
+            steps {
+                script {
+                    sh 'mkdir -p target/test-results'
+                    
+                    echo "=========================================="
+                    echo "Running REGRESSION tests"
+                    echo "=========================================="
+                    
+                    def testResult = sh(
+                        script: """
+                            set +e
+                            cargo test --test regression_test -- --nocapture 2>&1 | tee target/test-results/regression_output.txt
+                            exit \${PIPESTATUS[0]}
+                        """,
+                        returnStatus: true
+                    )
+                    
+                    if (testResult != 0) {
+                        echo "Regression tests completed with failures"
+                        currentBuild.result = 'UNSTABLE'
+                    } else {
+                        echo "Regression tests passed!"
+                    }
+                }
+            }
+        }
+        
+        stage('Regression Genre Tests') {
+            when {
+                expression { 
+                    return env.TEST_TYPE == 'REGRESSION_GENRE' || params.RUN_GENRE_REGRESSION == true
+                }
+            }
+            steps {
+                script {
+                    sh 'mkdir -p target/test-results'
+                    
+                    echo "=========================================="
+                    echo "Running REGRESSION GENRE tests (MANUAL ONLY)"
+                    echo "=========================================="
+                    
+                    def testResult = sh(
+                        script: """
+                            set +e
+                            cargo test --test regression_genre_tests -- --nocapture 2>&1 | tee target/test-results/regression_genre_output.txt
+                            exit \${PIPESTATUS[0]}
+                        """,
+                        returnStatus: true
+                    )
+                    
+                    if (testResult != 0) {
+                        echo "Regression genre tests completed with failures"
+                        currentBuild.result = 'UNSTABLE'
+                    } else {
+                        echo "Regression genre tests passed!"
                     }
                 }
             }

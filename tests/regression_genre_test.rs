@@ -1,16 +1,16 @@
 // tests/regression_genre_tests.rs
 
-// REGRESSION Genre Test Suite - Full TestSuite directory
-// Comprehensive genre testing for weekly validation
+// REGRESSION Genre Test Suite - Full TestSuite (~289 files)
+// Comprehensive validation for weekly testing
 //
-// Purpose: Full validation across all genres and defect categories
-// - Includes edge cases and complex transcoding chains
-// - Multi-generation transcodes (MP3→MP3, Opus→MP3)
-// - Sample rate manipulations (44→96kHz, 48→96kHz)
-// - Low bitrate extremes (Opus 48k, MP3 64k)
-// - Multi-stage resampling
+// Purpose: Full regression testing with all music genres
+// - Tests ALL files in TestSuite directory dynamically
+// - Covers control group + all defect categories
+// - Edge cases, multi-generation transcodes, complex resampling
+// - Parallel execution (8 threads) for faster testing
 
 use std::env;
+use std::fs;
 use std::process::Command;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -37,7 +37,6 @@ struct TestResult {
     file: String,
 }
 
-/// Main regression genre test
 #[test]
 fn test_regression_genre_suite() {
     let binary_path = get_binary_path();
@@ -47,81 +46,292 @@ fn test_regression_genre_suite() {
     assert!(
         test_base.exists(),
         "TestSuite directory not found at: {}. \
-        Download TestSuite.zip from MinIO for regression tests.",
+        Download TestSuite.zip from MinIO.",
         test_base.display()
     );
     
-    println!("\n{}", "=".repeat(60));
-    println!("REGRESSION GENRE TEST SUITE (Full Validation)");
+    println!("\n{}", "=".repeat(80));
+    println!("REGRESSION GENRE TEST SUITE (Full - Parallel Execution)");
     println!("Using: {}", test_base.display());
-    println!("{}\n", "=".repeat(60));
+    println!("{}\n", "=".repeat(80));
     
-    let test_cases = define_regression_genre_tests(&test_base);
+    // Scan all categories and build test cases dynamically
+    let test_cases = scan_and_build_test_cases(&test_base);
     let total_tests = test_cases.len();
     
-    println!("Running {} comprehensive genre tests in parallel...\n", total_tests);
+    println!("Found {} files across {} categories\n", total_tests, count_categories(&test_cases));
     
-    // Run tests in parallel with 6 threads (more intensive test suite)
-    let results = run_tests_parallel(&binary_path, test_cases, 6);
+    // Run tests in parallel with 8 threads
+    let results = run_tests_parallel(&binary_path, test_cases, 8);
     
-    // Analyze results by genre and category
-    analyze_results(&results, total_tests);
-}
-
-fn analyze_results(results: &[TestResult], total_tests: usize) {
+    // Analyze results by category
     let mut passed = 0;
     let mut failed = 0;
     let mut false_positives = 0;
     let mut false_negatives = 0;
+    let mut results_by_category: std::collections::HashMap<String, Vec<&TestResult>> = 
+        std::collections::HashMap::new();
     
-    // Print individual results
-    for (idx, result) in results.iter().enumerate() {
+    for result in &results {
+        results_by_category
+            .entry(result.genre.clone())
+            .or_insert_with(Vec::new)
+            .push(result);
+            
         if result.passed == result.expected {
             passed += 1;
-            println!(
-                "[{:3}/{}] ✓ PASS [{}]: {}", 
-                idx + 1, total_tests, result.genre, result.description
-            );
         } else {
             failed += 1;
             if result.passed && !result.expected {
                 false_negatives += 1;
                 println!(
-                    "[{:3}/{}] ✗ FALSE NEGATIVE [{}]: {}", 
-                    idx + 1, total_tests, result.genre, result.description
+                    "✗ FALSE NEGATIVE [{}]: {}", 
+                    result.genre, result.description
                 );
-                println!("     Expected defects but got CLEAN");
             } else {
                 false_positives += 1;
                 println!(
-                    "[{:3}/{}] ✗ FALSE POSITIVE [{}]: {}", 
-                    idx + 1, total_tests, result.genre, result.description
+                    "✗ FALSE POSITIVE [{}]: {} - Found: {:?}", 
+                    result.genre, result.description, result.defects_found
                 );
-                println!("     Expected CLEAN but detected: {:?}", result.defects_found);
             }
         }
     }
     
-    println!("\n{}", "=".repeat(60));
+    println!("\n{}", "=".repeat(80));
     println!("REGRESSION GENRE RESULTS");
-    println!("{}", "=".repeat(60));
+    println!("{}", "=".repeat(80));
     println!("Total Tests: {}", total_tests);
     println!("Passed: {} ({:.1}%)", passed, (passed as f32 / total_tests as f32) * 100.0);
     println!("Failed: {}", failed);
-    println!("  False Positives: {} (clean marked as defective)", false_positives);
-    println!("  False Negatives: {} (defective marked as clean)", false_negatives);
-    println!("{}", "=".repeat(60));
+    println!("  False Positives: {}", false_positives);
+    println!("  False Negatives: {}", false_negatives);
+    
+    // Category breakdown
+    println!("\n{}", "-".repeat(80));
+    println!("Results by Category:");
+    println!("{}", "-".repeat(80));
+    for (category, cat_results) in results_by_category.iter() {
+        let cat_passed = cat_results.iter().filter(|r| r.passed == r.expected).count();
+        let cat_total = cat_results.len();
+        println!("{:30} {:3}/{:3} ({:.0}%)", 
+            category, cat_passed, cat_total, 
+            (cat_passed as f32 / cat_total as f32) * 100.0
+        );
+    }
+    println!("{}", "=".repeat(80));
     
     assert_eq!(failed, 0, "Regression genre tests failed: {} test(s) did not pass", failed);
 }
 
-/// Run tests in parallel
+fn scan_and_build_test_cases(base: &Path) -> Vec<GenreTestCase> {
+    let mut cases = Vec::new();
+    
+    // Read all subdirectories in TestSuite
+    let entries = match fs::read_dir(base) {
+        Ok(entries) => entries,
+        Err(e) => {
+            eprintln!("Failed to read TestSuite directory: {}", e);
+            return cases;
+        }
+    };
+    
+    for entry in entries {
+        let entry = match entry {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        
+        let category = match path.file_name().and_then(|n| n.to_str()) {
+            Some(name) => name.to_string(),
+            None => continue,
+        };
+        
+        // Scan FLAC files in this category
+        let files = match fs::read_dir(&path) {
+            Ok(files) => files,
+            Err(_) => continue,
+        };
+        
+        for file_entry in files {
+            let file_entry = match file_entry {
+                Ok(f) => f,
+                Err(_) => continue,
+            };
+            
+            let file_path = file_entry.path();
+            if file_path.extension().and_then(|e| e.to_str()) != Some("flac") {
+                continue;
+            }
+            
+            let filename = match file_path.file_name().and_then(|n| n.to_str()) {
+                Some(name) => name.to_string(),
+                None => continue,
+            };
+            
+            // Determine expected result based on category
+            let (should_pass, expected_defects) = categorize_expected_result(&category);
+            let genre_info = extract_genre_from_filename(&filename);
+            
+            cases.push(GenreTestCase {
+                file_path: file_path.to_string_lossy().to_string(),
+                should_pass,
+                expected_defects,
+                description: filename.clone(),
+                genre: genre_info,
+                defect_category: category.clone(),
+            });
+        }
+    }
+    
+    // Sort by category then filename for consistent ordering
+    cases.sort_by(|a, b| {
+        a.defect_category.cmp(&b.defect_category)
+            .then(a.description.cmp(&b.description))
+    });
+    
+    cases
+}
+
+fn categorize_expected_result(category: &str) -> (bool, Vec<String>) {
+    match category {
+        "Control_Original" => (true, vec![]),
+        
+        cat if cat.starts_with("MP3_") || cat.contains("MP3") => 
+            (false, vec!["Mp3Transcode".to_string()]),
+        
+        cat if cat.starts_with("AAC_") => 
+            (false, vec!["AacTranscode".to_string()]),
+        
+        cat if cat.starts_with("Opus_") || cat.contains("Opus") => 
+            (false, vec!["OpusTranscode".to_string()]),
+        
+        cat if cat.starts_with("Vorbis_") => 
+            (false, vec!["OggVorbisTranscode".to_string()]),
+        
+        "BitDepth_16to24" => 
+            (false, vec!["BitDepthMismatch".to_string()]),
+        
+        "Combined_16bit_44khz" => 
+            (false, vec!["BitDepthMismatch".to_string(), "Upsampled".to_string()]),
+        
+        "Combined_MP3_128_From_CD" => 
+            (false, vec!["Mp3Transcode".to_string(), "BitDepthMismatch".to_string()]),
+        
+        cat if cat.starts_with("SampleRate_") => 
+            (false, vec!["Upsampled".to_string()]),
+        
+        cat if cat.starts_with("Edge_") && cat.contains("Resample") => 
+            (false, vec!["Upsampled".to_string()]),
+        
+        cat if cat.starts_with("Generation_") => {
+            // Multi-generation transcodes
+            if cat.contains("MP3") {
+                (false, vec!["Mp3Transcode".to_string()])
+            } else if cat.contains("AAC") {
+                (false, vec!["AacTranscode".to_string()])
+            } else if cat.contains("Opus") {
+                (false, vec!["OpusTranscode".to_string()])
+            } else {
+                (false, vec![])
+            }
+        }
+        
+        _ => (false, vec![]),
+    }
+}
+
+fn extract_genre_from_filename(filename: &str) -> String {
+    // Extract genre information from filename patterns
+    // Most files follow pattern: TrackName_bitdepth_detail.flac
+    
+    // Common genres by track name
+    if filename.contains("Boogieman") {
+        "HipHopRnB".to_string()
+    } else if filename.contains("Paranoid_Android") {
+        "Alternative".to_string()
+    } else if filename.contains("Instant_Destiny") {
+        "Alternative".to_string()
+    } else if filename.contains("inconsist") {
+        "AmbientDrone".to_string()
+    } else if filename.contains("An_Ending") || filename.contains("Ascent") {
+        "AmbientDrone".to_string()
+    } else if filename.contains("Different_Masks") {
+        "ElectronicDance".to_string()
+    } else if filename.contains("Could_You_Be_Loved") {
+        "ReggaeDub".to_string()
+    } else if filename.contains("MALAMENTE") {
+        "LatinWorld".to_string()
+    } else if filename.contains("Wake_Up") {
+        "Indie".to_string()
+    } else if filename.contains("Exile") {
+        "Folk".to_string()
+    } else if filename.contains("Pride_and_Joy") {
+        "Blues".to_string()
+    } else if filename.contains("Jelmore") || filename.contains("We_") {
+        "Folk".to_string()
+    } else if filename.contains("Open_Your_Heart") {
+        "Pop".to_string()
+    } else if filename.contains("Melatonin") {
+        "Rock".to_string()
+    } else if filename.contains("Brandenburg") || filename.contains("Missa_Pange") {
+        "Classical".to_string()
+    } else if filename.contains("Dream_of_Arrakis") || filename.contains("Bene_Gesserit") {
+        "SoundtrackScore".to_string()
+    } else if filename.contains("Punisher") {
+        "Indie".to_string()
+    } else if filename.contains("Enter_Sandman") || filename.contains("Crack_the_Skye") {
+        "Metal".to_string()
+    } else if filename.contains("So_What") {
+        "Jazz".to_string()
+    } else if filename.contains("Chan_Chan") {
+        "LatinWorld".to_string()
+    } else if filename.contains("Alright") {
+        "SoulFunk".to_string()
+    } else if filename.contains("You_And_I") || filename.contains("You_re_Still") {
+        "Country".to_string()
+    } else if filename.contains("Follow_Me") {
+        "Pop".to_string()
+    } else if filename.contains("Nightvision") || filename.contains("Windowlicker") {
+        "ElectronicDance".to_string()
+    } else if filename.contains("Nonbinary") {
+        "ExperimentalAvantGarde".to_string()
+    } else if filename.contains("Breathe") {
+        "Rock".to_string()
+    } else if filename.contains("Dance_The_Night") {
+        "Pop".to_string()
+    } else if filename.contains("This_Land") {
+        "Folk".to_string()
+    } else if filename.contains("Alone") || filename.contains("And_Nothing_Is_Forever") {
+        "Indie".to_string()
+    } else if filename.contains("Mercury_in_Retrograde") {
+        "Pop".to_string()
+    } else {
+        "Unknown".to_string()
+    }
+}
+
+fn count_categories(cases: &[GenreTestCase]) -> usize {
+    let mut categories: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for case in cases {
+        categories.insert(case.defect_category.clone());
+    }
+    categories.len()
+}
+
 fn run_tests_parallel(binary: &Path, test_cases: Vec<GenreTestCase>, num_threads: usize) -> Vec<TestResult> {
     let binary = binary.to_path_buf();
     let test_cases = Arc::new(test_cases);
     let results = Arc::new(Mutex::new(Vec::new()));
     let index = Arc::new(Mutex::new(0usize));
     let mut handles = Vec::new();
+    
+    println!("Running tests with {} parallel threads...\n", num_threads);
     
     for _ in 0..num_threads {
         let binary = binary.clone();
@@ -143,6 +353,11 @@ fn run_tests_parallel(binary: &Path, test_cases: Vec<GenreTestCase>, num_threads
                 
                 let test_case = &test_cases[current_idx];
                 let result = run_single_test(&binary, test_case);
+                
+                // Progress indicator every 10 files
+                if current_idx > 0 && current_idx % 10 == 0 {
+                    println!("Progress: {}/{} tests completed", current_idx, test_cases.len());
+                }
                 
                 let mut results_guard = results.lock().unwrap();
                 results_guard.push((current_idx, result));
@@ -202,7 +417,7 @@ fn run_single_test(binary: &Path, test_case: &GenreTestCase) -> TestResult {
         expected: test_case.should_pass,
         defects_found,
         description: test_case.description.clone(),
-        genre: test_case.genre.clone(),
+        genre: test_case.defect_category.clone(),  // Use category as primary genre identifier
         file: test_case.file_path.clone(),
     }
 }
@@ -235,240 +450,4 @@ fn get_binary_path() -> PathBuf {
     }
     
     panic!("Binary not found. Run: cargo build --release");
-}
-
-fn define_regression_genre_tests(base: &Path) -> Vec<GenreTestCase> {
-    let mut cases = Vec::new();
-    
-    // =========================================================================
-    // EDGE CASES - Low bitrate extremes
-    // =========================================================================
-    
-    // Alternative - Opus 48k extreme low
-    cases.push(GenreTestCase {
-        file_path: base.join("Edge_LowBitrate_Opus/Instant_Destiny_24sample_opus_48k_extreme.flac").to_string_lossy().to_string(),
-        should_pass: false,
-        expected_defects: vec!["OpusTranscode".to_string()],
-        description: "Instant Destiny - Opus 48k (extreme low)".to_string(),
-        genre: "Alternative".to_string(),
-        defect_category: "EdgeCase_LowBitrate".to_string(),
-    });
-    
-    // Alternative - Opus 48k extreme low (16-bit)
-    cases.push(GenreTestCase {
-        file_path: base.join("Edge_LowBitrate_Opus/Paranoid_Android__Remastered__16sample_opus_48k_extreme.flac").to_string_lossy().to_string(),
-        should_pass: false,
-        expected_defects: vec!["OpusTranscode".to_string()],
-        description: "Paranoid Android - Opus 48k (extreme low)".to_string(),
-        genre: "Alternative".to_string(),
-        defect_category: "EdgeCase_LowBitrate".to_string(),
-    });
-    
-    // Alternative - MP3 64k extreme low
-    cases.push(GenreTestCase {
-        file_path: base.join("Edge_MP3_64k/Instant_Destiny_24sample_mp3_64k_extreme.flac").to_string_lossy().to_string(),
-        should_pass: false,
-        expected_defects: vec!["Mp3Transcode".to_string()],
-        description: "Instant Destiny - MP3 64k (extreme low)".to_string(),
-        genre: "Alternative".to_string(),
-        defect_category: "EdgeCase_MP3_64k".to_string(),
-    });
-    
-    // =========================================================================
-    // MULTI-GENERATION TRANSCODES
-    // =========================================================================
-    
-    // Alternative - MP3 → MP3 (generation 2)
-    cases.push(GenreTestCase {
-        file_path: base.join("Generation_MP3_MP3/Instant_Destiny_24sample_mp3_gen2.flac").to_string_lossy().to_string(),
-        should_pass: false,
-        expected_defects: vec!["Mp3Transcode".to_string()],
-        description: "Instant Destiny - MP3→MP3 (2nd gen)".to_string(),
-        genre: "Alternative".to_string(),
-        defect_category: "MultiGeneration".to_string(),
-    });
-    
-    // Alternative - MP3 → MP3 (generation 2, 16-bit)
-    cases.push(GenreTestCase {
-        file_path: base.join("Generation_MP3_MP3/Paranoid_Android__Remastered__16sample_mp3_gen2.flac").to_string_lossy().to_string(),
-        should_pass: false,
-        expected_defects: vec!["Mp3Transcode".to_string()],
-        description: "Paranoid Android - MP3→MP3 (2nd gen)".to_string(),
-        genre: "Alternative".to_string(),
-        defect_category: "MultiGeneration".to_string(),
-    });
-    
-    // Alternative - Opus → MP3 cross-codec
-    cases.push(GenreTestCase {
-        file_path: base.join("Generation_Opus_MP3/Instant_Destiny_24sample_opus_to_mp3.flac").to_string_lossy().to_string(),
-        should_pass: false,
-        expected_defects: vec!["Mp3Transcode".to_string()],
-        description: "Instant Destiny - Opus→MP3".to_string(),
-        genre: "Alternative".to_string(),
-        defect_category: "CrossCodec".to_string(),
-    });
-    
-    // =========================================================================
-    // SAMPLE RATE UPSAMPLING
-    // =========================================================================
-    
-    // Alternative - 44.1→96kHz
-    cases.push(GenreTestCase {
-        file_path: base.join("SampleRate_44to96/Instant_Destiny_24sample_44to96_upsampled.flac").to_string_lossy().to_string(),
-        should_pass: false,
-        expected_defects: vec!["Upsampled".to_string()],
-        description: "Instant Destiny - 44.1→96kHz upsampled".to_string(),
-        genre: "Alternative".to_string(),
-        defect_category: "SampleRateUpsample".to_string(),
-    });
-    
-    // Electronic - 48→96kHz
-    cases.push(GenreTestCase {
-        file_path: base.join("SampleRate_48to96/Different_Masks_For_Different_Days__Live_from_Echostage__Washington__24sample_48to96_upsampled.flac").to_string_lossy().to_string(),
-        should_pass: false,
-        expected_defects: vec!["Upsampled".to_string()],
-        description: "Different Masks - 48→96kHz upsampled".to_string(),
-        genre: "ElectronicDance".to_string(),
-        defect_category: "SampleRateUpsample".to_string(),
-    });
-    
-    // Ambient - 48→96kHz
-    cases.push(GenreTestCase {
-        file_path: base.join("SampleRate_48to96/inconsist_24sample_48to96_upsampled.flac").to_string_lossy().to_string(),
-        should_pass: false,
-        expected_defects: vec!["Upsampled".to_string()],
-        description: "inconsist - 48→96kHz upsampled".to_string(),
-        genre: "AmbientDrone".to_string(),
-        defect_category: "SampleRateUpsample".to_string(),
-    });
-    
-    // Alternative - 48→96kHz
-    cases.push(GenreTestCase {
-        file_path: base.join("SampleRate_48to96/Instant_Destiny_24sample_48to96_upsampled.flac").to_string_lossy().to_string(),
-        should_pass: false,
-        expected_defects: vec!["Upsampled".to_string()],
-        description: "Instant Destiny - 48→96kHz upsampled".to_string(),
-        genre: "Alternative".to_string(),
-        defect_category: "SampleRateUpsample".to_string(),
-    });
-    
-    // =========================================================================
-    // MULTI-STAGE RESAMPLING
-    // =========================================================================
-    
-    // Classical - Multiple resampling stages
-    cases.push(GenreTestCase {
-        file_path: base.join("Edge_MultipleResample/Brandenburg_Concerto_in_G_MajorBWV_1049_16sample_multi_resample.flac").to_string_lossy().to_string(),
-        should_pass: false,
-        expected_defects: vec!["Upsampled".to_string()],
-        description: "Brandenburg Concerto - Multi-stage resample".to_string(),
-        genre: "Classical".to_string(),
-        defect_category: "MultiResample".to_string(),
-    });
-    
-    // Folk - Multiple resampling stages
-    cases.push(GenreTestCase {
-        file_path: base.join("Edge_MultipleResample/We_24sample_multi_resample.flac").to_string_lossy().to_string(),
-        should_pass: false,
-        expected_defects: vec!["Upsampled".to_string()],
-        description: "We - Multi-stage resample".to_string(),
-        genre: "Folk".to_string(),
-        defect_category: "MultiResample".to_string(),
-    });
-    
-    // =========================================================================
-    // COMBINED DEFECTS (BitDepth + SampleRate)
-    // =========================================================================
-    
-    // Ambient - 16-bit + 44kHz upsampled
-    cases.push(GenreTestCase {
-        file_path: base.join("Combined_16bit_44khz/inconsist_24sample_16bit_44khz_upscaled.flac").to_string_lossy().to_string(),
-        should_pass: false,
-        expected_defects: vec!["BitDepthMismatch".to_string(), "Upsampled".to_string()],
-        description: "inconsist - 16-bit + 44kHz upscaled".to_string(),
-        genre: "AmbientDrone".to_string(),
-        defect_category: "Combined".to_string(),
-    });
-    
-    // Alternative - 16-bit + 44kHz upsampled
-    cases.push(GenreTestCase {
-        file_path: base.join("Combined_16bit_44khz/Instant_Destiny_24sample_16bit_44khz_upscaled.flac").to_string_lossy().to_string(),
-        should_pass: false,
-        expected_defects: vec!["BitDepthMismatch".to_string(), "Upsampled".to_string()],
-        description: "Instant Destiny - 16-bit + 44kHz upscaled".to_string(),
-        genre: "Alternative".to_string(),
-        defect_category: "Combined".to_string(),
-    });
-    
-    // =========================================================================
-    // COMBINED DEFECTS (CD → MP3 → 24-bit upscale)
-    // =========================================================================
-    
-    // Electronic - CD → MP3 128 → 24-bit
-    cases.push(GenreTestCase {
-        file_path: base.join("Combined_MP3_128_From_CD/Different_Masks_For_Different_Days__Live_from_Echostage__Washington__24sample_cd_mp3_128k_upscaled.flac").to_string_lossy().to_string(),
-        should_pass: false,
-        expected_defects: vec!["Mp3Transcode".to_string(), "BitDepthMismatch".to_string()],
-        description: "Different Masks - CD→MP3→24bit".to_string(),
-        genre: "ElectronicDance".to_string(),
-        defect_category: "Combined".to_string(),
-    });
-    
-    // Ambient - CD → MP3 128 → 24-bit
-    cases.push(GenreTestCase {
-        file_path: base.join("Combined_MP3_128_From_CD/inconsist_24sample_cd_mp3_128k_upscaled.flac").to_string_lossy().to_string(),
-        should_pass: false,
-        expected_defects: vec!["Mp3Transcode".to_string(), "BitDepthMismatch".to_string()],
-        description: "inconsist - CD→MP3→24bit".to_string(),
-        genre: "AmbientDrone".to_string(),
-        defect_category: "Combined".to_string(),
-    });
-    
-    // =========================================================================
-    // VORBIS TRANSCODES
-    // =========================================================================
-    
-    // Alternative - Vorbis Q3 (low quality)
-    cases.push(GenreTestCase {
-        file_path: base.join("Vorbis_Q3_Low/Instant_Destiny_24sample_vorbis_q3.flac").to_string_lossy().to_string(),
-        should_pass: false,
-        expected_defects: vec!["OggVorbisTranscode".to_string()],
-        description: "Instant Destiny - Vorbis Q3".to_string(),
-        genre: "Alternative".to_string(),
-        defect_category: "Vorbis_Q3".to_string(),
-    });
-    
-    // Alternative - Vorbis Q3 (16-bit)
-    cases.push(GenreTestCase {
-        file_path: base.join("Vorbis_Q3_Low/Paranoid_Android__Remastered__16sample_vorbis_q3.flac").to_string_lossy().to_string(),
-        should_pass: false,
-        expected_defects: vec!["OggVorbisTranscode".to_string()],
-        description: "Paranoid Android - Vorbis Q3".to_string(),
-        genre: "Alternative".to_string(),
-        defect_category: "Vorbis_Q3".to_string(),
-    });
-    
-    // Alternative - Vorbis Q7 (high quality)
-    cases.push(GenreTestCase {
-        file_path: base.join("Vorbis_Q7_High/Instant_Destiny_24sample_vorbis_q7.flac").to_string_lossy().to_string(),
-        should_pass: false,
-        expected_defects: vec!["OggVorbisTranscode".to_string()],
-        description: "Instant_Destiny - Vorbis Q7".to_string(),
-        genre: "Alternative".to_string(),
-        defect_category: "Vorbis_Q7".to_string(),
-    });
-    
-    // Alternative - Vorbis Q7 (16-bit)
-    cases.push(GenreTestCase {
-        file_path: base.join("Vorbis_Q7_High/Paranoid_Android__Remastered__16sample_vorbis_q7.flac").to_string_lossy().to_string(),
-        should_pass: false,
-        expected_defects: vec!["OggVorbisTranscode".to_string()],
-        description: "Paranoid Android - Vorbis Q7".to_string(),
-        genre: "Alternative".to_string(),
-        defect_category: "Vorbis_Q7".to_string(),
-    });
-    
-    // Total: 3 edge + 3 multi-gen + 4 sample rate + 2 multi-resample + 4 combined + 4 vorbis = 20 tests
-    
-    cases
 }
