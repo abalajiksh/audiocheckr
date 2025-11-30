@@ -361,7 +361,7 @@ pipeline {
             }
         }
         
-        stage('Diagnostic Test') {
+                stage('Diagnostic Test') {
             when {
                 expression { return env.TEST_TYPE == 'DIAGNOSTIC' }
             }
@@ -371,8 +371,17 @@ pipeline {
                     echo "Running DIAGNOSTIC TEST"
                     echo "=========================================="
                     
-                    // Build the project first
-                    sh 'cargo build --release'
+                    // Build the release binary first
+                    sh '''
+                        echo "Building release binary for diagnostic test..."
+                        cargo build --release 2>&1 | tee build_diagnostic.txt
+                        
+                        echo ""
+                        echo "=== Binary Ready ==="
+                        ls -lh target/release/audiocheckr
+                        file target/release/audiocheckr
+                        echo "===================="
+                    '''
                     
                     sh 'mkdir -p target/test-results'
                     
@@ -399,6 +408,7 @@ pipeline {
                 }
             }
         }
+
         
         stage('x86_64 Tests (Full Suite)') {
             when {
