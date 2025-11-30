@@ -4,7 +4,7 @@ pipeline {
     parameters {
         choice(
             name: 'TEST_TYPE_OVERRIDE',
-            choices: ['AUTO', 'QUALIFICATION', 'REGRESSION', 'REGRESSION_GENRE'],
+            choices: ['AUTO', 'QUALIFICATION', 'REGRESSION', 'REGRESSION_GENRE', 'DIAGNOSTIC'],
             description: 'Force a specific test type. AUTO uses smart detection.'
         )
         booleanParam(
@@ -16,6 +16,11 @@ pipeline {
             name: 'RUN_GENRE_REGRESSION',
             defaultValue: false,
             description: 'Run regression genre tests (manual trigger only)'
+        )
+        booleanParam(
+            name: 'RUN_DIAGNOSTIC_TEST',
+            defaultValue: false,
+            description: 'Run diagnostic test only (downloads TestSuite.zip, requires manual trigger)'
         )
         booleanParam(
             name: 'SKIP_SONARQUBE',
@@ -78,8 +83,11 @@ pipeline {
                         checkout scm
                     }
                     
-                    // Determine test type
-                    if (params.TEST_TYPE_OVERRIDE && params.TEST_TYPE_OVERRIDE != 'AUTO') {
+                    // Handle diagnostic test override
+                    if (params.RUN_DIAGNOSTIC_TEST) {
+                        env.TEST_TYPE = 'DIAGNOSTIC'
+                        echo "🔍 Diagnostic test mode activated"
+                    } else if (params.TEST_TYPE_OVERRIDE && params.TEST_TYPE_OVERRIDE != 'AUTO') {
                         env.TEST_TYPE = params.TEST_TYPE_OVERRIDE
                         echo "🔧 Test type forced via parameter: ${env.TEST_TYPE}"
                     } else if (currentBuild.getBuildCauses('hudson.triggers.TimerTrigger$TimerTriggerCause')) {
@@ -162,6 +170,9 @@ pipeline {
         stage('Build & Prepare') {
             parallel {
                 stage('Build x86_64') {
+                    when {
+                        expression { return env.TEST_TYPE != 'DIAGNOSTIC' }
+                    }
                     steps {
                         sh '''
                             echo "=========================================="
@@ -201,7 +212,26 @@ pipeline {
                                     variable: 'MINIO_ENDPOINT'
                                 )
                             ]) {
-                                if (env.TEST_TYPE == 'REGRESSION') {
+                                if (env.TEST_TYPE == 'DIAGNOSTIC') {
+                                    sh '''
+                                        set -e
+                                        mc alias set myminio "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
+                                        
+                                        echo "=========================================="
+                                        echo "Downloading DIAGNOSTIC test files"
+                                        echo "=========================================="
+                                        
+                                        # Download and extract TestSuite only
+                                        echo "Downloading ${MINIO_FILE_GENRE_FULL} (~19.4GB)"
+                                        mc cp myminio/${MINIO_BUCKET}/${MINIO_FILE_GENRE_FULL} .
+                                        unzip -q -o ${MINIO_FILE_GENRE_FULL}
+                                        rm -f ${MINIO_FILE_GENRE_FULL}
+                                        
+                                        echo "Test files ready for diagnostic"
+                                        find TestSuite -type f -name "*.flac" 2>/dev/null | wc -l || echo "0"
+                                        du -sh TestSuite 2>/dev/null || true
+                                    '''
+                                } else if (env.TEST_TYPE == 'REGRESSION') {
                                     sh '''
                                         set -e
                                         mc alias set myminio "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
@@ -277,7 +307,10 @@ pipeline {
         
         stage('SonarQube Analysis') {
             when {
-                expression { return !params.SKIP_SONARQUBE }
+                allOf {
+                    expression { return !params.SKIP_SONARQUBE }
+                    expression { return env.TEST_TYPE != 'DIAGNOSTIC' }
+                }
             }
             steps {
                 script {
@@ -303,7 +336,10 @@ pipeline {
         
         stage('Quality Gate') {
             when {
-                expression { return !params.SKIP_SONARQUBE }
+                allOf {
+                    expression { return !params.SKIP_SONARQUBE }
+                    expression { return env.TEST_TYPE != 'DIAGNOSTIC' }
+                }
             }
             steps {
                 script {
@@ -325,7 +361,49 @@ pipeline {
             }
         }
         
+        stage('Diagnostic Test') {
+            when {
+                expression { return env.TEST_TYPE == 'DIAGNOSTIC' }
+            }
+            steps {
+                script {
+                    echo "=========================================="
+                    echo "Running DIAGNOSTIC TEST"
+                    echo "=========================================="
+                    
+                    // Build the project first
+                    sh 'cargo build --release'
+                    
+                    sh 'mkdir -p target/test-results'
+                    
+                    def diagnosticResult = sh(
+                        script: '''
+                            set +e
+                            cargo test --test diagnostic_test -- --nocapture 2>&1 | tee target/test-results/diagnostic_test.txt
+                            exit ${PIPESTATUS[0]}
+                        ''',
+                        returnStatus: true
+                    )
+                    
+                    if (diagnosticResult != 0) {
+                        echo "⚠ Diagnostic test completed with findings"
+                        currentBuild.result = 'UNSTABLE'
+                    } else {
+                        echo "✓ Diagnostic test completed successfully!"
+                    }
+                    
+                    // Archive diagnostic results
+                    archiveArtifacts artifacts: 'target/test-results/diagnostic_test.txt', 
+                                   fingerprint: true, 
+                                   allowEmptyArchive: true
+                }
+            }
+        }
+        
         stage('x86_64 Tests (Full Suite)') {
+            when {
+                expression { return env.TEST_TYPE != 'DIAGNOSTIC' }
+            }
             stages {
                 stage('Integration Tests') {
                     steps {
@@ -485,11 +563,16 @@ pipeline {
         
         stage('ARM64 Validation (Cross-Compile)') {
             when {
-                expression { return !params.SKIP_ARM_BUILD }
+                allOf {
+                    expression { return !params.SKIP_ARM_BUILD }
+                    expression { return env.TEST_TYPE != 'DIAGNOSTIC' }
+                }
             }
-            steps {
-                script {
-                    echo """
+            stages {
+                stage('ARM64 Build') {
+                    steps {
+                        script {
+                            echo """
 ========================================================
         ARM64 BUILD (Cross-Compilation on Jenkins Host)
 ========================================================
@@ -500,65 +583,141 @@ pipeline {
         the SSH Agent plugin and configure SSH credentials.
 ========================================================
 """
-                    
-                    // Cross-compile ARM64 on the Jenkins host
-                    sh '''
-                        set -e
-                        
-                        echo "=========================================="
-                        echo "Setting up ARM64 cross-compilation"
-                        echo "=========================================="
-                        
-                        # Install ARM target if not present
-                        if ! rustup target list --installed | grep -q aarch64-unknown-linux-gnu; then
-                            echo "Installing aarch64 target..."
-                            rustup target add aarch64-unknown-linux-gnu
-                        fi
-                        
-                        # Check for ARM cross-compiler
-                        if ! command -v aarch64-linux-gnu-gcc >/dev/null 2>&1; then
-                            echo "⚠ ARM64 cross-compiler not installed"
-                            echo "Install with: sudo apt-get install gcc-aarch64-linux-gnu"
-                            echo "Skipping ARM64 build..."
-                            exit 0
-                        fi
-                        
-                        echo ""
-                        echo "=========================================="
-                        echo "Building ARM64 binary"
-                        echo "=========================================="
-                        
-                        export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
-                        export CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc
-                        
-                        cargo build --release --target aarch64-unknown-linux-gnu 2>&1 | tee build_arm64.txt
-                        
-                        echo ""
-                        echo "=== ARM64 Build Artifact ==="
-                        mkdir -p target/arm64
-                        cp target/aarch64-unknown-linux-gnu/release/audiocheckr target/arm64/audiocheckr-arm64
-                        ls -lh target/arm64/audiocheckr-arm64
-                        file target/arm64/audiocheckr-arm64
-                        echo "============================="
-                        
-                        # QEMU-based tests are optional - only run if qemu-aarch64-static is available
-                        if command -v qemu-aarch64-static >/dev/null 2>&1; then
-                            echo ""
+                            
+                            // Cross-compile ARM64 on the Jenkins host
+                            sh '''
+                                set -e
+                                
+                                echo "=========================================="
+                                echo "Setting up ARM64 cross-compilation"
+                                echo "=========================================="
+                                
+                                # Install ARM target if not present
+                                if ! rustup target list --installed | grep -q aarch64-unknown-linux-gnu; then
+                                    echo "Installing aarch64 target..."
+                                    rustup target add aarch64-unknown-linux-gnu
+                                fi
+                                
+                                # Check for ARM cross-compiler
+                                if ! command -v aarch64-linux-gnu-gcc >/dev/null 2>&1; then
+                                    echo "⚠ ARM64 cross-compiler not installed"
+                                    echo "Install with: sudo apt-get install gcc-aarch64-linux-gnu"
+                                    echo "Skipping ARM64 build..."
+                                    exit 0
+                                fi
+                                
+                                echo ""
+                                echo "=========================================="
+                                echo "Building ARM64 binary"
+                                echo "=========================================="
+                                
+                                export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
+                                export CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc
+                                
+                                cargo build --release --target aarch64-unknown-linux-gnu 2>&1 | tee build_arm64.txt
+                                
+                                echo ""
+                                echo "=== ARM64 Build Artifact ==="
+                                mkdir -p target/arm64
+                                cp target/aarch64-unknown-linux-gnu/release/audiocheckr target/arm64/audiocheckr-arm64
+                                ls -lh target/arm64/audiocheckr-arm64
+                                file target/arm64/audiocheckr-arm64
+                                echo "============================="
+                            '''
+                        }
+                    }
+                }
+                
+                stage('ARM64 Integration Tests') {
+                    steps {
+                        script {
                             echo "=========================================="
-                            echo "ARM64: Quick validation via QEMU"
+                            echo "ARM64: Integration Tests"
                             echo "=========================================="
                             
-                            # Just verify the binary runs
-                            qemu-aarch64-static -L /usr/aarch64-linux-gnu target/arm64/audiocheckr-arm64 --version || true
-                            echo "✓ ARM64 binary validated"
-                        else
-                            echo "⚠ QEMU user-mode not available, skipping ARM64 runtime validation"
-                            echo "Install with: sudo apt-get install qemu-user-static"
-                        fi
+                            sh '''
+                                if ! command -v qemu-aarch64-static >/dev/null 2>&1; then
+                                    echo "⚠ QEMU user-mode not available, skipping ARM64 tests"
+                                    echo "Install with: sudo apt-get install qemu-user-static"
+                                    exit 0
+                                fi
+                                
+                                set +e
+                                mkdir -p target/test-results
+                                cargo test --target aarch64-unknown-linux-gnu --test integration_test -- --nocapture 2>&1 | tee target/test-results/integration_arm64.txt
+                                TEST_EXIT=$?
+                                
+                                if [ $TEST_EXIT -ne 0 ]; then
+                                    echo "⚠ ARM64 integration tests had failures"
+                                else
+                                    echo "✓ ARM64 integration tests passed!"
+                                fi
+                            '''
+                        }
+                    }
+                }
+                
+                stage('ARM64 Qualification Tests') {
+                    when {
+                        expression { return env.TEST_TYPE == 'QUALIFICATION' }
+                    }
+                    parallel {
+                        stage('ARM64 Qualification Test') {
+                            steps {
+                                script {
+                                    echo "=========================================="
+                                    echo "ARM64: Running QUALIFICATION tests"
+                                    echo "=========================================="
+                                    
+                                    sh '''
+                                        if ! command -v qemu-aarch64-static >/dev/null 2>&1; then
+                                            echo "⚠ QEMU user-mode not available, skipping ARM64 qualification tests"
+                                            exit 0
+                                        fi
+                                        
+                                        set +e
+                                        mkdir -p target/test-results
+                                        cargo test --target aarch64-unknown-linux-gnu --test qualification_test -- --nocapture 2>&1 | tee target/test-results/qualification_arm64.txt
+                                        TEST_EXIT=$?
+                                        
+                                        if [ $TEST_EXIT -ne 0 ]; then
+                                            echo "⚠ ARM64 qualification tests completed with failures"
+                                        else
+                                            echo "✓ ARM64 qualification tests passed!"
+                                        fi
+                                    '''
+                                }
+                            }
+                        }
                         
-                        echo ""
-                        echo "✓ ARM64 cross-compilation completed successfully!"
-                    '''
+                        stage('ARM64 Qualification Genre Test') {
+                            steps {
+                                script {
+                                    echo "=========================================="
+                                    echo "ARM64: Running QUALIFICATION GENRE tests"
+                                    echo "=========================================="
+                                    
+                                    sh '''
+                                        if ! command -v qemu-aarch64-static >/dev/null 2>&1; then
+                                            echo "⚠ QEMU user-mode not available, skipping ARM64 qualification genre tests"
+                                            exit 0
+                                        fi
+                                        
+                                        set +e
+                                        mkdir -p target/test-results
+                                        cargo test --target aarch64-unknown-linux-gnu --test qualification_genre_test -- --nocapture 2>&1 | tee target/test-results/qualification_genre_arm64.txt
+                                        TEST_EXIT=$?
+                                        
+                                        if [ $TEST_EXIT -ne 0 ]; then
+                                            echo "⚠ ARM64 qualification genre tests completed with failures"
+                                        else
+                                            echo "✓ ARM64 qualification genre tests passed!"
+                                        fi
+                                    '''
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -577,7 +736,7 @@ pipeline {
         always {
             script {
                 // Archive x86_64 binary (on success or unstable)
-                if (currentBuild.result != 'FAILURE') {
+                if (currentBuild.result != 'FAILURE' && env.TEST_TYPE != 'DIAGNOSTIC') {
                     archiveArtifacts artifacts: 'target/release/audiocheckr', 
                                    fingerprint: true, 
                                    allowEmptyArchive: true
@@ -622,7 +781,10 @@ pipeline {
                     rm -rf target/release/build
                     rm -rf target/release/.fingerprint
                     rm -rf target/release/incremental
-                    rm -rf target/aarch64-unknown-linux-gnu
+                    rm -rf target/aarch64-unknown-linux-gnu/release/deps
+                    rm -rf target/aarch64-unknown-linux-gnu/release/build
+                    rm -rf target/aarch64-unknown-linux-gnu/release/.fingerprint
+                    rm -rf target/aarch64-unknown-linux-gnu/release/incremental
                     
                     # Restore binaries
                     if [ -f /tmp/audiocheckr_backup_x86_$BUILD_NUMBER ]; then
