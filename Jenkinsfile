@@ -148,12 +148,19 @@ pipeline {
                     steps {
                         script {
                             withCredentials([
-                                string(credentialsId: 'minio-endpoint', variable: 'MINIO_ENDPOINT'),
-                                string(credentialsId: 'minio-secret-key', variable: 'MINIO_SECRET_KEY')
+                                usernamePassword(
+                                    credentialsId: 'noIdea',
+                                    usernameVariable: 'MINIO_ACCESS_KEY',
+                                    passwordVariable: 'MINIO_SECRET_KEY'
+                                ),
+                                string(
+                                    credentialsId: 'minio-endpoint',
+                                    variable: 'MINIO_ENDPOINT'
+                                )
                             ]) {
                                 sh """
                                     set -e
-                                    mc alias set myminio \${MINIO_ENDPOINT} uyBezAIGJMDw7MZH1xEt \${MINIO_SECRET_KEY}
+                                    mc alias set myminio "\$MINIO_ENDPOINT" "\$MINIO_ACCESS_KEY" "\$MINIO_SECRET_KEY"
                                     
                                     echo "=========================================="
                                     echo "Downloading ${env.EFFECTIVE_TEST_TYPE} test files"
@@ -164,10 +171,19 @@ pipeline {
                                             echo "Downloading CompactTestFiles.zip (~1.4GB)"
                                             mc cp myminio/audiocheckr/CompactTestFiles.zip .
                                             unzip -q -o CompactTestFiles.zip
+                                            if [ -d "CompactTestFiles" ]; then
+                                                mv CompactTestFiles TestFiles
+                                            fi
                                             rm -f CompactTestFiles.zip
+                                            
+                                            echo "Downloading GenreTestSuiteLite.zip (~800MB)"
+                                            mc cp myminio/audiocheckr/GenreTestSuiteLite.zip .
+                                            unzip -q -o GenreTestSuiteLite.zip
+                                            rm -f GenreTestSuiteLite.zip
+                                            
                                             echo "Test files ready"
-                                            find CompactTestFiles -type f -name "*.flac" | wc -l
-                                            du -sh CompactTestFiles
+                                            find TestFiles GenreTestSuiteLite -type f -name "*.flac" 2>/dev/null | wc -l || echo "0"
+                                            du -sh TestFiles GenreTestSuiteLite 2>/dev/null || true
                                             ;;
                                         REGRESSION)
                                             echo "Downloading TestFiles.zip (~8.5GB)"
@@ -175,8 +191,8 @@ pipeline {
                                             unzip -q -o TestFiles.zip
                                             rm -f TestFiles.zip
                                             echo "Test files ready"
-                                            find TestFiles -type f -name "*.flac" | wc -l
-                                            du -sh TestFiles
+                                            find TestFiles -type f -name "*.flac" 2>/dev/null | wc -l || echo "0"
+                                            du -sh TestFiles 2>/dev/null || true
                                             ;;
                                         DIAGNOSTIC)
                                             echo "Downloading TestSuite.zip (~19.4GB)"
@@ -184,8 +200,8 @@ pipeline {
                                             unzip -q -o TestSuite.zip
                                             rm -f TestSuite.zip
                                             echo "Test files ready for diagnostic"
-                                            find TestSuite -type f -name "*.flac" | wc -l
-                                            du -sh TestSuite
+                                            find TestSuite -type f -name "*.flac" 2>/dev/null | wc -l || echo "0"
+                                            du -sh TestSuite 2>/dev/null || true
                                             ;;
                                     esac
                                 """
