@@ -199,6 +199,52 @@ fn run_tests_parallel(binary: &Path, test_cases: Vec<TestCase>, num_threads: usi
     results_vec.into_iter().map(|(_, result)| result).collect()
 }
 
+/// Parse defects from audiocheckr output
+fn parse_defects_from_output(stdout: &str) -> Vec<String> {
+    let mut defects_found = Vec::new();
+    let stdout_lower = stdout.to_lowercase();
+    
+    // Look for specific defect patterns in the output
+    // Check for transcode detections
+    if (stdout_lower.contains("mp3") && stdout_lower.contains("transcode")) 
+        || stdout_lower.contains("mp3transcode") {
+        defects_found.push("Mp3Transcode".to_string());
+    }
+    if (stdout_lower.contains("aac") && stdout_lower.contains("transcode"))
+        || stdout_lower.contains("aactranscode") {
+        defects_found.push("AacTranscode".to_string());
+    }
+    if (stdout_lower.contains("opus") && stdout_lower.contains("transcode"))
+        || stdout_lower.contains("opustranscode") {
+        defects_found.push("OpusTranscode".to_string());
+    }
+    if ((stdout_lower.contains("vorbis") || stdout_lower.contains("ogg")) 
+        && stdout_lower.contains("transcode"))
+        || stdout_lower.contains("oggvorbistranscode") {
+        defects_found.push("OggVorbisTranscode".to_string());
+    }
+    
+    // Check for bit depth issues
+    if stdout_lower.contains("bit depth mismatch") 
+        || stdout_lower.contains("bitdepthmismatch")
+        || (stdout_lower.contains("bit depth") && stdout_lower.contains("mismatch")) {
+        defects_found.push("BitDepthMismatch".to_string());
+    }
+    
+    // Check for upsampling
+    if stdout_lower.contains("upsampled") 
+        || (stdout_lower.contains("upsample") && !stdout_lower.contains("not upsampled")) {
+        defects_found.push("Upsampled".to_string());
+    }
+    
+    // Check for spectral artifacts
+    if stdout_lower.contains("spectral artifact") {
+        defects_found.push("SpectralArtifacts".to_string());
+    }
+    
+    defects_found
+}
+
 fn run_single_test(binary: &Path, test_case: &TestCase) -> TestResult {
     // Check if file exists first
     if !Path::new(&test_case.file_path).exists() {
@@ -225,74 +271,25 @@ fn run_single_test(binary: &Path, test_case: &TestCase) -> TestResult {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
 
-    // Parse output for v0.2 format
-    let has_issues = stdout.contains("ISSUES DETECTED") || stdout.contains("✗");
-    let is_clean = stdout.contains("CLEAN") && !has_issues;
-    let is_lossless = stdout.contains("likely lossless");
-
     // Extract quality score
     let quality_score = extract_quality_score(&stdout);
 
-    let mut defects_found: Vec<String> = Vec::new();
+    // First, parse all defects from the output
+    let defects_found = parse_defects_from_output(&stdout);
 
-    // if stdout.contains("MP3") || stdout.contains("Mp3") {
-    //     defects_found.push("Mp3Transcode".to_string());
-    // }
-    // if stdout.contains("AAC") || stdout.contains("Aac") {
-    //     defects_found.push("AacTranscode".to_string());
-    // }
-    // if stdout.contains("Opus") {
-    //     defects_found.push("OpusTranscode".to_string());
-    // }
-    // if stdout.contains("Vorbis") || stdout.contains("Ogg") {
-    //     defects_found.push("OggVorbisTranscode".to_string());
-    // }
-    // if stdout.contains("Bit depth mismatch") || stdout.contains("BitDepth") || stdout.contains("bit depth") {
-    //     defects_found.push("BitDepthMismatch".to_string());
-    // }
-    // if stdout.contains("Upsampled") || stdout.contains("upsampled") || stdout.contains("interpolat") {
-    //     defects_found.push("Upsampled".to_string());
-    // }
-    // if stdout.contains("Spectral") {
-    //     defects_found.push("SpectralArtifacts".to_string());
-    // }
+    // Check for explicit status indicators in output
+    let has_explicit_issues = stdout.contains("ISSUES DETECTED") 
+        || stdout.contains("✗ ISSUES")
+        || stdout.to_lowercase().contains("issues detected");
+    let has_explicit_clean = (stdout.contains("CLEAN") || stdout.to_lowercase().contains("clean"))
+        && !has_explicit_issues;
 
-    // Parse output for v0.2 format
-    let is_clean = stdout.contains("✓ CLEAN") || stdout.contains("CLEAN - No issues");
-    let has_issues = stdout.contains("⚠ ISSUES DETECTED") || stdout.contains("ISSUES DETECTED");
-    
-    // Only parse defects if issues were detected
-
-    if has_issues {
-        // Look for defect lines (starting with •)
-        for line in stdout.lines() {
-            let line_lower = line.to_lowercase();
-            if line.contains("•") || line.contains("transcode") || line.contains("mismatch") {
-                if line_lower.contains("mp3") && line_lower.contains("transcode") {
-                    defects_found.push("Mp3Transcode".to_string());
-                }
-                if line_lower.contains("aac") && line_lower.contains("transcode") {
-                    defects_found.push("AacTranscode".to_string());
-                }
-                if line_lower.contains("opus") && line_lower.contains("transcode") {
-                    defects_found.push("OpusTranscode".to_string());
-                }
-                if (line_lower.contains("vorbis") || line_lower.contains("ogg")) 
-                    && line_lower.contains("transcode") {
-                    defects_found.push("OggVorbisTranscode".to_string());
-                }
-                if line_lower.contains("bit depth mismatch") {
-                    defects_found.push("BitDepthMismatch".to_string());
-                }
-                if line_lower.contains("upsampled") {
-                    defects_found.push("Upsampled".to_string());
-                }
-                if line_lower.contains("spectral artifacts") {
-                    defects_found.push("SpectralArtifacts".to_string());
-                }
-            }
-        }
-    }
+    // FIXED LOGIC: A file is "clean" (passed) if:
+    // 1. No defects were parsed from the output, AND
+    // 2. There's no explicit "ISSUES DETECTED" message
+    // OR
+    // 3. There's an explicit "CLEAN" status
+    let is_clean = has_explicit_clean || (defects_found.is_empty() && !has_explicit_issues);
 
     TestResult {
         passed: is_clean,

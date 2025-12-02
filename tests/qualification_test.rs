@@ -157,6 +157,52 @@ fn run_tests_parallel(binary: &Path, test_cases: Vec<TestCase>, num_threads: usi
     results_vec.into_iter().map(|(_, result)| result).collect()
 }
 
+/// Parse defects from audiocheckr output
+fn parse_defects_from_output(stdout: &str) -> Vec<String> {
+    let mut defects_found = Vec::new();
+    let stdout_lower = stdout.to_lowercase();
+    
+    // Look for specific defect patterns in the output
+    // Check for transcode detections
+    if (stdout_lower.contains("mp3") && stdout_lower.contains("transcode")) 
+        || stdout_lower.contains("mp3transcode") {
+        defects_found.push("Mp3Transcode".to_string());
+    }
+    if (stdout_lower.contains("aac") && stdout_lower.contains("transcode"))
+        || stdout_lower.contains("aactranscode") {
+        defects_found.push("AacTranscode".to_string());
+    }
+    if (stdout_lower.contains("opus") && stdout_lower.contains("transcode"))
+        || stdout_lower.contains("opustranscode") {
+        defects_found.push("OpusTranscode".to_string());
+    }
+    if ((stdout_lower.contains("vorbis") || stdout_lower.contains("ogg")) 
+        && stdout_lower.contains("transcode"))
+        || stdout_lower.contains("oggvorbistranscode") {
+        defects_found.push("OggVorbisTranscode".to_string());
+    }
+    
+    // Check for bit depth issues
+    if stdout_lower.contains("bit depth mismatch") 
+        || stdout_lower.contains("bitdepthmismatch")
+        || (stdout_lower.contains("bit depth") && stdout_lower.contains("mismatch")) {
+        defects_found.push("BitDepthMismatch".to_string());
+    }
+    
+    // Check for upsampling
+    if stdout_lower.contains("upsampled") 
+        || (stdout_lower.contains("upsample") && !stdout_lower.contains("not upsampled")) {
+        defects_found.push("Upsampled".to_string());
+    }
+    
+    // Check for spectral artifacts
+    if stdout_lower.contains("spectral artifact") {
+        defects_found.push("SpectralArtifacts".to_string());
+    }
+    
+    defects_found
+}
+
 fn run_single_test(binary: &Path, test_case: &TestCase) -> TestResult {
     let output = Command::new(binary)
         .arg("--input")
@@ -169,29 +215,22 @@ fn run_single_test(binary: &Path, test_case: &TestCase) -> TestResult {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
 
-    let has_issues = stdout.contains("✗ ISSUES DETECTED") || stdout.contains("ISSUES DETECTED");
-    let is_clean = stdout.contains("✓ CLEAN") || (stdout.contains("CLEAN") && !has_issues);
+    // First, parse all defects from the output
+    let defects_found = parse_defects_from_output(&stdout);
 
-    let mut defects_found = Vec::new();
+    // Check for explicit status indicators in output
+    let has_explicit_issues = stdout.contains("ISSUES DETECTED") 
+        || stdout.contains("✗ ISSUES")
+        || stdout.to_lowercase().contains("issues detected");
+    let has_explicit_clean = (stdout.contains("CLEAN") || stdout.to_lowercase().contains("clean"))
+        && !has_explicit_issues;
 
-    if stdout.contains("MP3") || stdout.contains("Mp3") {
-        defects_found.push("Mp3Transcode".to_string());
-    }
-    if stdout.contains("AAC") || stdout.contains("Aac") {
-        defects_found.push("AacTranscode".to_string());
-    }
-    if stdout.contains("Opus") {
-        defects_found.push("OpusTranscode".to_string());
-    }
-    if stdout.contains("Vorbis") || stdout.contains("Ogg") {
-        defects_found.push("OggVorbisTranscode".to_string());
-    }
-    if stdout.contains("Bit depth mismatch") || stdout.contains("BitDepth") || stdout.contains("bit depth") {
-        defects_found.push("BitDepthMismatch".to_string());
-    }
-    if stdout.contains("Upsampled") || stdout.contains("upsampled") || stdout.contains("interpolat") {
-        defects_found.push("Upsampled".to_string());
-    }
+    // FIXED LOGIC: A file is "clean" (passed) if:
+    // 1. No defects were parsed from the output, AND
+    // 2. There's no explicit "ISSUES DETECTED" message
+    // OR
+    // 3. There's an explicit "CLEAN" status
+    let is_clean = has_explicit_clean || (defects_found.is_empty() && !has_explicit_issues);
 
     TestResult {
         passed: is_clean,
