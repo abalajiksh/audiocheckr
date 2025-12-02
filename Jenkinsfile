@@ -10,7 +10,7 @@ pipeline {
     parameters {
         choice(
             name: 'TEST_TYPE',
-            choices: ['AUTO', 'QUALIFICATION', 'REGRESSION', 'DIAGNOSTIC'],
+            choices: ['AUTO', 'QUALIFICATION', 'QUALIFICATION_GENRE', 'REGRESSION', 'REGRESSION_GENRE', 'DIAGNOSTIC'],
             description: 'Test type: AUTO detects from trigger, others force specific test'
         )
         booleanParam(
@@ -181,29 +181,46 @@ pipeline {
                                             fi
                                             rm -f CompactTestFiles.zip
                                             
+                                            echo "Test files ready"
+                                            find TestFiles -type f -name "*.flac" 2>/dev/null | wc -l || echo "0"
+                                            du -sh TestFiles 2>/dev/null || true
+                                            ;;
+                                        QUALIFICATION_GENRE)
                                             echo "Downloading GenreTestSuiteLite.zip (~800MB)"
                                             mc cp myminio/audiocheckr/GenreTestSuiteLite.zip .
                                             unzip -q -o GenreTestSuiteLite.zip
                                             rm -f GenreTestSuiteLite.zip
                                             
                                             echo "Test files ready"
-                                            find TestFiles GenreTestSuiteLite -type f -name "*.flac" 2>/dev/null | wc -l || echo "0"
-                                            du -sh TestFiles GenreTestSuiteLite 2>/dev/null || true
+                                            find GenreTestSuiteLite -type f -name "*.flac" 2>/dev/null | wc -l || echo "0"
+                                            du -sh GenreTestSuiteLite 2>/dev/null || true
                                             ;;
                                         REGRESSION)
                                             echo "Downloading TestFiles.zip (~8.5GB)"
                                             mc cp myminio/audiocheckr/TestFiles.zip .
                                             unzip -q -o TestFiles.zip
                                             rm -f TestFiles.zip
+                                            
                                             echo "Test files ready"
                                             find TestFiles -type f -name "*.flac" 2>/dev/null | wc -l || echo "0"
                                             du -sh TestFiles 2>/dev/null || true
+                                            ;;
+                                        REGRESSION_GENRE)
+                                            echo "Downloading TestSuite.zip (~19.4GB)"
+                                            mc cp myminio/audiocheckr/TestSuite.zip .
+                                            unzip -q -o TestSuite.zip
+                                            rm -f TestSuite.zip
+                                            
+                                            echo "Test files ready for regression genre tests"
+                                            find TestSuite -type f -name "*.flac" 2>/dev/null | wc -l || echo "0"
+                                            du -sh TestSuite 2>/dev/null || true
                                             ;;
                                         DIAGNOSTIC)
                                             echo "Downloading TestSuite.zip (~19.4GB)"
                                             mc cp myminio/audiocheckr/TestSuite.zip .
                                             unzip -q -o TestSuite.zip
                                             rm -f TestSuite.zip
+                                            
                                             echo "Test files ready for diagnostic"
                                             find TestSuite -type f -name "*.flac" 2>/dev/null | wc -l || echo "0"
                                             du -sh TestSuite 2>/dev/null || true
@@ -342,51 +359,55 @@ pipeline {
                     when {
                         expression { return env.EFFECTIVE_TEST_TYPE == 'QUALIFICATION' }
                     }
-                    parallel {
-                        stage('Qualification Test') {
-                            steps {
-                                script {
-                                    echo "=========================================="
-                                    echo "x86_64: Qualification Tests"
-                                    echo "=========================================="
-                                    
-                                    def testResult = sh(
-                                        script: '''
-                                            set +e
-                                            cargo test --test qualification_test -- --nocapture 2>&1 | tee target/test-results/qualification_x86_64.txt
-                                            exit $?
-                                        ''',
-                                        returnStatus: true
-                                    )
-                                    
-                                    if (testResult == 0) {
-                                        echo "✓ x86_64 qualification tests passed!"
-                                    } else {
-                                        echo "⚠ x86_64 qualification tests had failures"
-                                        currentBuild.result = 'UNSTABLE'
-                                    }
-                                }
+                    steps {
+                        script {
+                            echo "=========================================="
+                            echo "x86_64: Qualification Tests"
+                            echo "=========================================="
+                            
+                            def testResult = sh(
+                                script: '''
+                                    set +e
+                                    cargo test --test qualification_test -- --nocapture 2>&1 | tee target/test-results/qualification_x86_64.txt
+                                    exit $?
+                                ''',
+                                returnStatus: true
+                            )
+                            
+                            if (testResult == 0) {
+                                echo "✓ x86_64 qualification tests passed!"
+                            } else {
+                                echo "⚠ x86_64 qualification tests had failures"
+                                currentBuild.result = 'UNSTABLE'
                             }
                         }
-                        stage('Qualification Genre Test') {
-                            steps {
-                                script {
-                                    def testResult = sh(
-                                        script: '''
-                                            set +e
-                                            cargo test --test qualification_genre_test -- --nocapture 2>&1 | tee target/test-results/qualification_genre_x86_64.txt
-                                            exit $?
-                                        ''',
-                                        returnStatus: true
-                                    )
-                                    
-                                    if (testResult == 0) {
-                                        echo "✓ x86_64 qualification genre tests passed!"
-                                    } else {
-                                        echo "⚠ x86_64 qualification genre tests had failures"
-                                        currentBuild.result = 'UNSTABLE'
-                                    }
-                                }
+                    }
+                }
+
+                stage('Qualification Genre Tests') {
+                    when {
+                        expression { return env.EFFECTIVE_TEST_TYPE == 'QUALIFICATION_GENRE' }
+                    }
+                    steps {
+                        script {
+                            echo "=========================================="
+                            echo "x86_64: Qualification Genre Tests"
+                            echo "=========================================="
+                            
+                            def testResult = sh(
+                                script: '''
+                                    set +e
+                                    cargo test --test qualification_genre_test -- --nocapture 2>&1 | tee target/test-results/qualification_genre_x86_64.txt
+                                    exit $?
+                                ''',
+                                returnStatus: true
+                            )
+                            
+                            if (testResult == 0) {
+                                echo "✓ x86_64 qualification genre tests passed!"
+                            } else {
+                                echo "⚠ x86_64 qualification genre tests had failures"
+                                currentBuild.result = 'UNSTABLE'
                             }
                         }
                     }
@@ -423,10 +444,14 @@ pipeline {
 
                 stage('Regression Genre Tests') {
                     when {
-                        expression { return env.EFFECTIVE_TEST_TYPE == 'REGRESSION' }
+                        expression { return env.EFFECTIVE_TEST_TYPE == 'REGRESSION_GENRE' }
                     }
                     steps {
                         script {
+                            echo "=========================================="
+                            echo "x86_64: Regression Genre Tests"
+                            echo "=========================================="
+                            
                             def testResult = sh(
                                 script: '''
                                     set +e
