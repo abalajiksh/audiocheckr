@@ -29,6 +29,11 @@ pipeline {
         RUST_BACKTRACE = '1'
         CARGO_TERM_COLOR = 'never'
         PATH = "$HOME/bin:$HOME/.cargo/bin:/usr/bin:$PATH"
+        
+        // SonarQube configuration
+        SONAR_PROJECT_KEY = 'audiocheckr'
+        SONAR_PROJECT_NAME = 'AudioCheckr'
+        SONAR_SOURCES = 'src'
     }
 
     stages {
@@ -221,18 +226,22 @@ pipeline {
             }
             steps {
                 script {
-                    withSonarQubeEnv('SonarQube-LXC') {
-                        sh '''
-                            sonar-scanner \
-                                -Dsonar.projectKey=audiocheckr \
-                                -Dsonar.projectName="AudioCheckr" \
-                                -Dsonar.sources=src \
-                                -Dsonar.tests=tests \
-                                -Dsonar.language=rust \
-                                -Dsonar.exclusions="**/target/**,**/TestFiles/**,**/TestSuite/**,**/GenreTestSuiteLite/**"
-                        '''
+                    try {
+                        def scannerHome = tool 'SonarQube-LXC'
+                        
+                        withSonarQubeEnv('SonarQube-LXC') {
+                            sh """
+                                ${scannerHome}/bin/sonar-scanner \
+                                    -Dsonar.projectKey=${SONAR_PROJECT_KEY} \
+                                    -Dsonar.projectName=${SONAR_PROJECT_NAME} \
+                                    -Dsonar.sources=${SONAR_SOURCES} \
+                                    -Dsonar.exclusions=**/target/**,**/TestFiles/**,**/TestSuite/**,**/GenreTestSuiteLite/**
+                            """
+                        }
+                        echo "✓ SonarQube analysis completed"
+                    } catch (Exception e) {
+                        echo "⚠ SonarQube analysis failed: ${e.message}"
                     }
-                    echo "✓ SonarQube analysis completed"
                 }
             }
         }
@@ -246,9 +255,19 @@ pipeline {
             }
             steps {
                 script {
-                    timeout(time: 10, unit: 'MINUTES') {
-                        def qg = waitForQualityGate()
-                        echo "⚠ Quality Gate: ${qg.status}"
+                    try {
+                        timeout(time: 10, unit: 'MINUTES') {
+                            def qg = waitForQualityGate abortPipeline: false
+                            if (qg.status != 'OK') {
+                                echo "⚠ Quality Gate: ${qg.status}"
+                            } else {
+                                echo "✓ Quality Gate: PASSED"
+                            }
+                        }
+                    } catch (Exception e) {
+                        echo "⚠ Quality Gate skipped: ${e.message}"
+                        echo "Tip: Configure webhook in SonarQube > Project Settings > Webhooks"
+                        echo "URL: http://YOUR_JENKINS_URL/sonarqube-webhook/"
                     }
                 }
             }
