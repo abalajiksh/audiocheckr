@@ -26,11 +26,7 @@ pipeline {
     }
 
     environment {
-        CARGO_HOME = "${WORKSPACE}/.cargo"
-        RUSTUP_HOME = "${WORKSPACE}/.rustup"
-        PATH = "${env.PATH}:/var/lib/jenkins/bin:${CARGO_HOME}/bin"
         RUST_BACKTRACE = '1'
-        // Prevent cargo from using colors in output (cleaner logs)
         CARGO_TERM_COLOR = 'never'
     }
 
@@ -41,7 +37,6 @@ pipeline {
                     // Determine test type
                     if (params.TEST_TYPE == 'AUTO') {
                         if (currentBuild.getBuildCauses('hudson.model.Cause$UserIdCause').size() > 0) {
-                            // Manual trigger - check for specific patterns or default to QUALIFICATION
                             env.EFFECTIVE_TEST_TYPE = 'QUALIFICATION'
                             echo "👤 Manual trigger detected - running QUALIFICATION tests"
                         } else if (currentBuild.getBuildCauses('com.cloudbees.jenkins.GitHubPushCause').size() > 0 ||
@@ -60,7 +55,6 @@ pipeline {
                         echo "🔧 Test type forced via parameter: ${env.EFFECTIVE_TEST_TYPE}"
                     }
 
-                    // Print banner
                     echo """
 ========================================================
                   AUDIOCHECKR CI/CD                     
@@ -79,17 +73,16 @@ pipeline {
             parallel {
                 stage('Setup Tools') {
                     steps {
-                        sh '''#!/bin/bash
-                            set -e
+                        sh '''
                             mkdir -p /var/lib/jenkins/bin
                             
                             # Verify required tools
-                            command -v cc >/dev/null 2>&1 || { echo "ERROR: cc not found"; exit 1; }
-                            command -v mc >/dev/null 2>&1 || { echo "ERROR: mc (minio client) not found"; exit 1; }
-                            command -v cargo >/dev/null 2>&1 || { echo "ERROR: cargo not found"; exit 1; }
+                            command -v cc || { echo "ERROR: cc not found"; exit 1; }
+                            command -v mc || { echo "ERROR: mc (minio client) not found"; exit 1; }
+                            command -v cargo || { echo "ERROR: cargo not found"; exit 1; }
                             
                             echo "=== Tool Versions ==="
-                            mc --version | head -1
+                            mc --version
                             cargo --version
                             rustc --version
                             echo "===================="
@@ -115,8 +108,7 @@ pipeline {
             parallel {
                 stage('Build x86_64') {
                     steps {
-                        sh '''#!/bin/bash
-                            set -e
+                        sh '''
                             echo "=========================================="
                             echo "Building for x86_64 (native)"
                             echo "=========================================="
@@ -146,7 +138,7 @@ pipeline {
                                 string(credentialsId: 'minio-endpoint', variable: 'MINIO_ENDPOINT'),
                                 string(credentialsId: 'minio-secret-key', variable: 'MINIO_SECRET_KEY')
                             ]) {
-                                sh """#!/bin/bash
+                                sh """
                                     set -e
                                     mc alias set myminio \${MINIO_ENDPOINT} uyBezAIGJMDw7MZH1xEt \${MINIO_SECRET_KEY}
                                     
@@ -201,8 +193,7 @@ pipeline {
             steps {
                 script {
                     withSonarQubeEnv('SonarQube-LXC') {
-                        sh '''#!/bin/bash
-                            set -e
+                        sh '''
                             sonar-scanner \
                                 -Dsonar.projectKey=audiocheckr \
                                 -Dsonar.projectName="AudioCheckr" \
@@ -244,16 +235,13 @@ pipeline {
                     echo "Running DIAGNOSTIC TEST"
                     echo "=========================================="
                     
-                    // Create test results directory
                     sh 'mkdir -p target/test-results'
                     
-                    // Run diagnostic tests
                     def testResult = sh(
-                        script: '''#!/bin/bash
+                        script: '''
                             set +e
                             cargo test --test diagnostic_test -- --nocapture 2>&1 | tee target/test-results/diagnostic.txt
-                            TEST_EXIT="${PIPESTATUS[0]}"
-                            exit "${TEST_EXIT}"
+                            exit $?
                         ''',
                         returnStatus: true
                     )
@@ -264,7 +252,6 @@ pipeline {
                         echo "⚠ Diagnostic test completed with findings"
                     }
                     
-                    // Archive diagnostic results
                     archiveArtifacts artifacts: 'target/test-results/diagnostic.txt', allowEmptyArchive: true
                 }
             }
@@ -285,17 +272,10 @@ pipeline {
                             sh 'mkdir -p target/test-results'
                             
                             def testResult = sh(
-                                script: '''#!/bin/bash
+                                script: '''
                                     set +e
                                     cargo test --test integration_test -- --nocapture 2>&1 | tee target/test-results/integration_x86_64.txt
-                                    TEST_EXIT="${PIPESTATUS[0]}"
-                                    
-                                    # Generate JUnit XML for Jenkins (if cargo2junit is available)
-                                    if command -v cargo2junit &>/dev/null; then
-                                        cargo test --test integration_test -- -Z unstable-options --format json 2>/dev/null | cargo2junit > target/test-results/integration_x86_64.xml || true
-                                    fi
-                                    
-                                    exit "${TEST_EXIT}"
+                                    exit $?
                                 ''',
                                 returnStatus: true
                             )
@@ -323,11 +303,10 @@ pipeline {
                                     echo "=========================================="
                                     
                                     def testResult = sh(
-                                        script: '''#!/bin/bash
+                                        script: '''
                                             set +e
                                             cargo test --test qualification_test -- --nocapture 2>&1 | tee target/test-results/qualification_x86_64.txt
-                                            TEST_EXIT="${PIPESTATUS[0]}"
-                                            exit "${TEST_EXIT}"
+                                            exit $?
                                         ''',
                                         returnStatus: true
                                     )
@@ -345,11 +324,10 @@ pipeline {
                             steps {
                                 script {
                                     def testResult = sh(
-                                        script: '''#!/bin/bash
+                                        script: '''
                                             set +e
                                             cargo test --test qualification_genre_test -- --nocapture 2>&1 | tee target/test-results/qualification_genre_x86_64.txt
-                                            TEST_EXIT="${PIPESTATUS[0]}"
-                                            exit "${TEST_EXIT}"
+                                            exit $?
                                         ''',
                                         returnStatus: true
                                     )
@@ -377,11 +355,10 @@ pipeline {
                             echo "=========================================="
                             
                             def testResult = sh(
-                                script: '''#!/bin/bash
+                                script: '''
                                     set +e
                                     cargo test --release --test regression_test -- --nocapture 2>&1 | tee target/test-results/regression_x86_64.txt
-                                    TEST_EXIT="${PIPESTATUS[0]}"
-                                    exit "${TEST_EXIT}"
+                                    exit $?
                                 ''',
                                 returnStatus: true
                             )
@@ -403,11 +380,10 @@ pipeline {
                     steps {
                         script {
                             def testResult = sh(
-                                script: '''#!/bin/bash
+                                script: '''
                                     set +e
                                     cargo test --release --test regression_genre_test -- --nocapture 2>&1 | tee target/test-results/regression_genre_x86_64.txt
-                                    TEST_EXIT="${PIPESTATUS[0]}"
-                                    exit "${TEST_EXIT}"
+                                    exit $?
                                 ''',
                                 returnStatus: true
                             )
@@ -434,8 +410,7 @@ pipeline {
             stages {
                 stage('ARM64 Build') {
                     steps {
-                        sh '''#!/bin/bash
-                            set -e
+                        sh '''
                             echo "=========================================="
                             echo "Building for ARM64 (cross-compile)"
                             echo "=========================================="
@@ -472,9 +447,7 @@ pipeline {
                 stage('ARM64 Binary Validation') {
                     steps {
                         script {
-                            // Just validate the binary was built correctly
-                            sh '''#!/bin/bash
-                                set -e
+                            sh '''
                                 echo "Validating ARM64 binary..."
                                 
                                 # Verify it's actually an ARM64 binary
@@ -511,17 +484,17 @@ pipeline {
 
             script {
                 echo "🧹 Cleaning workspace to save disk space..."
-                sh '''#!/bin/bash
+                sh '''
                     # Remove downloaded test files
                     rm -f CompactTestFiles.zip TestFiles.zip GenreTestSuiteLite.zip TestSuite.zip
                     rm -rf CompactTestFiles TestFiles GenreTestSuiteLite TestSuite
                     
                     # Backup important binaries
                     if [ -f target/release/audiocheckr ]; then
-                        cp target/release/audiocheckr "/tmp/audiocheckr_backup_x86_${BUILD_NUMBER}"
+                        cp target/release/audiocheckr /tmp/audiocheckr_backup_x86_${BUILD_NUMBER}
                     fi
                     if [ -f target/arm64/audiocheckr-arm64 ]; then
-                        cp target/arm64/audiocheckr-arm64 "/tmp/audiocheckr_backup_arm64_${BUILD_NUMBER}"
+                        cp target/arm64/audiocheckr-arm64 /tmp/audiocheckr_backup_arm64_${BUILD_NUMBER}
                     fi
                     
                     # Clean build directories but keep binaries
@@ -536,13 +509,13 @@ pipeline {
                     rm -rf target/aarch64-unknown-linux-gnu/release/incremental
                     
                     # Restore binaries
-                    if [ -f "/tmp/audiocheckr_backup_x86_${BUILD_NUMBER}" ]; then
+                    if [ -f /tmp/audiocheckr_backup_x86_${BUILD_NUMBER} ]; then
                         mkdir -p target/release
-                        mv "/tmp/audiocheckr_backup_x86_${BUILD_NUMBER}" target/release/audiocheckr
+                        mv /tmp/audiocheckr_backup_x86_${BUILD_NUMBER} target/release/audiocheckr
                     fi
-                    if [ -f "/tmp/audiocheckr_backup_arm64_${BUILD_NUMBER}" ]; then
+                    if [ -f /tmp/audiocheckr_backup_arm64_${BUILD_NUMBER} ]; then
                         mkdir -p target/arm64
-                        mv "/tmp/audiocheckr_backup_arm64_${BUILD_NUMBER}" target/arm64/audiocheckr-arm64
+                        mv /tmp/audiocheckr_backup_arm64_${BUILD_NUMBER} target/arm64/audiocheckr-arm64
                     fi
                     
                     echo "✓ Cleanup complete"
