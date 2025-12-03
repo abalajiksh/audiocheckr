@@ -13,6 +13,9 @@ pipeline {
         MINIO_FILE_FULL = 'TestFiles.zip'
         MINIO_FILE_GENRE_LITE = 'GenreTestSuiteLite.zip'
         MINIO_FILE_GENRE_FULL = 'TestSuite.zip'
+        
+        // Use explicit path for MinIO client to avoid conflict with Midnight Commander
+        MINIO_MC = "${HOME}/bin/minio-mc"
     }
 
     parameters {
@@ -92,10 +95,20 @@ pipeline {
                                 exit 1
                             fi
                             
-                            if ! command -v mc >/dev/null 2>&1; then
+                            # Check for MinIO client specifically (not Midnight Commander!)
+                            # We use a dedicated path to avoid conflicts
+                            if [ ! -f "$HOME/bin/minio-mc" ]; then
                                 echo "Installing MinIO client..."
-                                wget -q https://dl.min.io/client/mc/release/linux-amd64/mc -O $HOME/bin/mc
-                                chmod +x $HOME/bin/mc
+                                wget -q https://dl.min.io/client/mc/release/linux-amd64/mc -O $HOME/bin/minio-mc
+                                chmod +x $HOME/bin/minio-mc
+                            fi
+                            
+                            # Verify it's actually the MinIO client
+                            if ! $HOME/bin/minio-mc --version 2>&1 | grep -q "RELEASE"; then
+                                echo "ERROR: MinIO client not working correctly, re-downloading..."
+                                rm -f $HOME/bin/minio-mc
+                                wget -q https://dl.min.io/client/mc/release/linux-amd64/mc -O $HOME/bin/minio-mc
+                                chmod +x $HOME/bin/minio-mc
                             fi
                             
                             if ! command -v cargo >/dev/null 2>&1; then
@@ -104,7 +117,9 @@ pipeline {
                             fi
                             
                             echo "=== Tool Versions ==="
-                            mc --version || true
+                            echo "MinIO Client:"
+                            $HOME/bin/minio-mc --version
+                            echo ""
                             cargo --version
                             rustc --version
                             echo "===================="
@@ -166,10 +181,13 @@ pipeline {
                                     variable: 'MINIO_ENDPOINT'
                                 )
                             ]) {
+                                // Use the explicit MinIO client path
+                                def mcCmd = '$HOME/bin/minio-mc'
+                                
                                 if (env.TEST_TYPE == 'DIAGNOSTIC') {
-                                    sh '''
+                                    sh """
                                         set -e
-                                        mc alias set myminio "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
+                                        ${mcCmd} alias set myminio "\$MINIO_ENDPOINT" "\$MINIO_ACCESS_KEY" "\$MINIO_SECRET_KEY"
                                         
                                         echo "=========================================="
                                         echo "Downloading DIAGNOSTIC test files"
@@ -177,17 +195,17 @@ pipeline {
                                         
                                         # Download and extract TestSuite only
                                         echo "Downloading ${MINIO_FILE_GENRE_FULL}"
-                                        mc cp myminio/${MINIO_BUCKET}/${MINIO_FILE_GENRE_FULL} .
+                                        ${mcCmd} cp myminio/${MINIO_BUCKET}/${MINIO_FILE_GENRE_FULL} .
                                         unzip -q -o ${MINIO_FILE_GENRE_FULL}
                                         rm -f ${MINIO_FILE_GENRE_FULL}
                                         
                                         echo "✓ Test files ready for diagnostic"
                                         ls -la
-                                    '''
+                                    """
                                 } else if (env.TEST_TYPE == 'REGRESSION') {
-                                    sh '''
+                                    sh """
                                         set -e
-                                        mc alias set myminio "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
+                                        ${mcCmd} alias set myminio "\$MINIO_ENDPOINT" "\$MINIO_ACCESS_KEY" "\$MINIO_SECRET_KEY"
                                         
                                         echo "=========================================="
                                         echo "Downloading REGRESSION test files"
@@ -195,23 +213,23 @@ pipeline {
                                         
                                         # Download and extract TestFiles
                                         echo "Downloading ${MINIO_FILE_FULL}"
-                                        mc cp myminio/${MINIO_BUCKET}/${MINIO_FILE_FULL} .
+                                        ${mcCmd} cp myminio/${MINIO_BUCKET}/${MINIO_FILE_FULL} .
                                         unzip -q -o ${MINIO_FILE_FULL}
                                         rm -f ${MINIO_FILE_FULL}
                                         
                                         # Download and extract TestSuite
                                         echo "Downloading ${MINIO_FILE_GENRE_FULL}"
-                                        mc cp myminio/${MINIO_BUCKET}/${MINIO_FILE_GENRE_FULL} .
+                                        ${mcCmd} cp myminio/${MINIO_BUCKET}/${MINIO_FILE_GENRE_FULL} .
                                         unzip -q -o ${MINIO_FILE_GENRE_FULL}
                                         rm -f ${MINIO_FILE_GENRE_FULL}
                                         
                                         echo "✓ Test files ready"
                                         ls -la
-                                    '''
+                                    """
                                 } else {
-                                    sh '''
+                                    sh """
                                         set -e
-                                        mc alias set myminio "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
+                                        ${mcCmd} alias set myminio "\$MINIO_ENDPOINT" "\$MINIO_ACCESS_KEY" "\$MINIO_SECRET_KEY"
                                         
                                         echo "=========================================="
                                         echo "Downloading QUALIFICATION test files"
@@ -219,7 +237,7 @@ pipeline {
                                         
                                         # Download and extract CompactTestFiles
                                         echo "Downloading ${MINIO_FILE_COMPACT}"
-                                        mc cp myminio/${MINIO_BUCKET}/${MINIO_FILE_COMPACT} .
+                                        ${mcCmd} cp myminio/${MINIO_BUCKET}/${MINIO_FILE_COMPACT} .
                                         unzip -q -o ${MINIO_FILE_COMPACT}
                                         if [ -d "CompactTestFiles" ]; then
                                             mv CompactTestFiles TestFiles
@@ -228,13 +246,13 @@ pipeline {
                                         
                                         # Download and extract GenreTestSuiteLite
                                         echo "Downloading ${MINIO_FILE_GENRE_LITE}"
-                                        mc cp myminio/${MINIO_BUCKET}/${MINIO_FILE_GENRE_LITE} .
+                                        ${mcCmd} cp myminio/${MINIO_BUCKET}/${MINIO_FILE_GENRE_LITE} .
                                         unzip -q -o ${MINIO_FILE_GENRE_LITE}
                                         rm -f ${MINIO_FILE_GENRE_LITE}
                                         
                                         echo "✓ Test files ready"
                                         ls -la
-                                    '''
+                                    """
                                 }
                             }
                         }
