@@ -1,6 +1,24 @@
 pipeline {
     agent any
+<<<<<<< HEAD
     
+=======
+
+    environment {
+        RUST_BACKTRACE = '1'
+        CARGO_HOME = "${WORKSPACE}/.cargo"
+        PATH = "${WORKSPACE}/.cargo/bin:${env.PATH}:/var/lib/jenkins/bin:/var/lib/jenkins/.cargo/bin:$HOME/bin"
+        RUSTUP_HOME = '/var/lib/jenkins/.rustup'
+        
+        // MinIO configuration
+        MINIO_BUCKET = 'audiocheckr'
+        MINIO_FILE_COMPACT = 'CompactTestFiles.zip'
+        MINIO_FILE_FULL = 'TestFiles.zip'
+        MINIO_FILE_GENRE_LITE = 'GenreTestSuiteLite.zip'
+        MINIO_FILE_GENRE_FULL = 'TestSuite.zip'
+    }
+
+>>>>>>> 409ae13475d15474ba3acd2215e4f723d3a48f95
     parameters {
         choice(
             name: 'TEST_TYPE_OVERRIDE',
@@ -131,10 +149,20 @@ pipeline {
                                 exit 1
                             fi
                             
-                            if ! command -v mc >/dev/null 2>&1; then
+                            # Check for MinIO client specifically (not Midnight Commander!)
+                            # We use a dedicated path to avoid conflicts
+                            if [ ! -f "$HOME/bin/minio-mc" ]; then
                                 echo "Installing MinIO client..."
-                                wget -q https://dl.min.io/client/mc/release/linux-amd64/mc -O $HOME/bin/mc
-                                chmod +x $HOME/bin/mc
+                                wget -q https://dl.min.io/client/mc/release/linux-amd64/mc -O $HOME/bin/minio-mc
+                                chmod +x $HOME/bin/minio-mc
+                            fi
+                            
+                            # Verify it's actually the MinIO client
+                            if ! $HOME/bin/minio-mc --version 2>&1 | grep -q "RELEASE"; then
+                                echo "ERROR: MinIO client not working correctly, re-downloading..."
+                                rm -f $HOME/bin/minio-mc
+                                wget -q https://dl.min.io/client/mc/release/linux-amd64/mc -O $HOME/bin/minio-mc
+                                chmod +x $HOME/bin/minio-mc
                             fi
                             
                             if ! command -v cargo >/dev/null 2>&1; then
@@ -144,7 +172,13 @@ pipeline {
                             fi
                             
                             echo "=== Tool Versions ==="
+<<<<<<< HEAD
                             mc --version
+=======
+                            echo "MinIO Client:"
+                            $HOME/bin/minio-mc --version
+                            echo ""
+>>>>>>> 409ae13475d15474ba3acd2215e4f723d3a48f95
                             cargo --version
                             rustc --version
                             echo "===================="
@@ -189,6 +223,7 @@ pipeline {
                     steps {
                         script {
                             withCredentials([
+<<<<<<< HEAD
                                 string(credentialsId: 'minio-endpoint', variable: 'MINIO_ENDPOINT'),
                                 string(credentialsId: 'minio-access-key', variable: 'MINIO_ACCESS_KEY'),
                                 string(credentialsId: 'minio-secret-key', variable: 'MINIO_SECRET_KEY')
@@ -223,6 +258,97 @@ pipeline {
                                     
                                     echo "✓ Test files downloaded and extracted"
                                 '''
+=======
+                                usernamePassword(
+                                    credentialsId: 'noIdea',
+                                    usernameVariable: 'MINIO_ACCESS_KEY',
+                                    passwordVariable: 'MINIO_SECRET_KEY'
+                                ),
+                                string(
+                                    credentialsId: 'minio-endpoint',
+                                    variable: 'MINIO_ENDPOINT'
+                                )
+                            ]) {
+                                if (env.TEST_TYPE == 'DIAGNOSTIC') {
+                                    sh '''
+                                        set -e
+                                        MC="$HOME/bin/minio-mc"
+                                        
+                                        echo "Setting up MinIO alias..."
+                                        $MC alias set myminio "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
+                                        
+                                        echo "=========================================="
+                                        echo "Downloading DIAGNOSTIC test files"
+                                        echo "=========================================="
+                                        
+                                        # Download and extract TestSuite only
+                                        echo "Downloading ${MINIO_FILE_GENRE_FULL}"
+                                        $MC cp myminio/${MINIO_BUCKET}/${MINIO_FILE_GENRE_FULL} .
+                                        unzip -q -o ${MINIO_FILE_GENRE_FULL}
+                                        rm -f ${MINIO_FILE_GENRE_FULL}
+                                        
+                                        echo "✓ Test files ready for diagnostic"
+                                        ls -la
+                                    '''
+                                } else if (env.TEST_TYPE == 'REGRESSION') {
+                                    sh '''
+                                        set -e
+                                        MC="$HOME/bin/minio-mc"
+                                        
+                                        echo "Setting up MinIO alias..."
+                                        $MC alias set myminio "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
+                                        
+                                        echo "=========================================="
+                                        echo "Downloading REGRESSION test files"
+                                        echo "=========================================="
+                                        
+                                        # Download and extract TestFiles
+                                        echo "Downloading ${MINIO_FILE_FULL}"
+                                        $MC cp myminio/${MINIO_BUCKET}/${MINIO_FILE_FULL} .
+                                        unzip -q -o ${MINIO_FILE_FULL}
+                                        rm -f ${MINIO_FILE_FULL}
+                                        
+                                        # Download and extract TestSuite
+                                        echo "Downloading ${MINIO_FILE_GENRE_FULL}"
+                                        $MC cp myminio/${MINIO_BUCKET}/${MINIO_FILE_GENRE_FULL} .
+                                        unzip -q -o ${MINIO_FILE_GENRE_FULL}
+                                        rm -f ${MINIO_FILE_GENRE_FULL}
+                                        
+                                        echo "✓ Test files ready"
+                                        ls -la
+                                    '''
+                                } else {
+                                    sh '''
+                                        set -e
+                                        MC="$HOME/bin/minio-mc"
+                                        
+                                        echo "Setting up MinIO alias..."
+                                        $MC alias set myminio "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
+                                        
+                                        echo "=========================================="
+                                        echo "Downloading QUALIFICATION test files"
+                                        echo "=========================================="
+                                        
+                                        # Download and extract CompactTestFiles
+                                        echo "Downloading ${MINIO_FILE_COMPACT}"
+                                        $MC cp myminio/${MINIO_BUCKET}/${MINIO_FILE_COMPACT} .
+                                        unzip -q -o ${MINIO_FILE_COMPACT}
+                                        if [ -d "CompactTestFiles" ]; then
+                                            mv CompactTestFiles TestFiles
+                                        fi
+                                        rm -f ${MINIO_FILE_COMPACT}
+                                        
+                                        # Download and extract GenreTestSuiteLite
+                                        echo "Downloading ${MINIO_FILE_GENRE_LITE}"
+                                        $MC cp myminio/${MINIO_BUCKET}/${MINIO_FILE_GENRE_LITE} .
+                                        unzip -q -o ${MINIO_FILE_GENRE_LITE}
+                                        rm -f ${MINIO_FILE_GENRE_LITE}
+                                        
+                                        echo "✓ Test files ready"
+                                        ls -la
+                                    '''
+                                }
+>>>>>>> 409ae13475d15474ba3acd2215e4f723d3a48f95
                             }
                         }
                     }
