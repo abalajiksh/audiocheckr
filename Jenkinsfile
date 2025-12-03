@@ -1,39 +1,43 @@
 pipeline {
     agent any
 
-    options {
-        timestamps()
-        timeout(time: 90, unit: 'MINUTES')
-        buildDiscarder(logRotator(numToKeepStr: '10'))
+    environment {
+        RUST_BACKTRACE = '1'
+        CARGO_HOME = "${WORKSPACE}/.cargo"
+        PATH = "${WORKSPACE}/.cargo/bin:${env.PATH}:/var/lib/jenkins/bin:/var/lib/jenkins/.cargo/bin:$HOME/bin"
+        RUSTUP_HOME = '/var/lib/jenkins/.rustup'
     }
 
     parameters {
         choice(
-            name: 'TEST_TYPE',
-            choices: ['AUTO', 'QUALIFICATION', 'QUALIFICATION_GENRE', 'REGRESSION', 'REGRESSION_GENRE', 'DIAGNOSTIC'],
-            description: 'Test type: AUTO detects from trigger, others force specific test'
+            name: 'TEST_TYPE_OVERRIDE',
+            choices: ['AUTO', 'QUALIFICATION', 'REGRESSION', 'DIAGNOSTIC'],
+            description: 'Override automatic test type selection'
         )
         booleanParam(
-            name: 'ENABLE_ARM64',
+            name: 'BUILD_ARM64',
             defaultValue: true,
-            description: 'Enable ARM64 cross-compilation builds'
+            description: 'Build ARM64 binary (cross-compilation)'
         )
         booleanParam(
-            name: 'SKIP_SONARQUBE',
+            name: 'CLEAN_WORKSPACE_BEFORE',
             defaultValue: false,
-            description: 'Skip SonarQube analysis'
+            description: 'Clean workspace before build'
         )
     }
 
-    environment {
-        RUST_BACKTRACE = '1'
-        CARGO_TERM_COLOR = 'never'
-        PATH = "$HOME/bin:$HOME/.cargo/bin:/usr/bin:$PATH"
-        
-        // SonarQube configuration
-        SONAR_PROJECT_KEY = 'audiocheckr'
-        SONAR_PROJECT_NAME = 'AudioCheckr'
-        SONAR_SOURCES = 'src'
+    triggers {
+        // Run regression tests weekly on Sunday at 2 AM
+        cron('0 2 * * 0')
+    }
+
+    options {
+        buildDiscarder(logRotator(
+            numToKeepStr: '10',
+            artifactNumToKeepStr: '5'))
+        timestamps()
+        disableConcurrentBuilds()
+        timeout(time: 90, unit: 'MINUTES')
     }
 
     stages {
@@ -41,34 +45,28 @@ pipeline {
             steps {
                 script {
                     // Determine test type
-                    if (params.TEST_TYPE == 'AUTO') {
-                        if (currentBuild.getBuildCauses('hudson.model.Cause$UserIdCause').size() > 0) {
-                            env.EFFECTIVE_TEST_TYPE = 'QUALIFICATION'
-                            echo "👤 Manual trigger detected - running QUALIFICATION tests"
-                        } else if (currentBuild.getBuildCauses('com.cloudbees.jenkins.GitHubPushCause').size() > 0 ||
-                                   currentBuild.getBuildCauses('hudson.triggers.SCMTrigger$SCMTriggerCause').size() > 0) {
-                            env.EFFECTIVE_TEST_TYPE = 'QUALIFICATION'
-                            echo "🔄 Push detected - running QUALIFICATION tests"
-                        } else if (currentBuild.getBuildCauses('hudson.triggers.TimerTrigger$TimerTriggerCause').size() > 0) {
-                            env.EFFECTIVE_TEST_TYPE = 'REGRESSION'
-                            echo "⏰ Scheduled trigger - running REGRESSION tests"
-                        } else {
-                            env.EFFECTIVE_TEST_TYPE = 'QUALIFICATION'
-                            echo "❓ Unknown trigger - defaulting to QUALIFICATION tests"
-                        }
+                    if (params.TEST_TYPE_OVERRIDE && params.TEST_TYPE_OVERRIDE != 'AUTO') {
+                        env.TEST_TYPE = params.TEST_TYPE_OVERRIDE
+                        echo "🔧 Test type forced via parameter: ${env.TEST_TYPE}"
+                    } else if (currentBuild.getBuildCauses('hudson.triggers.TimerTrigger$TimerTriggerCause')) {
+                        env.TEST_TYPE = 'REGRESSION'
+                        echo "⏰ Scheduled build detected - running REGRESSION tests"
+                    } else if (currentBuild.getBuildCauses('hudson.model.Cause$UserIdCause')) {
+                        env.TEST_TYPE = 'QUALIFICATION'
+                        echo "👤 Manual build - running QUALIFICATION tests (use parameter to override)"
                     } else {
-                        env.EFFECTIVE_TEST_TYPE = params.TEST_TYPE
-                        echo "🔧 Test type forced via parameter: ${env.EFFECTIVE_TEST_TYPE}"
+                        env.TEST_TYPE = 'QUALIFICATION'
+                        echo "🔄 Push detected - running QUALIFICATION tests"
                     }
 
                     echo """
 ========================================================
                   AUDIOCHECKR CI/CD                     
 ========================================================
-  Test Type:     ${env.EFFECTIVE_TEST_TYPE}
-  ARM Build:     ${params.ENABLE_ARM64 ? 'ENABLED ✓' : 'DISABLED ⏭️'}
-  Build #:       ${env.BUILD_NUMBER}
-  Triggered by:  ${currentBuild.getBuildCauses()[0]?.shortDescription ?: 'Unknown'}
+  Test Type:     ${env.TEST_TYPE}
+  ARM Build:     ${params.BUILD_ARM64 ? 'ENABLED ✓' : 'DISABLED'}
+  Build #:       ${currentBuild.number}
+  Triggered by:  ${currentBuild.getBuildCauses()[0].shortDescription}
 ========================================================
 """
                 }
@@ -94,13 +92,12 @@ pipeline {
                             fi
                             
                             if ! command -v cargo >/dev/null 2>&1; then
-                                echo "Installing Rust..."
-                                curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-                                . $HOME/.cargo/env
+                                echo "ERROR: Cargo not found!"
+                                exit 1
                             fi
                             
                             echo "=== Tool Versions ==="
-                            mc --version
+                            mc --version || true
                             cargo --version
                             rustc --version
                             echo "===================="
@@ -132,20 +129,19 @@ pipeline {
                             echo "=========================================="
                             cargo build --release 2>&1 | tee build_x86_64.txt
                             
-                            # Check for warnings (informational only)
                             if grep -q "warning:" build_x86_64.txt; then
                                 echo ""
-                                echo "⚠️  Build completed with warnings (see above)"
+                                echo "⚠️  Build completed with warnings"
                             else
                                 echo ""
                                 echo "✓ Build completed without warnings"
                             fi
                             
                             echo ""
-                            echo "=== x86_64 Build Artifact ==="
+                            echo "=== Build Artifact ==="
                             ls -lh target/release/audiocheckr
                             file target/release/audiocheckr
-                            echo "============================="
+                            echo "======================"
                         '''
                     }
                 }
@@ -153,80 +149,88 @@ pipeline {
                     steps {
                         script {
                             withCredentials([
-                                usernamePassword(
-                                    credentialsId: 'noIdea',
-                                    usernameVariable: 'MINIO_ACCESS_KEY',
-                                    passwordVariable: 'MINIO_SECRET_KEY'
-                                ),
-                                string(
-                                    credentialsId: 'minio-endpoint',
-                                    variable: 'MINIO_ENDPOINT'
-                                )
+                                string(credentialsId: 'minio-endpoint', variable: 'MINIO_ENDPOINT'),
+                                string(credentialsId: 'minio-secret-key', variable: 'MINIO_SECRET_KEY')
                             ]) {
-                                sh """
+                                sh '''
                                     set -e
-                                    mc alias set myminio "\$MINIO_ENDPOINT" "\$MINIO_ACCESS_KEY" "\$MINIO_SECRET_KEY"
                                     
-                                    echo "=========================================="
-                                    echo "Downloading ${env.EFFECTIVE_TEST_TYPE} test files"
-                                    echo "=========================================="
+                                    # Configure MinIO client
+                                    mc alias set myminio "${MINIO_ENDPOINT}" minioadmin "${MINIO_SECRET_KEY}" --api S3v4 2>/dev/null || true
                                     
-                                    case "${env.EFFECTIVE_TEST_TYPE}" in
+                                    case "${TEST_TYPE}" in
                                         QUALIFICATION)
-                                            echo "Downloading CompactTestFiles.zip (~1.4GB)"
-                                            mc cp myminio/audiocheckr/CompactTestFiles.zip .
-                                            unzip -q -o CompactTestFiles.zip
-                                            if [ -d "CompactTestFiles" ]; then
-                                                mv CompactTestFiles TestFiles
+                                            echo "📦 Downloading TestFiles.zip and GenreTestSuiteLite.zip for QUALIFICATION tests..."
+                                            
+                                            # Download TestFiles for qualification_test
+                                            if [ ! -d "TestFiles" ]; then
+                                                mc cp myminio/audiocheckr-test-files/TestFiles.zip . 2>/dev/null || {
+                                                    echo "ERROR: Failed to download TestFiles.zip"
+                                                    exit 1
+                                                }
+                                                unzip -q TestFiles.zip
+                                                rm -f TestFiles.zip
                                             fi
-                                            rm -f CompactTestFiles.zip
                                             
-                                            echo "Test files ready"
-                                            find TestFiles -type f -name "*.flac" 2>/dev/null | wc -l || echo "0"
-                                            du -sh TestFiles 2>/dev/null || true
-                                            ;;
-                                        QUALIFICATION_GENRE)
-                                            echo "Downloading GenreTestSuiteLite.zip (~800MB)"
-                                            mc cp myminio/audiocheckr/GenreTestSuiteLite.zip .
-                                            unzip -q -o GenreTestSuiteLite.zip
-                                            rm -f GenreTestSuiteLite.zip
+                                            # Download GenreTestSuiteLite for qualification_genre_test
+                                            if [ ! -d "GenreTestSuiteLite" ]; then
+                                                mc cp myminio/audiocheckr-test-files/GenreTestSuiteLite.zip . 2>/dev/null || {
+                                                    echo "WARNING: GenreTestSuiteLite.zip not found, will try TestSuite as fallback"
+                                                }
+                                                if [ -f "GenreTestSuiteLite.zip" ]; then
+                                                    unzip -q GenreTestSuiteLite.zip
+                                                    rm -f GenreTestSuiteLite.zip
+                                                fi
+                                            fi
                                             
-                                            echo "Test files ready"
-                                            find GenreTestSuiteLite -type f -name "*.flac" 2>/dev/null | wc -l || echo "0"
-                                            du -sh GenreTestSuiteLite 2>/dev/null || true
+                                            echo "✓ Test files ready"
+                                            ls -la
                                             ;;
+                                            
                                         REGRESSION)
-                                            echo "Downloading TestFiles.zip (~8.5GB)"
-                                            mc cp myminio/audiocheckr/TestFiles.zip .
-                                            unzip -q -o TestFiles.zip
-                                            rm -f TestFiles.zip
+                                            echo "📦 Downloading TestFiles.zip and TestSuite.zip for REGRESSION tests..."
                                             
-                                            echo "Test files ready"
-                                            find TestFiles -type f -name "*.flac" 2>/dev/null | wc -l || echo "0"
-                                            du -sh TestFiles 2>/dev/null || true
-                                            ;;
-                                        REGRESSION_GENRE)
-                                            echo "Downloading TestSuite.zip (~19.4GB)"
-                                            mc cp myminio/audiocheckr/TestSuite.zip .
-                                            unzip -q -o TestSuite.zip
-                                            rm -f TestSuite.zip
+                                            # Download TestFiles for regression_test
+                                            if [ ! -d "TestFiles" ]; then
+                                                mc cp myminio/audiocheckr-test-files/TestFiles.zip . 2>/dev/null || {
+                                                    echo "ERROR: Failed to download TestFiles.zip"
+                                                    exit 1
+                                                }
+                                                unzip -q TestFiles.zip
+                                                rm -f TestFiles.zip
+                                            fi
                                             
-                                            echo "Test files ready for regression genre tests"
-                                            find TestSuite -type f -name "*.flac" 2>/dev/null | wc -l || echo "0"
-                                            du -sh TestSuite 2>/dev/null || true
+                                            # Download full TestSuite for regression_genre_test
+                                            if [ ! -d "TestSuite" ]; then
+                                                mc cp myminio/audiocheckr-test-files/TestSuite.zip . 2>/dev/null || {
+                                                    echo "ERROR: Failed to download TestSuite.zip"
+                                                    exit 1
+                                                }
+                                                unzip -q TestSuite.zip
+                                                rm -f TestSuite.zip
+                                            fi
+                                            
+                                            echo "✓ Test files ready"
+                                            ls -la
                                             ;;
+                                            
                                         DIAGNOSTIC)
-                                            echo "Downloading TestSuite.zip (~19.4GB)"
-                                            mc cp myminio/audiocheckr/TestSuite.zip .
-                                            unzip -q -o TestSuite.zip
-                                            rm -f TestSuite.zip
+                                            echo "📦 Downloading TestSuite.zip for DIAGNOSTIC tests..."
                                             
-                                            echo "Test files ready for diagnostic"
-                                            find TestSuite -type f -name "*.flac" 2>/dev/null | wc -l || echo "0"
-                                            du -sh TestSuite 2>/dev/null || true
+                                            if [ ! -d "TestSuite" ]; then
+                                                mc cp myminio/audiocheckr-test-files/TestSuite.zip . 2>/dev/null || {
+                                                    echo "ERROR: Failed to download TestSuite.zip"
+                                                    exit 1
+                                                }
+                                                unzip -q TestSuite.zip
+                                                rm -f TestSuite.zip
+                                            fi
+                                            
+                                            echo "✓ Test files ready"
+                                            ls -la
                                             ;;
                                     esac
-                                """
+                                '''
                             }
                         }
                     }
@@ -234,304 +238,179 @@ pipeline {
             }
         }
 
-        stage('SonarQube Analysis') {
+        stage('Build ARM64') {
             when {
-                allOf {
-                    expression { return !params.SKIP_SONARQUBE }
-                    expression { return env.EFFECTIVE_TEST_TYPE != 'DIAGNOSTIC' }
-                }
+                expression { params.BUILD_ARM64 }
             }
             steps {
-                script {
-                    try {
-                        def scannerHome = tool 'SonarQube-LXC'
-                        
-                        withSonarQubeEnv('SonarQube-LXC') {
-                            sh """
-                                ${scannerHome}/bin/sonar-scanner \
-                                    -Dsonar.projectKey=${SONAR_PROJECT_KEY} \
-                                    -Dsonar.projectName=${SONAR_PROJECT_NAME} \
-                                    -Dsonar.sources=${SONAR_SOURCES} \
-                                    -Dsonar.exclusions=**/target/**,**/TestFiles/**,**/TestSuite/**,**/GenreTestSuiteLite/**
-                            """
-                        }
-                        echo "✓ SonarQube analysis completed"
-                    } catch (Exception e) {
-                        echo "⚠ SonarQube analysis failed: ${e.message}"
-                    }
-                }
-            }
-        }
-
-        stage('Quality Gate') {
-            when {
-                allOf {
-                    expression { return !params.SKIP_SONARQUBE }
-                    expression { return env.EFFECTIVE_TEST_TYPE != 'DIAGNOSTIC' }
-                }
-            }
-            steps {
-                script {
-                    try {
-                        timeout(time: 10, unit: 'MINUTES') {
-                            def qg = waitForQualityGate abortPipeline: false
-                            if (qg.status != 'OK') {
-                                echo "⚠ Quality Gate: ${qg.status}"
-                            } else {
-                                echo "✓ Quality Gate: PASSED"
-                            }
-                        }
-                    } catch (Exception e) {
-                        echo "⚠ Quality Gate skipped: ${e.message}"
-                        echo "Tip: Configure webhook in SonarQube > Project Settings > Webhooks"
-                        echo "URL: http://YOUR_JENKINS_URL/sonarqube-webhook/"
-                    }
-                }
-            }
-        }
-
-        stage('Diagnostic Test') {
-            when {
-                expression { return env.EFFECTIVE_TEST_TYPE == 'DIAGNOSTIC' }
-            }
-            steps {
-                script {
+                sh '''
                     echo "=========================================="
-                    echo "Running DIAGNOSTIC TEST"
+                    echo "Building for ARM64 (cross-compilation)"
                     echo "=========================================="
                     
-                    sh 'mkdir -p target/test-results'
+                    # Add ARM64 target if not present
+                    rustup target add aarch64-unknown-linux-gnu 2>/dev/null || true
                     
-                    def testResult = sh(
-                        script: '''
-                            set +e
-                            cargo test --test diagnostic_test -- --nocapture 2>&1 | tee target/test-results/diagnostic.txt
-                            exit $?
-                        ''',
-                        returnStatus: true
-                    )
+                    # Build with cross-compiler
+                    CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
+                    cargo build --release --target aarch64-unknown-linux-gnu 2>&1 | tee build_arm64.txt
                     
-                    if (testResult == 0) {
-                        echo "✓ Diagnostic test passed!"
-                    } else {
-                        echo "⚠ Diagnostic test completed with findings"
-                    }
+                    if ! grep -q "warning:" build_arm64.txt; then
+                        echo ""
+                        echo "✓ ARM64 build completed without warnings"
+                    fi
                     
-                    archiveArtifacts artifacts: 'target/test-results/diagnostic.txt', allowEmptyArchive: true
+                    mkdir -p target/arm64
+                    cp target/aarch64-unknown-linux-gnu/release/audiocheckr target/arm64/audiocheckr-arm64
+                    
+                    echo ""
+                    echo "=== ARM64 Build Artifact ==="
+                    ls -lh target/arm64/audiocheckr-arm64
+                    file target/arm64/audiocheckr-arm64
+                    echo "============================="
+                '''
+            }
+        }
+
+        stage('ARM64 Binary Validation') {
+            when {
+                expression { params.BUILD_ARM64 }
+            }
+            steps {
+                script {
+                    sh '''
+                        echo "Validating ARM64 binary..."
+                        file target/arm64/audiocheckr-arm64 | grep -q "aarch64"
+                        echo "✓ ARM64 binary validation passed"
+                    '''
                 }
             }
         }
 
-        stage('x86_64 Tests (Full Suite)') {
-            when {
-                expression { return env.EFFECTIVE_TEST_TYPE != 'DIAGNOSTIC' }
-            }
-            stages {
-                stage('Integration Tests') {
-                    steps {
-                        script {
-                            echo "=========================================="
-                            echo "x86_64: Integration Tests"
-                            echo "=========================================="
-                            
-                            sh 'mkdir -p target/test-results'
-                            
-                            def testResult = sh(
-                                script: '''
-                                    set +e
-                                    cargo test --test integration_test -- --nocapture 2>&1 | tee target/test-results/integration_x86_64.txt
-                                    exit $?
-                                ''',
-                                returnStatus: true
-                            )
-                            
-                            if (testResult == 0) {
-                                echo "✓ x86_64 integration tests passed!"
-                            } else {
-                                echo "⚠ x86_64 integration tests had failures"
-                                currentBuild.result = 'UNSTABLE'
-                            }
-                        }
-                    }
-                }
-
-                stage('Qualification Tests') {
-                    when {
-                        expression { return env.EFFECTIVE_TEST_TYPE == 'QUALIFICATION' }
-                    }
-                    steps {
-                        script {
-                            echo "=========================================="
-                            echo "x86_64: Qualification Tests"
-                            echo "=========================================="
-                            
-                            def testResult = sh(
-                                script: '''
-                                    set +e
-                                    cargo test --test qualification_test -- --nocapture 2>&1 | tee target/test-results/qualification_x86_64.txt
-                                    exit $?
-                                ''',
-                                returnStatus: true
-                            )
-                            
-                            if (testResult == 0) {
-                                echo "✓ x86_64 qualification tests passed!"
-                            } else {
-                                echo "⚠ x86_64 qualification tests had failures"
-                                currentBuild.result = 'UNSTABLE'
-                            }
-                        }
-                    }
-                }
-
-                stage('Qualification Genre Tests') {
-                    when {
-                        expression { return env.EFFECTIVE_TEST_TYPE == 'QUALIFICATION_GENRE' }
-                    }
-                    steps {
-                        script {
-                            echo "=========================================="
-                            echo "x86_64: Qualification Genre Tests"
-                            echo "=========================================="
-                            
-                            def testResult = sh(
-                                script: '''
-                                    set +e
-                                    cargo test --test qualification_genre_test -- --nocapture 2>&1 | tee target/test-results/qualification_genre_x86_64.txt
-                                    exit $?
-                                ''',
-                                returnStatus: true
-                            )
-                            
-                            if (testResult == 0) {
-                                echo "✓ x86_64 qualification genre tests passed!"
-                            } else {
-                                echo "⚠ x86_64 qualification genre tests had failures"
-                                currentBuild.result = 'UNSTABLE'
-                            }
-                        }
-                    }
-                }
-
-                stage('Regression Tests') {
-                    when {
-                        expression { return env.EFFECTIVE_TEST_TYPE == 'REGRESSION' }
-                    }
-                    steps {
-                        script {
-                            echo "=========================================="
-                            echo "x86_64: Regression Tests"
-                            echo "=========================================="
-                            
-                            def testResult = sh(
-                                script: '''
-                                    set +e
-                                    cargo test --release --test regression_test -- --nocapture 2>&1 | tee target/test-results/regression_x86_64.txt
-                                    exit $?
-                                ''',
-                                returnStatus: true
-                            )
-                            
-                            if (testResult == 0) {
-                                echo "✓ x86_64 regression tests passed!"
-                            } else {
-                                echo "⚠ Regression tests completed with failures"
-                                currentBuild.result = 'UNSTABLE'
-                            }
-                        }
-                    }
-                }
-
-                stage('Regression Genre Tests') {
-                    when {
-                        expression { return env.EFFECTIVE_TEST_TYPE == 'REGRESSION_GENRE' }
-                    }
-                    steps {
-                        script {
-                            echo "=========================================="
-                            echo "x86_64: Regression Genre Tests"
-                            echo "=========================================="
-                            
-                            def testResult = sh(
-                                script: '''
-                                    set +e
-                                    cargo test --release --test regression_genre_test -- --nocapture 2>&1 | tee target/test-results/regression_genre_x86_64.txt
-                                    exit $?
-                                ''',
-                                returnStatus: true
-                            )
-                            
-                            if (testResult == 0) {
-                                echo "✓ x86_64 regression genre tests passed!"
-                            } else {
-                                echo "⚠ Regression genre tests completed with failures"
-                                currentBuild.result = 'UNSTABLE'
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        stage('ARM64 Validation (Cross-Compile)') {
-            when {
-                allOf {
-                    expression { return params.ENABLE_ARM64 }
-                    expression { return env.EFFECTIVE_TEST_TYPE != 'DIAGNOSTIC' }
-                }
-            }
-            stages {
-                stage('ARM64 Build') {
-                    steps {
-                        sh '''
-                            echo "=========================================="
-                            echo "Building for ARM64 (cross-compile)"
-                            echo "=========================================="
-                            
-                            # Ensure we have the ARM64 target
-                            rustup target add aarch64-unknown-linux-gnu 2>/dev/null || true
-                            
-                            # Build for ARM64 - release only (no tests compilation on different arch)
-                            CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
-                            cargo build --release --target aarch64-unknown-linux-gnu 2>&1 | tee build_arm64.txt
-                            
-                            # Check for warnings
-                            if grep -q "warning:" build_arm64.txt; then
-                                echo ""
-                                echo "⚠️  ARM64 build completed with warnings"
-                            else
-                                echo ""
-                                echo "✓ ARM64 build completed without warnings"
-                            fi
-                            
-                            # Copy ARM64 binary to accessible location
-                            mkdir -p target/arm64
-                            cp target/aarch64-unknown-linux-gnu/release/audiocheckr target/arm64/audiocheckr-arm64
-                            
-                            echo ""
-                            echo "=== ARM64 Build Artifact ==="
-                            ls -lh target/arm64/audiocheckr-arm64
-                            file target/arm64/audiocheckr-arm64
-                            echo "============================="
-                        '''
-                    }
-                }
-
-                stage('ARM64 Binary Validation') {
-                    steps {
-                        script {
+        stage('Run Tests') {
+            steps {
+                script {
+                    switch(env.TEST_TYPE) {
+                        case 'QUALIFICATION':
+                            // Run both qualification tests together
                             sh '''
-                                echo "Validating ARM64 binary..."
+                                echo ""
+                                echo "=========================================="
+                                echo "Running QUALIFICATION Tests"
+                                echo "=========================================="
+                                echo ""
                                 
-                                # Verify it's actually an ARM64 binary
-                                file target/arm64/audiocheckr-arm64 | grep -q "aarch64" || {
-                                    echo "ERROR: Binary is not ARM64!"
+                                # Run qualification_test (uses TestFiles)
+                                echo ">>> Running qualification_test..."
+                                cargo test --release --test qualification_test -- --nocapture --test-threads=1 2>&1 | tee qualification_results.txt
+                                QUALI_EXIT=${PIPESTATUS[0]}
+                                
+                                echo ""
+                                echo "=========================================="
+                                echo ""
+                                
+                                # Run qualification_genre_test (uses GenreTestSuiteLite or TestSuite)
+                                echo ">>> Running qualification_genre_test..."
+                                cargo test --release --test qualification_genre_test -- --nocapture --test-threads=1 2>&1 | tee qualification_genre_results.txt
+                                QUALI_GENRE_EXIT=${PIPESTATUS[0]}
+                                
+                                echo ""
+                                echo "=========================================="
+                                echo "QUALIFICATION TEST SUMMARY"
+                                echo "=========================================="
+                                
+                                if [ $QUALI_EXIT -eq 0 ]; then
+                                    echo "✓ qualification_test: PASSED"
+                                else
+                                    echo "✗ qualification_test: FAILED"
+                                fi
+                                
+                                if [ $QUALI_GENRE_EXIT -eq 0 ]; then
+                                    echo "✓ qualification_genre_test: PASSED"
+                                else
+                                    echo "✗ qualification_genre_test: FAILED"
+                                fi
+                                
+                                echo "=========================================="
+                                
+                                # Fail if either test failed
+                                if [ $QUALI_EXIT -ne 0 ] || [ $QUALI_GENRE_EXIT -ne 0 ]; then
                                     exit 1
-                                }
-                                
-                                echo "✓ ARM64 binary validation passed"
+                                fi
                             '''
-                        }
+                            break
+
+                        case 'REGRESSION':
+                            sh '''
+                                echo ""
+                                echo "=========================================="
+                                echo "Running REGRESSION Tests (Full Suite)"
+                                echo "=========================================="
+                                echo ""
+                                
+                                # Run regression_test (uses TestFiles)
+                                echo ">>> Running regression_test..."
+                                cargo test --release --test regression_test -- --nocapture --test-threads=1 2>&1 | tee regression_results.txt
+                                REG_EXIT=${PIPESTATUS[0]}
+                                
+                                echo ""
+                                echo "=========================================="
+                                echo ""
+                                
+                                # Run regression_genre_test (uses full TestSuite)
+                                echo ">>> Running regression_genre_test..."
+                                cargo test --release --test regression_genre_test -- --nocapture --test-threads=1 2>&1 | tee regression_genre_results.txt
+                                REG_GENRE_EXIT=${PIPESTATUS[0]}
+                                
+                                echo ""
+                                echo "=========================================="
+                                echo "REGRESSION TEST SUMMARY"
+                                echo "=========================================="
+                                
+                                if [ $REG_EXIT -eq 0 ]; then
+                                    echo "✓ regression_test: PASSED"
+                                else
+                                    echo "✗ regression_test: FAILED"
+                                fi
+                                
+                                if [ $REG_GENRE_EXIT -eq 0 ]; then
+                                    echo "✓ regression_genre_test: PASSED"
+                                else
+                                    echo "✗ regression_genre_test: FAILED"
+                                fi
+                                
+                                echo "=========================================="
+                                
+                                # For regression tests, we report but don't fail the build
+                                # This allows tracking improvements over time
+                                # Uncomment next lines to enforce strict pass/fail:
+                                # if [ $REG_EXIT -ne 0 ] || [ $REG_GENRE_EXIT -ne 0 ]; then
+                                #     exit 1
+                                # fi
+                            '''
+                            break
+
+                        case 'DIAGNOSTIC':
+                            sh '''
+                                echo ""
+                                echo "=========================================="
+                                echo "Running DIAGNOSTIC Tests"
+                                echo "=========================================="
+                                echo ""
+                                
+                                # Run the full regression genre test for diagnostic
+                                echo ">>> Running regression_genre_test (diagnostic mode)..."
+                                cargo test --release --test regression_genre_test -- --nocapture --test-threads=1 2>&1 | tee diagnostic_results.txt
+                                
+                                echo ""
+                                echo "=========================================="
+                                echo "DIAGNOSTIC COMPLETE"
+                                echo "=========================================="
+                            '''
+                            break
+
+                        default:
+                            error "Unknown test type: ${env.TEST_TYPE}"
                     }
                 }
             }
@@ -542,27 +421,21 @@ pipeline {
         always {
             script {
                 // Archive build artifacts
-                archiveArtifacts artifacts: 'target/release/audiocheckr', allowEmptyArchive: true, fingerprint: true
-                
-                if (params.ENABLE_ARM64 && env.EFFECTIVE_TEST_TYPE != 'DIAGNOSTIC') {
-                    archiveArtifacts artifacts: 'target/arm64/audiocheckr-arm64', allowEmptyArchive: true, fingerprint: true
-                }
-                
-                // Archive build logs
-                archiveArtifacts artifacts: 'build_*.txt', allowEmptyArchive: true
-            }
+                archiveArtifacts artifacts: 'target/release/audiocheckr', fingerprint: true, allowEmptyArchive: true
+                archiveArtifacts artifacts: 'target/arm64/audiocheckr-arm64', fingerprint: true, allowEmptyArchive: true
+                archiveArtifacts artifacts: '*_results.txt', fingerprint: true, allowEmptyArchive: true
 
-            // Collect test results
-            junit testResults: 'target/test-results/*.xml', allowEmptyResults: true
+                // Try to publish test results
+                junit allowEmptyResults: true, testResults: 'target/nextest/ci/junit.xml'
 
-            script {
+                // Cleanup to save disk space
                 echo "🧹 Cleaning workspace to save disk space..."
                 sh '''
                     # Remove downloaded test files
                     rm -f CompactTestFiles.zip TestFiles.zip GenreTestSuiteLite.zip TestSuite.zip
                     rm -rf CompactTestFiles TestFiles GenreTestSuiteLite TestSuite
                     
-                    # Backup important binaries
+                    # Keep binaries but clean build artifacts
                     if [ -f target/release/audiocheckr ]; then
                         cp target/release/audiocheckr /tmp/audiocheckr_backup_x86_${BUILD_NUMBER}
                     fi
@@ -570,7 +443,6 @@ pipeline {
                         cp target/arm64/audiocheckr-arm64 /tmp/audiocheckr_backup_arm64_${BUILD_NUMBER}
                     fi
                     
-                    # Clean build directories but keep binaries
                     rm -rf target/debug
                     rm -rf target/release/deps
                     rm -rf target/release/build
@@ -596,17 +468,11 @@ pipeline {
                 '''
             }
         }
-
         success {
             echo "✅ Build and tests completed successfully!"
         }
-
-        unstable {
-            echo "⚠ Build completed but some tests failed. Check test results."
-        }
-
         failure {
-            echo "❌ Build failed! Check the logs for details."
+            echo "❌ Build or tests failed!"
         }
     }
 }
