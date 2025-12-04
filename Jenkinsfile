@@ -1,24 +1,6 @@
 pipeline {
     agent any
-<<<<<<< HEAD
     
-=======
-
-    environment {
-        RUST_BACKTRACE = '1'
-        CARGO_HOME = "${WORKSPACE}/.cargo"
-        PATH = "${WORKSPACE}/.cargo/bin:${env.PATH}:/var/lib/jenkins/bin:/var/lib/jenkins/.cargo/bin:$HOME/bin"
-        RUSTUP_HOME = '/var/lib/jenkins/.rustup'
-        
-        // MinIO configuration
-        MINIO_BUCKET = 'audiocheckr'
-        MINIO_FILE_COMPACT = 'CompactTestFiles.zip'
-        MINIO_FILE_FULL = 'TestFiles.zip'
-        MINIO_FILE_GENRE_LITE = 'GenreTestSuiteLite.zip'
-        MINIO_FILE_GENRE_FULL = 'TestSuite.zip'
-    }
-
->>>>>>> 409ae13475d15474ba3acd2215e4f723d3a48f95
     parameters {
         choice(
             name: 'TEST_TYPE_OVERRIDE',
@@ -53,6 +35,11 @@ pipeline {
     }
     
     environment {
+        RUST_BACKTRACE = '1'
+        CARGO_HOME = "${WORKSPACE}/.cargo"
+        PATH = "${WORKSPACE}/.cargo/bin:${env.PATH}:/var/lib/jenkins/bin:/var/lib/jenkins/.cargo/bin:$HOME/bin"
+        RUSTUP_HOME = '/var/lib/jenkins/.rustup'
+        
         // MinIO configuration
         MINIO_BUCKET = 'audiocheckr'
         MINIO_FILE_COMPACT = 'CompactTestFiles.zip'
@@ -64,9 +51,6 @@ pipeline {
         SONAR_PROJECT_KEY = 'audiocheckr'
         SONAR_PROJECT_NAME = 'AudioCheckr'
         SONAR_SOURCES = 'src'
-        
-        // Path setup
-        PATH = "$HOME/bin:$HOME/.cargo/bin:/usr/bin:$PATH"
         
         // PODMAN_LXC_HOST and PODMAN_LXC_USER are set globally in Jenkins
         // Configure in: Manage Jenkins → System → Global properties → Environment variables
@@ -101,13 +85,16 @@ pipeline {
                         checkout scm
                     }
                     
-                    // Handle diagnostic test override
+                    // Determine test type
                     if (params.RUN_DIAGNOSTIC_TEST) {
                         env.TEST_TYPE = 'DIAGNOSTIC'
                         echo "🔍 Diagnostic test mode activated"
                     } else if (params.TEST_TYPE_OVERRIDE && params.TEST_TYPE_OVERRIDE != 'AUTO') {
                         env.TEST_TYPE = params.TEST_TYPE_OVERRIDE
                         echo "🔧 Test type forced via parameter: ${env.TEST_TYPE}"
+                    } else if (params.RUN_GENRE_REGRESSION) {
+                        env.TEST_TYPE = 'REGRESSION_GENRE'
+                        echo "🎵 Genre regression test mode"
                     } else if (currentBuild.getBuildCauses('hudson.triggers.TimerTrigger$TimerTriggerCause')) {
                         // Scheduled build (cron) = REGRESSION
                         env.TEST_TYPE = 'REGRESSION'
@@ -142,6 +129,7 @@ pipeline {
                 stage('Setup Tools') {
                     steps {
                         sh '''#!/bin/bash
+                            set -e
                             mkdir -p $HOME/bin
                             
                             if ! command -v cc >/dev/null 2>&1; then
@@ -172,13 +160,9 @@ pipeline {
                             fi
                             
                             echo "=== Tool Versions ==="
-<<<<<<< HEAD
-                            mc --version
-=======
                             echo "MinIO Client:"
                             $HOME/bin/minio-mc --version
                             echo ""
->>>>>>> 409ae13475d15474ba3acd2215e4f723d3a48f95
                             cargo --version
                             rustc --version
                             echo "===================="
@@ -211,6 +195,7 @@ pipeline {
                             echo "=========================================="
                             
                             sh '''#!/bin/bash
+                                set -e
                                 cargo build --release 2>&1 | tee build_x86_64.txt
                             '''
                             
@@ -223,42 +208,6 @@ pipeline {
                     steps {
                         script {
                             withCredentials([
-<<<<<<< HEAD
-                                string(credentialsId: 'minio-endpoint', variable: 'MINIO_ENDPOINT'),
-                                string(credentialsId: 'minio-access-key', variable: 'MINIO_ACCESS_KEY'),
-                                string(credentialsId: 'minio-secret-key', variable: 'MINIO_SECRET_KEY')
-                            ]) {
-                                sh '''#!/bin/bash
-                                    mc alias set myminio "${MINIO_ENDPOINT}" "${MINIO_ACCESS_KEY}" "${MINIO_SECRET_KEY}"
-                                    
-                                    if [ "${TEST_TYPE}" = "QUALIFICATION" ]; then
-                                        echo "Downloading CompactTestFiles.zip for QUALIFICATION..."
-                                        mc cp "myminio/${MINIO_BUCKET}/${MINIO_FILE_COMPACT}" .
-                                        unzip -q CompactTestFiles.zip
-                                        
-                                        echo "Downloading GenreTestSuiteLite.zip for QUALIFICATION GENRE..."
-                                        mc cp "myminio/${MINIO_BUCKET}/${MINIO_FILE_GENRE_LITE}" .
-                                        unzip -q GenreTestSuiteLite.zip
-                                        
-                                    elif [ "${TEST_TYPE}" = "REGRESSION" ]; then
-                                        echo "Downloading TestFiles.zip for REGRESSION..."
-                                        mc cp "myminio/${MINIO_BUCKET}/${MINIO_FILE_FULL}" .
-                                        unzip -q TestFiles.zip
-                                        
-                                    elif [ "${TEST_TYPE}" = "REGRESSION_GENRE" ]; then
-                                        echo "Downloading TestSuite.zip for REGRESSION GENRE..."
-                                        mc cp "myminio/${MINIO_BUCKET}/${MINIO_FILE_GENRE_FULL}" .
-                                        unzip -q TestSuite.zip
-                                        
-                                    elif [ "${TEST_TYPE}" = "DIAGNOSTIC" ]; then
-                                        echo "Downloading TestSuite.zip for DIAGNOSTIC..."
-                                        mc cp "myminio/${MINIO_BUCKET}/${MINIO_FILE_GENRE_FULL}" .
-                                        unzip -q TestSuite.zip
-                                    fi
-                                    
-                                    echo "✓ Test files downloaded and extracted"
-                                '''
-=======
                                 usernamePassword(
                                     credentialsId: 'noIdea',
                                     usernameVariable: 'MINIO_ACCESS_KEY',
@@ -288,7 +237,7 @@ pipeline {
                                         rm -f ${MINIO_FILE_GENRE_FULL}
                                         
                                         echo "✓ Test files ready for diagnostic"
-                                        ls -la
+                                        ls -lh TestSuite/ | head -n 20
                                     '''
                                 } else if (env.TEST_TYPE == 'REGRESSION') {
                                     sh '''
@@ -315,9 +264,32 @@ pipeline {
                                         rm -f ${MINIO_FILE_GENRE_FULL}
                                         
                                         echo "✓ Test files ready"
-                                        ls -la
+                                        ls -lh TestFiles/ | head -n 10
+                                        ls -lh TestSuite/ | head -n 10
+                                    '''
+                                } else if (env.TEST_TYPE == 'REGRESSION_GENRE') {
+                                    sh '''
+                                        set -e
+                                        MC="$HOME/bin/minio-mc"
+                                        
+                                        echo "Setting up MinIO alias..."
+                                        $MC alias set myminio "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
+                                        
+                                        echo "=========================================="
+                                        echo "Downloading REGRESSION GENRE test files"
+                                        echo "=========================================="
+                                        
+                                        # Download and extract TestSuite only
+                                        echo "Downloading ${MINIO_FILE_GENRE_FULL}"
+                                        $MC cp myminio/${MINIO_BUCKET}/${MINIO_FILE_GENRE_FULL} .
+                                        unzip -q -o ${MINIO_FILE_GENRE_FULL}
+                                        rm -f ${MINIO_FILE_GENRE_FULL}
+                                        
+                                        echo "✓ Test files ready"
+                                        ls -lh TestSuite/ | head -n 10
                                     '''
                                 } else {
+                                    // QUALIFICATION (default)
                                     sh '''
                                         set -e
                                         MC="$HOME/bin/minio-mc"
@@ -345,10 +317,10 @@ pipeline {
                                         rm -f ${MINIO_FILE_GENRE_LITE}
                                         
                                         echo "✓ Test files ready"
-                                        ls -la
+                                        ls -lh TestFiles/ | head -n 10
+                                        ls -lh GenreTestSuiteLite/ | head -n 10
                                     '''
                                 }
->>>>>>> 409ae13475d15474ba3acd2215e4f723d3a48f95
                             }
                         }
                     }
@@ -365,6 +337,7 @@ pipeline {
                             echo "=========================================="
                             
                             sh '''#!/bin/bash
+                                set -e
                                 if ! rustup target list --installed | grep -q aarch64-unknown-linux-gnu; then
                                     echo "Installing aarch64 target..."
                                     rustup target add aarch64-unknown-linux-gnu
@@ -527,7 +500,7 @@ pipeline {
         
         stage('Regression Genre Tests - x86_64') {
             when {
-                expression { return env.TEST_TYPE == 'REGRESSION_GENRE' || params.RUN_GENRE_REGRESSION }
+                expression { return env.TEST_TYPE == 'REGRESSION_GENRE' }
             }
             parallel {
                 stage('Regression Genre Test') {
@@ -823,7 +796,7 @@ pipeline {
                         mv /tmp/audiocheckr_backup_x86_${BUILD_NUMBER} target/release/audiocheckr
                     fi
                     
-                    if [ /tmp/audiocheckr_backup_arm64_${BUILD_NUMBER} ]; then
+                    if [ -f /tmp/audiocheckr_backup_arm64_${BUILD_NUMBER} ]; then
                         mkdir -p target/arm64
                         mv /tmp/audiocheckr_backup_arm64_${BUILD_NUMBER} target/arm64/audiocheckr-arm64
                     fi
