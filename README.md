@@ -1,4 +1,4 @@
-# Audio Quality Checker v0.2.1
+# Audio Quality Checker v0.2.4
 
 Advanced audio analysis tool for detecting fake lossless files, transcodes, upsampled audio, and various audio quality issues. Uses pure DSP algorithms - no machine learning.
 
@@ -13,6 +13,18 @@ Advanced audio analysis tool for detecting fake lossless files, transcodes, upsa
 - **Phase Analysis**: Detects phase discontinuities at codec frame boundaries
 - **True Peak Analysis**: ITU-R BS.1770 compliant true peak measurement
 - **Spectral Artifacts**: Detects unusual spectral patterns and notches
+
+### v0.2.4 Improvements
+
+Better detector, results on the way.
+
+### v0.2.3 Improvements
+
+Some minor parameter adjustments to `detector.rs`to not flag clean source files. And a lot of Jenkins file screwups fixed.
+
+### v0.2.2 Improvements
+
+Fixed the problematic test case logic with `is_clean || is_lossless` to just `is_clean` for better reporting.
 
 ### v0.2.1 Improvements
 
