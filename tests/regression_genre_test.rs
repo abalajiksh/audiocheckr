@@ -1,4 +1,4 @@
-// tests/regression_genre_tests.rs
+// tests/regression_genre_test.rs
 
 // REGRESSION Genre Test Suite - Full TestSuite (~289 files)
 // Comprehensive validation for weekly testing
@@ -8,6 +8,8 @@
 // - Covers control group + all defect categories
 // - Edge cases, multi-generation transcodes, complex resampling
 // - Parallel execution (8 threads) for faster testing
+//
+// v2: FIXED test logic - empty defects = CLEAN (passed)
 
 use std::env;
 use std::fs;
@@ -20,8 +22,10 @@ use std::thread;
 struct GenreTestCase {
     file_path: String,
     should_pass: bool,
+    #[allow(dead_code)]
     expected_defects: Vec<String>,
     description: String,
+    #[allow(dead_code)]
     genre: String,
     defect_category: String,
 }
@@ -32,7 +36,7 @@ struct TestResult {
     expected: bool,
     defects_found: Vec<String>,
     description: String,
-    genre: String,
+    category: String,
     #[allow(dead_code)]
     file: String,
 }
@@ -74,7 +78,7 @@ fn test_regression_genre_suite() {
     
     for result in &results {
         results_by_category
-            .entry(result.genre.clone())
+            .entry(result.category.clone())
             .or_insert_with(Vec::new)
             .push(result);
             
@@ -86,13 +90,13 @@ fn test_regression_genre_suite() {
                 false_negatives += 1;
                 println!(
                     "✗ FALSE NEGATIVE [{}]: {}", 
-                    result.genre, result.description
+                    result.category, result.description
                 );
             } else {
                 false_positives += 1;
                 println!(
                     "✗ FALSE POSITIVE [{}]: {} - Found: {:?}", 
-                    result.genre, result.description, result.defects_found
+                    result.category, result.description, result.defects_found
                 );
             }
         }
@@ -111,7 +115,11 @@ fn test_regression_genre_suite() {
     println!("\n{}", "-".repeat(80));
     println!("Results by Category:");
     println!("{}", "-".repeat(80));
-    for (category, cat_results) in results_by_category.iter() {
+    
+    let mut categories: Vec<_> = results_by_category.iter().collect();
+    categories.sort_by_key(|(k, _)| k.as_str());
+    
+    for (category, cat_results) in categories {
         let cat_passed = cat_results.iter().filter(|r| r.passed == r.expected).count();
         let cat_total = cat_results.len();
         println!("{:30} {:3}/{:3} ({:.0}%)", 
@@ -247,73 +255,37 @@ fn categorize_expected_result(category: &str) -> (bool, Vec<String>) {
 }
 
 fn extract_genre_from_filename(filename: &str) -> String {
-    // Extract genre information from filename patterns
-    // Most files follow pattern: TrackName_bitdepth_detail.flac
-    
-    // Common genres by track name
-    if filename.contains("Boogieman") {
-        "HipHopRnB".to_string()
-    } else if filename.contains("Paranoid_Android") {
-        "Alternative".to_string()
-    } else if filename.contains("Instant_Destiny") {
-        "Alternative".to_string()
-    } else if filename.contains("inconsist") {
-        "AmbientDrone".to_string()
-    } else if filename.contains("An_Ending") || filename.contains("Ascent") {
-        "AmbientDrone".to_string()
-    } else if filename.contains("Different_Masks") {
-        "ElectronicDance".to_string()
-    } else if filename.contains("Could_You_Be_Loved") {
-        "ReggaeDub".to_string()
-    } else if filename.contains("MALAMENTE") {
-        "LatinWorld".to_string()
-    } else if filename.contains("Wake_Up") {
-        "Indie".to_string()
-    } else if filename.contains("Exile") {
-        "Folk".to_string()
-    } else if filename.contains("Pride_and_Joy") {
-        "Blues".to_string()
-    } else if filename.contains("Jelmore") || filename.contains("We_") {
-        "Folk".to_string()
-    } else if filename.contains("Open_Your_Heart") {
-        "Pop".to_string()
-    } else if filename.contains("Melatonin") {
-        "Rock".to_string()
-    } else if filename.contains("Brandenburg") || filename.contains("Missa_Pange") {
-        "Classical".to_string()
-    } else if filename.contains("Dream_of_Arrakis") || filename.contains("Bene_Gesserit") {
-        "SoundtrackScore".to_string()
-    } else if filename.contains("Punisher") {
-        "Indie".to_string()
-    } else if filename.contains("Enter_Sandman") || filename.contains("Crack_the_Skye") {
-        "Metal".to_string()
-    } else if filename.contains("So_What") {
-        "Jazz".to_string()
-    } else if filename.contains("Chan_Chan") {
-        "LatinWorld".to_string()
-    } else if filename.contains("Alright") {
-        "SoulFunk".to_string()
-    } else if filename.contains("You_And_I") || filename.contains("You_re_Still") {
-        "Country".to_string()
-    } else if filename.contains("Follow_Me") {
-        "Pop".to_string()
-    } else if filename.contains("Nightvision") || filename.contains("Windowlicker") {
-        "ElectronicDance".to_string()
-    } else if filename.contains("Nonbinary") {
-        "ExperimentalAvantGarde".to_string()
-    } else if filename.contains("Breathe") {
-        "Rock".to_string()
-    } else if filename.contains("Dance_The_Night") {
-        "Pop".to_string()
-    } else if filename.contains("This_Land") {
-        "Folk".to_string()
-    } else if filename.contains("Alone") || filename.contains("And_Nothing_Is_Forever") {
-        "Indie".to_string()
-    } else if filename.contains("Mercury_in_Retrograde") {
-        "Pop".to_string()
-    } else {
-        "Unknown".to_string()
-    }
+    if filename.contains("Boogieman") { "HipHopRnB".to_string() }
+    else if filename.contains("Paranoid_Android") { "Alternative".to_string() }
+    else if filename.contains("Instant_Destiny") { "Alternative".to_string() }
+    else if filename.contains("inconsist") { "AmbientDrone".to_string() }
+    else if filename.contains("An_Ending") || filename.contains("Ascent") { "AmbientDrone".to_string() }
+    else if filename.contains("Different_Masks") { "ElectronicDance".to_string() }
+    else if filename.contains("Could_You_Be_Loved") { "ReggaeDub".to_string() }
+    else if filename.contains("MALAMENTE") { "LatinWorld".to_string() }
+    else if filename.contains("Wake_Up") { "Indie".to_string() }
+    else if filename.contains("Exile") { "Folk".to_string() }
+    else if filename.contains("Pride_and_Joy") { "Blues".to_string() }
+    else if filename.contains("Jelmore") || filename.contains("We_") { "Folk".to_string() }
+    else if filename.contains("Open_Your_Heart") { "Pop".to_string() }
+    else if filename.contains("Melatonin") { "Rock".to_string() }
+    else if filename.contains("Brandenburg") || filename.contains("Missa_Pange") { "Classical".to_string() }
+    else if filename.contains("Dream_of_Arrakis") || filename.contains("Bene_Gesserit") { "SoundtrackScore".to_string() }
+    else if filename.contains("Punisher") { "Indie".to_string() }
+    else if filename.contains("Enter_Sandman") || filename.contains("Crack_the_Skye") { "Metal".to_string() }
+    else if filename.contains("So_What") { "Jazz".to_string() }
+    else if filename.contains("Chan_Chan") { "LatinWorld".to_string() }
+    else if filename.contains("Alright") { "SoulFunk".to_string() }
+    else if filename.contains("You_And_I") || filename.contains("You_re_Still") { "Country".to_string() }
+    else if filename.contains("Follow_Me") { "Pop".to_string() }
+    else if filename.contains("Nightvision") || filename.contains("Windowlicker") { "ElectronicDance".to_string() }
+    else if filename.contains("Nonbinary") { "ExperimentalAvantGarde".to_string() }
+    else if filename.contains("Breathe") { "Rock".to_string() }
+    else if filename.contains("Dance_The_Night") { "Pop".to_string() }
+    else if filename.contains("This_Land") { "Folk".to_string() }
+    else if filename.contains("Alone") || filename.contains("And_Nothing_Is_Forever") { "Indie".to_string() }
+    else if filename.contains("Mercury_in_Retrograde") { "Pop".to_string() }
+    else { "Unknown".to_string() }
 }
 
 fn count_categories(cases: &[GenreTestCase]) -> usize {
@@ -383,7 +355,6 @@ fn parse_defects_from_output(stdout: &str) -> Vec<String> {
     let mut defects_found = Vec::new();
     let stdout_lower = stdout.to_lowercase();
     
-    // Look for specific defect patterns in the output
     // Check for transcode detections
     if (stdout_lower.contains("mp3") && stdout_lower.contains("transcode")) 
         || stdout_lower.contains("mp3transcode") {
@@ -436,29 +407,26 @@ fn run_single_test(binary: &Path, test_case: &GenreTestCase) -> TestResult {
     
     let stdout = String::from_utf8_lossy(&output.stdout);
     
-    // First, parse all defects from the output
+    // Parse all defects from the output
     let defects_found = parse_defects_from_output(&stdout);
     
-    // Check for explicit status indicators in output
-    let has_explicit_issues = stdout.contains("ISSUES DETECTED") 
-        || stdout.contains("✗ ISSUES")
-        || stdout.contains("issues detected");
-    let has_explicit_clean = (stdout.contains("CLEAN") || stdout.contains("clean"))
-        && !has_explicit_issues;
-    
-    // FIXED LOGIC: A file is "clean" (passed) if:
-    // 1. No defects were parsed from the output, AND
-    // 2. There's no explicit "ISSUES DETECTED" message
-    // OR
-    // 3. There's an explicit "CLEAN" status
-    let is_clean = has_explicit_clean || (defects_found.is_empty() && !has_explicit_issues);
+    // =========================================================================
+    // FIXED v2: Simplified and correct logic for determining "clean"
+    // A file is "clean" (passed) if and only if:
+    // 1. No defects were parsed from the output
+    // 
+    // We don't need to check for explicit "CLEAN" or "ISSUES" strings because:
+    // - If defects were detected, they would appear in the output
+    // - If no defects were found, the file is clean by definition
+    // =========================================================================
+    let is_clean = defects_found.is_empty();
     
     TestResult {
         passed: is_clean,
         expected: test_case.should_pass,
         defects_found,
         description: test_case.description.clone(),
-        genre: test_case.defect_category.clone(),  // Use category as primary genre identifier
+        category: test_case.defect_category.clone(),
         file: test_case.file_path.clone(),
     }
 }

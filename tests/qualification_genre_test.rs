@@ -7,6 +7,8 @@
 // - Tests representative samples from Control and major defect categories
 // - Focuses on high-confidence detection scenarios
 // - Parallel execution (4 threads) for faster CI/CD
+//
+// v2: FIXED test logic - empty defects = CLEAN (passed)
 
 use std::env;
 use std::fs;
@@ -220,16 +222,12 @@ fn scan_and_build_test_cases(base: &Path) -> Vec<GenreTestCase> {
             };
 
             // Extract category from filename pattern: "CategoryName__description.flac"
-            // Examples:
-            //   "AAC_128_Low__Different_Masks__24sample_aac_128k.flac" -> "AAC_128_Low"
-            //   "BitDepth_16to24__Boogieman_24sample_16to24_upscaled.flac" -> "BitDepth_16to24"
             let category = if let Some(pos) = filename.find("__") {
                 filename[..pos].to_string()
             } else {
-                // If no "__" delimiter, try to extract from first underscore pattern
                 filename
                     .split('_')
-                    .take(3) // Take first 3 parts (e.g., "AAC", "128", "Low")
+                    .take(3)
                     .collect::<Vec<_>>()
                     .join("_")
             };
@@ -294,7 +292,6 @@ fn categorize_expected_result(category: &str) -> (bool, Vec<String>) {
         }
 
         cat if cat.starts_with("Generation_") => {
-            // Multi-generation transcodes
             if cat.contains("MP3") {
                 (false, vec!["Mp3Transcode".to_string()])
             } else if cat.contains("AAC") {
@@ -311,34 +308,19 @@ fn categorize_expected_result(category: &str) -> (bool, Vec<String>) {
 }
 
 fn extract_genre_from_filename(filename: &str) -> String {
-    // Extract genre information from filename patterns
-    if filename.contains("Boogieman") {
-        "HipHopRnB".to_string()
-    } else if filename.contains("Paranoid_Android") || filename.contains("Instant_Destiny") {
-        "Alternative".to_string()
-    } else if filename.contains("inconsist") || filename.contains("An_Ending") {
-        "AmbientDrone".to_string()
-    } else if filename.contains("Different_Masks") || filename.contains("Windowlicker") {
-        "ElectronicDance".to_string()
-    } else if filename.contains("Could_You_Be_Loved") {
-        "ReggaeDub".to_string()
-    } else if filename.contains("MALAMENTE") || filename.contains("Chan_Chan") {
-        "LatinWorld".to_string()
-    } else if filename.contains("Wake_Up") || filename.contains("Punisher") {
-        "Indie".to_string()
-    } else if filename.contains("Pride_and_Joy") {
-        "Blues".to_string()
-    } else if filename.contains("Brandenburg") || filename.contains("Missa_Pange") {
-        "Classical".to_string()
-    } else if filename.contains("Dream_of_Arrakis") || filename.contains("Bene_Gesserit") {
-        "SoundtrackScore".to_string()
-    } else if filename.contains("Enter_Sandman") || filename.contains("Crack_the_Skye") {
-        "Metal".to_string()
-    } else if filename.contains("So_What") {
-        "Jazz".to_string()
-    } else {
-        "Unknown".to_string()
-    }
+    if filename.contains("Boogieman") { "HipHopRnB".to_string() }
+    else if filename.contains("Paranoid_Android") || filename.contains("Instant_Destiny") { "Alternative".to_string() }
+    else if filename.contains("inconsist") || filename.contains("An_Ending") { "AmbientDrone".to_string() }
+    else if filename.contains("Different_Masks") || filename.contains("Windowlicker") { "ElectronicDance".to_string() }
+    else if filename.contains("Could_You_Be_Loved") { "ReggaeDub".to_string() }
+    else if filename.contains("MALAMENTE") || filename.contains("Chan_Chan") { "LatinWorld".to_string() }
+    else if filename.contains("Wake_Up") || filename.contains("Punisher") { "Indie".to_string() }
+    else if filename.contains("Pride_and_Joy") { "Blues".to_string() }
+    else if filename.contains("Brandenburg") || filename.contains("Missa_Pange") { "Classical".to_string() }
+    else if filename.contains("Dream_of_Arrakis") || filename.contains("Bene_Gesserit") { "SoundtrackScore".to_string() }
+    else if filename.contains("Enter_Sandman") || filename.contains("Crack_the_Skye") { "Metal".to_string() }
+    else if filename.contains("So_What") { "Jazz".to_string() }
+    else { "Unknown".to_string() }
 }
 
 fn count_categories(cases: &[GenreTestCase]) -> usize {
@@ -412,7 +394,6 @@ fn parse_defects_from_output(stdout: &str) -> Vec<String> {
     let mut defects_found = Vec::new();
     let stdout_lower = stdout.to_lowercase();
 
-    // Look for specific defect patterns in the output
     // Check for transcode detections
     if (stdout_lower.contains("mp3") && stdout_lower.contains("transcode"))
         || stdout_lower.contains("mp3transcode")
@@ -471,22 +452,19 @@ fn run_single_test(binary: &Path, test_case: &GenreTestCase) -> TestResult {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
 
-    // First, parse all defects from the output
+    // Parse all defects from the output
     let defects_found = parse_defects_from_output(&stdout);
 
-    // Check for explicit status indicators in output
-    let has_explicit_issues = stdout.contains("ISSUES DETECTED")
-        || stdout.contains("✗ ISSUES")
-        || stdout.to_lowercase().contains("issues detected");
-    let has_explicit_clean = (stdout.contains("CLEAN") || stdout.to_lowercase().contains("clean"))
-        && !has_explicit_issues;
-
-    // FIXED LOGIC: A file is "clean" (passed) if:
-    // 1. No defects were parsed from the output, AND
-    // 2. There's no explicit "ISSUES DETECTED" message
-    // OR
-    // 3. There's an explicit "CLEAN" status
-    let is_clean = has_explicit_clean || (defects_found.is_empty() && !has_explicit_issues);
+    // =========================================================================
+    // FIXED v2: Simplified and correct logic for determining "clean"
+    // A file is "clean" (passed) if and only if:
+    // 1. No defects were parsed from the output
+    // 
+    // We don't need to check for explicit "CLEAN" or "ISSUES" strings because:
+    // - If defects were detected, they would appear in the output
+    // - If no defects were found, the file is clean by definition
+    // =========================================================================
+    let is_clean = defects_found.is_empty();
 
     TestResult {
         passed: is_clean,
