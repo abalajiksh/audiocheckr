@@ -32,7 +32,7 @@ pub struct MfccAnalysis {
 }
 
 /// Analyze MFCC features
-pub fn analyze_mfcc(samples: &[f32], sample_rate: u32, params: &MfccParams) -> MfccAnalysis {
+pub fn analyze_mfcc(_samples: &[f32], _sample_rate: u32, _params: &MfccParams) -> MfccAnalysis {
     // Simplified MFCC - full implementation would use mel filterbank
     MfccAnalysis {
         coefficients: vec![],

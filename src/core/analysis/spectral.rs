@@ -28,7 +28,7 @@ pub struct SpectralSignature {
 /// Spectral analyzer with configurable parameters
 pub struct SpectralAnalyzer {
     fft_size: usize,
-    hop_size: usize,
+    _hop_size: usize,
     sample_rate: u32,
 }
 
@@ -36,12 +36,12 @@ impl SpectralAnalyzer {
     pub fn new(fft_size: usize, hop_size: usize, sample_rate: u32) -> Self {
         Self {
             fft_size,
-            hop_size,
+            _hop_size: hop_size,
             sample_rate,
         }
     }
     
-    pub fn analyze(&self, samples: &[f32]) -> SpectralAnalysis {
+    pub fn analyze(&self, _samples: &[f32]) -> SpectralAnalysis {
         // Basic spectral analysis
         let nyquist = self.sample_rate as f32 / 2.0;
         
@@ -54,6 +54,11 @@ impl SpectralAnalyzer {
             matched_signature: None,
             signature_confidence: 0.0,
         }
+    }
+    
+    /// Get FFT size
+    pub fn fft_size(&self) -> usize {
+        self.fft_size
     }
 }
 

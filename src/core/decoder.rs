@@ -82,7 +82,8 @@ pub fn decode_audio(path: &Path) -> Result<AudioData> {
         } else if let Some(bps) = track.codec_params.bits_per_coded_sample {
             (bps, true)
         } else {
-            let inferred = infer_bit_depth_from_codec(&track.codec_params);
+            // Infer from file extension as fallback
+            let inferred = infer_bit_depth_from_extension(path);
             (inferred, true)
         };
 
@@ -148,24 +149,23 @@ pub fn decode_audio(path: &Path) -> Result<AudioData> {
     })
 }
 
-/// Infer bit depth from codec parameters
-fn infer_bit_depth_from_codec(params: &symphonia::core::codecs::CodecParameters) -> u32 {
-    use symphonia::core::codecs::CodecType;
-    
-    match params.codec {
+/// Infer bit depth from file extension
+fn infer_bit_depth_from_extension(path: &Path) -> u32 {
+    match path.extension().and_then(|e| e.to_str()).map(|s| s.to_lowercase()).as_deref() {
         // Lossless formats - typically 16 or 24 bit
-        c if c == CodecType::FLAC => 24,
-        c if c == CodecType::ALAC => 24,
-        c if c == CodecType::PCM_S16LE || c == CodecType::PCM_S16BE => 16,
-        c if c == CodecType::PCM_S24LE || c == CodecType::PCM_S24BE => 24,
-        c if c == CodecType::PCM_S32LE || c == CodecType::PCM_S32BE => 32,
-        c if c == CodecType::PCM_F32LE || c == CodecType::PCM_F32BE => 32,
+        Some("flac") => 24,
+        Some("wav") => 24,
+        Some("aiff") | Some("aif") => 24,
+        Some("alac") | Some("m4a") => 24,
+        Some("ape") => 24,
+        Some("wv") => 24,
         
-        // Lossy formats - effectively 16-bit or less
-        c if c == CodecType::MP3 => 16,
-        c if c == CodecType::AAC => 16,
-        c if c == CodecType::VORBIS => 16,
-        c if c == CodecType::OPUS => 16,
+        // Lossy formats - effectively 16-bit or less precision
+        Some("mp3") => 16,
+        Some("aac") => 16,
+        Some("ogg") => 16,
+        Some("opus") => 16,
+        Some("wma") => 16,
         
         // Default assumption
         _ => 16,
@@ -259,5 +259,15 @@ mod tests {
         assert!((side[0] - 0.0).abs() < 0.001);
         assert!((mid[1] - 0.0).abs() < 0.001);
         assert!((side[1] - 0.5).abs() < 0.001);
+    }
+    
+    #[test]
+    fn test_infer_bit_depth() {
+        use std::path::PathBuf;
+        
+        assert_eq!(infer_bit_depth_from_extension(&PathBuf::from("test.flac")), 24);
+        assert_eq!(infer_bit_depth_from_extension(&PathBuf::from("test.mp3")), 16);
+        assert_eq!(infer_bit_depth_from_extension(&PathBuf::from("test.wav")), 24);
+        assert_eq!(infer_bit_depth_from_extension(&PathBuf::from("test.ogg")), 16);
     }
 }

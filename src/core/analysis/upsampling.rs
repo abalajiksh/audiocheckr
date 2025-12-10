@@ -80,13 +80,9 @@ pub fn detect_upsampling_ratio(samples: &[f32], sample_rate: u32) -> Option<f32>
     analysis.upsampling_ratio
 }
 
-fn check_spectral_null(samples: &[f32], sample_rate: u32, target_freq: f32) -> bool {
+fn check_spectral_null(_samples: &[f32], _sample_rate: u32, _target_freq: f32) -> bool {
     // Simplified check - in real implementation would use FFT
     // Look for energy drop at the target frequency
-    
-    if samples.len() < 4096 {
-        return false;
-    }
     
     // For now, return false (no upsampling detected)
     // Full implementation would analyze spectral content

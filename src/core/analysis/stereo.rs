@@ -15,7 +15,7 @@ pub struct StereoAnalysis {
 }
 
 /// Analyze stereo characteristics
-pub fn analyze_stereo(left: &[f32], right: &[f32], sample_rate: u32) -> StereoAnalysis {
+pub fn analyze_stereo(left: &[f32], right: &[f32], _sample_rate: u32) -> StereoAnalysis {
     if left.len() != right.len() || left.is_empty() {
         return StereoAnalysis::default();
     }

@@ -8,7 +8,7 @@ use super::analysis::{
     analyze_bit_depth, BitDepthAnalysis,
     analyze_upsampling, UpsamplingAnalysis,
     analyze_pre_echo, PreEchoAnalysis,
-    analyze_stereo, StereoAnalysis,
+    analyze_stereo,
 };
 
 /// Detection configuration

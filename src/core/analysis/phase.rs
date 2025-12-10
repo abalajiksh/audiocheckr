@@ -19,7 +19,7 @@ pub struct InstantaneousFrequencyAnalysis {
 }
 
 /// Analyze phase characteristics
-pub fn analyze_phase(samples: &[f32], sample_rate: u32) -> PhaseAnalysis {
+pub fn analyze_phase(_samples: &[f32], _sample_rate: u32) -> PhaseAnalysis {
     PhaseAnalysis {
         phase_coherence: 1.0,
         discontinuity_count: 0,
@@ -29,7 +29,7 @@ pub fn analyze_phase(samples: &[f32], sample_rate: u32) -> PhaseAnalysis {
 }
 
 /// Analyze instantaneous frequency
-pub fn analyze_instantaneous_frequency(samples: &[f32], sample_rate: u32) -> InstantaneousFrequencyAnalysis {
+pub fn analyze_instantaneous_frequency(_samples: &[f32], _sample_rate: u32) -> InstantaneousFrequencyAnalysis {
     InstantaneousFrequencyAnalysis {
         stability: 1.0,
         anomalies: 0,

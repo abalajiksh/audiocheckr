@@ -3,7 +3,7 @@
 //! Contains spectrogram generation and other visual representations
 //! of audio data.
 
-mod spectrogram;
+pub mod spectrogram;
 
 pub use spectrogram::{
     generate_spectrogram_image,

@@ -30,7 +30,7 @@ pub struct ChannelTruePeak {
 }
 
 /// Analyze true peak of mono signal
-pub fn analyze_true_peak(samples: &[f32], sample_rate: u32) -> TruePeakAnalysis {
+pub fn analyze_true_peak(samples: &[f32], _sample_rate: u32) -> TruePeakAnalysis {
     if samples.is_empty() {
         return TruePeakAnalysis::default();
     }
@@ -112,23 +112,27 @@ fn oversample_4x(samples: &[f32]) -> Vec<f32> {
         output[i * 4] = sample;
     }
     
-    // Interpolate using windowed sinc
+    // Interpolate intermediate samples
     for i in 0..samples.len() {
         for j in 1..4 {
             let frac = j as f32 / 4.0;
             let out_idx = i * 4 + j;
             
             let mut sum = 0.0f32;
+            let mut weight_sum = 0.0f32;
+            
             for k in -filter_len..=filter_len {
                 let src_idx = i as i32 + k;
                 if src_idx >= 0 && (src_idx as usize) < samples.len() {
                     let x = (k as f32 - frac) * PI;
                     let sinc = if x.abs() < 1e-6 { 1.0 } else { x.sin() / x };
                     let window = 0.5 * (1.0 + ((k as f32 - frac) * PI / filter_len as f32).cos());
-                    sum += samples[src_idx as usize] * sinc * window;
+                    let weight = sinc * window;
+                    sum += samples[src_idx as usize] * weight;
+                    weight_sum += weight.abs();
                 }
             }
-            output[out_idx] = sum;
+            output[out_idx] = if weight_sum > 0.0 { sum / weight_sum * 4.0 } else { 0.0 };
         }
     }
     
