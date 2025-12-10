@@ -1,4 +1,4 @@
-# Audio Quality Checker v0.2.4
+# AudioCheckr v0.3.0
 
 Advanced audio analysis tool for detecting fake lossless files, transcodes, upsampled audio, and various audio quality issues. Uses pure DSP algorithms - no machine learning.
 
@@ -14,108 +14,81 @@ Advanced audio analysis tool for detecting fake lossless files, transcodes, upsa
 - **True Peak Analysis**: ITU-R BS.1770 compliant true peak measurement
 - **Spectral Artifacts**: Detects unusual spectral patterns and notches
 
-### v0.2.4 Improvements
+### v0.3.0 - Major Restructure
 
+This release introduces a **modular architecture** to support future features like web UI, continuous monitoring, and API integrations.
+
+**New Features:**
+- **Genre-Aware Detection Profiles**: Reduce false positives with presets for Electronic, Classical, Ambient, Podcast, etc.
+- **Modular Codebase**: Clean separation of core analysis, CLI, configuration, and detection result handling
+- **Profile Builder API**: Create custom detection profiles programmatically
+- **Confidence Modifiers**: Per-detector sensitivity adjustment with suppression options
+
+**Architecture Changes:**
+- Reorganized into `core/`, `cli/`, `config/`, and `detection/` modules
+- Analysis algorithms split into dedicated files (spectral, bit_depth, upsampling, etc.)
+- DSP utilities consolidated in `core/dsp/`
+- Visualization tools in `core/visualization/`
+
+### Previous Versions
+
+<details>
+<summary>v0.2.x Changelog</summary>
+
+#### v0.2.4
 Better detector, results on the way.
 
-### v0.2.3 Improvements
+#### v0.2.3
+Minor parameter adjustments to `detector.rs` to not flag clean source files. Jenkins fixes.
 
-Some minor parameter adjustments to `detector.rs`to not flag clean source files. And a lot of Jenkins file screwups fixed.
+#### v0.2.2
+Fixed test case logic with `is_clean || is_lossless` to just `is_clean` for better reporting.
 
-### v0.2.2 Improvements
-
-Fixed the problematic test case logic with `is_clean || is_lossless` to just `is_clean` for better reporting.
-
-### v0.2.1 Improvements
-
+#### v0.2.1
 **Fixed false positives on high sample rate files (88.2kHz+)**
 
-The previous version used ratio-based detection (cutoff / Nyquist) which caused massive false positive rates on high-res files. For example, a genuine 96kHz file with content up to 20kHz has a cutoff ratio of only 42% - well below the old 85% threshold.
+The previous version used ratio-based detection which caused false positives on high-res files. The new algorithm uses **absolute frequency thresholds** for high sample rate files and requires **positive codec identification** before flagging.
+</details>
 
-The new algorithm:
-- Uses **absolute frequency thresholds** for high sample rate files (≥88.2kHz)
-- Treats content up to 22kHz as normal for any sample rate
-- Requires **positive codec identification** (brick-wall, steepness, shelf pattern) before flagging
-- **No default fallback** - if a codec can't be positively identified, the file isn't flagged
-- Maintains ratio-based detection for standard sample rates (44.1/48kHz)
+---
 
-### Analysis Methods
+## Project Structure
 
-Each detection uses multiple algorithms with confidence scoring:
+```
+src/
+├── lib.rs                    # Library entry point
+├── main.rs                   # CLI entry point
+├── core/                     # Audio analysis engine
+│   ├── mod.rs
+│   ├── analyzer.rs           # High-level API (AudioAnalyzer, AnalyzerBuilder)
+│   ├── decoder.rs            # Audio decoding (Symphonia)
+│   ├── detector.rs           # Quality detection orchestration
+│   ├── analysis/             # Detection algorithms
+│   │   ├── bit_depth.rs      # Fake 24-bit detection (4 methods)
+│   │   ├── spectral.rs       # Frequency cutoff & codec signatures
+│   │   ├── upsampling.rs     # Upsampling detection
+│   │   ├── stereo.rs         # Stereo field analysis
+│   │   ├── transients.rs     # Pre-echo detection
+│   │   ├── phase.rs          # Phase discontinuity analysis
+│   │   ├── true_peak.rs      # ITU-R BS.1770 true peak
+│   │   └── mfcc.rs           # MFCC codec fingerprinting
+│   ├── dsp/                  # DSP utilities
+│   │   ├── fft.rs            # FFT processing with windowing
+│   │   ├── windows.rs        # Hann, Hamming, Blackman, Kaiser
+│   │   ├── filters.rs        # Pre-emphasis, sinc interpolation
+│   │   └── stats.rs          # RMS, spectral features, etc.
+│   └── visualization/        # Visual output
+│       └── spectrogram.rs    # Mel/linear spectrogram generation
+├── cli/                      # Command-line interface
+│   ├── args.rs               # Argument parsing (clap)
+│   └── output.rs             # Report formatting
+├── config/                   # Configuration
+│   └── profiles.rs           # Genre-aware detection profiles
+└── detection/                # Detection results
+    └── result.rs             # Profile-aware result types
+```
 
-#### Spectral Analysis (`spectral.rs`)
-- **Multi-frame FFT**: Analyzes 30 frames spread across the track (not just one window)
-- **Derivative-based cutoff detection**: Finds where spectrum "falls off a cliff"
-- **Rolloff steepness measurement**: dB/octave calculation
-- **Brick-wall detection**: Sharp cutoffs characteristic of MP3
-- **Shelf pattern detection**: Characteristic of AAC encoding
-- **Encoder signature matching**: Compares against known codec signatures
-
-#### Transcode Detection (`detector.rs`)
-
-**For high sample rate files (88.2kHz+):**
-
-| Cutoff Frequency | Evidence Required | Rationale |
-|------------------|-------------------|-----------|
-| > 22 kHz | None - pass | Normal high-res content |
-| 20-22 kHz | Brick-wall AND >80 dB/oct | Could be MP3 320k or natural |
-| 18-20 kHz | Brick-wall OR >60 dB/oct | Suspicious but needs evidence |
-| 15-18 kHz | 2+ signals (brick-wall, steepness, shelf) | More suspicious |
-| 10-15 kHz | Codec-specific signature | Low content, check for codec |
-| < 10 kHz | Brick-wall required | Very suspicious if sharp cutoff |
-
-**For standard sample rates (44.1/48kHz):**
-
-| Cutoff Ratio | Evidence Required |
-|--------------|-------------------|
-| ≥ 80% | None - pass |
-| 70-80% | Brick-wall OR >40 dB/oct |
-| < 70% | Flag with ratio-based confidence |
-
-**Codec Classification (must match one to flag):**
-- **MP3**: Brick-wall + steepness >50 dB/oct, cutoff 15-20.5 kHz
-- **AAC**: Shelf pattern detected
-- **Opus**: Brick-wall at specific frequencies (8kHz, 12kHz, 20kHz modes)
-- **Vorbis**: Soft rolloff (15-45 dB/oct), no brick-wall, cutoff 12-19 kHz, quality ≤6
-
-#### Bit Depth Analysis (`bit_depth.rs`)
-Four independent detection methods:
-1. **LSB Precision Analysis**: Examines trailing zeros in 24-bit scaled samples
-2. **Histogram Analysis**: Counts unique values at 16-bit vs 24-bit quantization
-3. **Quantization Noise Analysis**: Measures noise floor in quiet sections
-4. **Value Clustering Analysis**: Checks if values cluster on 256-multiples
-
-Results are combined using weighted voting for robust detection.
-
-#### Upsampling Detection (`upsampling.rs`)
-Three detection methods:
-1. **Spectral Method**: Compares frequency cutoff to original Nyquist frequencies
-2. **Null Test**: Downsample → upsample and compare spectra
-3. **Inter-sample Peak Analysis**: True high-res has inter-sample peaks; upsampled doesn't
-
-#### Stereo Analysis (`stereo.rs`)
-- Stereo width measurement (M/S energy ratio)
-- Channel correlation calculation
-- Frequency-dependent stereo width analysis
-- Joint stereo detection via HF stereo reduction
-
-#### Pre-Echo Analysis (`transients.rs`)
-- Transient detection using envelope following
-- Pre-transient energy measurement
-- MDCT window size pattern detection (for MP3 ~25ms)
-- Frame boundary artifact detection
-
-#### Phase Analysis (`phase.rs`)
-- Phase coherence between consecutive frames
-- Phase discontinuity scoring
-- Instantaneous frequency deviation analysis
-
-#### True Peak Analysis (`true_peak.rs`)
-- 4x oversampling via sinc interpolation
-- Inter-sample over detection
-- Clipping detection
-- Dynamic range estimation (percentile method)
-- Crest factor calculation
+---
 
 ## Installation
 
@@ -127,6 +100,8 @@ Or build manually:
 ```bash
 cargo build --release
 ```
+
+---
 
 ## Usage
 
@@ -145,7 +120,38 @@ audiocheckr -i audio.flac -s
 audiocheckr -i audio.flac -u --stereo --transients --phase -v
 ```
 
+### Genre-Aware Profiles (New in v0.3.0)
+
+```bash
+# Use electronic profile (tolerates sharp cutoffs, disables pre-echo)
+audiocheckr -i edm_track.flac --profile electronic
+
+# Use noise/ambient profile (full-spectrum tolerance)
+audiocheckr -i drone_album/ --profile noise
+
+# Use classical profile (strict dynamic range checking)
+audiocheckr -i symphony.flac --profile classical
+
+# Show findings that were suppressed by the profile
+audiocheckr -i file.flac --profile electronic --show-suppressed
+
+# Disable specific detectors manually
+audiocheckr -i file.flac --disable pre_echo,upsampling
+```
+
+### Available Profiles
+
+| Profile | Use Case | Key Adjustments |
+|---------|----------|-----------------|
+| `standard` | General music | Balanced defaults |
+| `highres` | Verified hi-res sources | Reduced cutoff sensitivity |
+| `electronic` | EDM, synthwave, electronic | Tolerates sharp cutoffs, disables pre-echo |
+| `noise` | Ambient, drone, noise | Full-spectrum tolerance, disabled upsampling detection |
+| `classical` | Orchestral, acoustic | Strict bit depth and dynamic range |
+| `podcast` | Speech, voice content | Only bit depth and codec signature active |
+
 ### Command Line Options
+
 ```
 OPTIONS:
     -i, --input <PATH>        Input file or directory [default: .]
@@ -162,23 +168,103 @@ OPTIONS:
         --json                Output as JSON
     -q, --quick               Skip slower analyses
         --min-confidence <N>  Minimum confidence threshold [default: 0.5]
+        --profile <NAME>      Detection profile (standard, highres, electronic, noise, classical, podcast)
+        --disable <LIST>      Disable specific detectors (comma-separated)
+        --show-suppressed     Show findings suppressed by profile
 ```
 
-### Examples
+---
 
-```bash
-# Quick check for transcodes
-audiocheckr -i album/ -q
+## Library Usage
 
-# Full analysis with spectrogram
-audiocheckr -i "track.flac" -s -u --stereo --transients -v
+### Quick Check
 
-# Batch analysis with JSON output
-audiocheckr -i music_library/ --json > results.json
+```rust
+use audiocheckr::core::{AudioAnalyzer, DetectionConfig};
+use std::path::Path;
 
-# Check if upsampled from CD quality
-audiocheckr -i hi-res-album/ -u -v
+// Simple analysis with defaults
+let analyzer = AudioAnalyzer::new(Path::new("audio.flac"))?;
+let report = analyzer.analyze()?;
+
+println!("Quality score: {:.0}%", report.quality_score * 100.0);
+println!("Likely lossless: {}", report.is_likely_lossless);
+
+for defect in &report.defects {
+    println!("Defect: {:?} (confidence: {:.0}%)", 
+        defect.defect_type, defect.confidence * 100.0);
+}
 ```
+
+### Builder Pattern
+
+```rust
+use audiocheckr::core::{AudioAnalyzer, AnalyzerBuilder};
+
+let analyzer = AnalyzerBuilder::new()
+    .expected_bit_depth(24)
+    .check_upsampling(true)
+    .check_stereo(true)
+    .check_transients(true)
+    .check_phase(false)  // Skip slower analysis
+    .min_confidence(0.6)
+    .build(Path::new("audio.flac"))?;
+
+let report = analyzer.analyze()?;
+```
+
+### Genre-Aware Profiles
+
+```rust
+use audiocheckr::config::{ProfileConfig, ProfilePreset, ProfileBuilder, DetectorType};
+
+// Use a preset
+let electronic_profile = ProfileConfig::from_preset(ProfilePreset::Electronic);
+
+// Or build a custom profile
+let custom_profile = ProfileBuilder::new()
+    .name("My Studio Profile")
+    .description("Custom profile for my workflow")
+    .global_sensitivity(0.9)
+    .min_confidence(0.6)
+    .disable_detector(DetectorType::PreEcho)
+    .detector_multiplier(DetectorType::SpectralCutoff, 0.7)
+    .suppress_detector(DetectorType::StereoField)  // Show but don't affect verdict
+    .build();
+
+// Check adjusted confidence
+let raw_confidence = 0.8;
+let adjusted = custom_profile.adjust_confidence(DetectorType::SpectralCutoff, raw_confidence);
+```
+
+### Profile-Aware Results
+
+```rust
+use audiocheckr::detection::{AnalysisResult, RawDetection, Severity};
+use audiocheckr::config::{ProfileConfig, ProfilePreset, DetectorType};
+
+// Raw detections from analysis
+let raw_detections = vec![
+    RawDetection {
+        detector: DetectorType::SpectralCutoff,
+        raw_confidence: 0.75,
+        severity: Severity::Warning,
+        summary: "Frequency cutoff at 16kHz".to_string(),
+        evidence: vec!["Sharp rolloff detected".to_string()],
+        data: serde_json::Value::Null,
+    },
+];
+
+// Apply profile to get final result
+let profile = ProfileConfig::from_preset(ProfilePreset::Electronic);
+let result = AnalysisResult::from_detections(raw_detections, &profile);
+
+println!("Verdict: {:?}", result.verdict);
+println!("Active findings: {}", result.active_findings.len());
+println!("Suppressed findings: {}", result.suppressed_findings.len());
+```
+
+---
 
 ## Output Interpretation
 
@@ -187,6 +273,16 @@ audiocheckr -i hi-res-album/ -u -v
 - **70-90%**: Possibly lossless but has some issues
 - **50-70%**: Suspicious - likely transcoded
 - **0-50%**: Almost certainly transcoded
+
+### Verdict (New in v0.3.0)
+
+| Verdict | Meaning |
+|---------|---------|
+| `Lossless` | High confidence genuine lossless |
+| `ProbablyLossless` | Likely lossless, minor uncertainty |
+| `Uncertain` | Manual review recommended |
+| `ProbablyLossy` | Likely transcoded or has issues |
+| `Lossy` | High confidence transcoded or fake |
 
 ### Defect Types
 
@@ -205,96 +301,134 @@ audiocheckr -i hi-res-album/ -u -v
 | Clipping | Samples at/above full scale |
 | Inter-Sample Overs | True peak exceeds 0 dBFS |
 
+---
+
 ## Algorithm Details
 
-### Frequency Cutoff Detection
+### Analysis Methods
 
-The detector uses a derivative-based approach:
+Each detection uses multiple algorithms with confidence scoring:
 
-1. Compute 30 FFT frames spread across the track
-2. Convert to dB scale and smooth
-3. Starting from high frequencies, find where signal rises above noise floor
-4. Check for "cliff" patterns (sharp drops over one octave)
-5. Use median of all frames to reject outliers
+#### Spectral Analysis (`core/analysis/spectral.rs`)
+- **Multi-frame FFT**: Analyzes 30 frames spread across the track
+- **Derivative-based cutoff detection**: Finds where spectrum "falls off a cliff"
+- **Rolloff steepness measurement**: dB/octave calculation
+- **Brick-wall detection**: Sharp cutoffs characteristic of MP3
+- **Shelf pattern detection**: Characteristic of AAC encoding
+- **Encoder signature matching**: Compares against known codec signatures
 
-This is more robust than single-frame analysis which can miss quiet passages or be fooled by transients.
+#### Bit Depth Analysis (`core/analysis/bit_depth.rs`)
+Four independent detection methods with weighted voting:
+1. **LSB Precision Analysis**: Examines trailing zeros in 24-bit scaled samples
+2. **Histogram Analysis**: Counts unique values at 16-bit vs 24-bit quantization
+3. **Quantization Noise Analysis**: Measures noise floor in quiet sections
+4. **Value Clustering Analysis**: Checks if values cluster on 256-multiples
 
-### High Sample Rate Handling (v0.2.1)
+#### Upsampling Detection (`core/analysis/upsampling.rs`)
+- **Spectral Method**: Compares frequency cutoff to original Nyquist frequencies
+- **Null Test**: Downsample → upsample and compare spectra
+- **Inter-sample Peak Analysis**: True high-res has inter-sample peaks
 
-**The Problem:** At 96kHz sample rate, Nyquist is 48kHz. Music content naturally stops around 20kHz (human hearing limit), giving a cutoff ratio of only 42%. The old 85% threshold flagged everything.
+#### Stereo Analysis (`core/analysis/stereo.rs`)
+- Stereo width measurement (M/S energy ratio)
+- Channel correlation calculation
+- Joint stereo detection via HF stereo reduction
 
-**The Solution:** For files ≥88.2kHz, use absolute frequency thresholds:
-- Content to 22kHz is **normal** regardless of sample rate
-- Require **codec-specific evidence** (brick-wall, steepness pattern, shelf) to flag
-- Never flag based on cutoff alone
-- No default "must be Vorbis" fallback
+#### Pre-Echo Analysis (`core/analysis/transients.rs`)
+- Transient detection using envelope following
+- Pre-transient energy measurement
+- MDCT window size pattern detection
 
-### Bit Depth Detection
+#### Phase Analysis (`core/analysis/phase.rs`)
+- Phase coherence between consecutive frames
+- Phase discontinuity scoring
 
-The four-method approach handles edge cases:
+#### True Peak Analysis (`core/analysis/true_peak.rs`)
+- 4x oversampling via sinc interpolation
+- Inter-sample over detection
+- ITU-R BS.1770 compliant measurement
 
-```
-LSB Analysis: Checks if lower 8 bits of 24-bit samples are meaningful
-             16-bit upscaled → many samples with 8+ trailing zeros
-             True 24-bit → varied LSB patterns
+### Transcode Detection Logic
 
-Histogram:   True 24-bit has ~256x more unique values than 16-bit
-             Ratio close to 1 = definitely 16-bit padded
+**For high sample rate files (88.2kHz+):**
 
-Noise Floor: True 24-bit has noise floor around -144 dBFS
-             16-bit has noise floor around -96 dBFS
+| Cutoff Frequency | Evidence Required | Rationale |
+|------------------|-------------------|-----------|
+| > 22 kHz | None - pass | Normal high-res content |
+| 20-22 kHz | Brick-wall AND >80 dB/oct | Could be MP3 320k or natural |
+| 18-20 kHz | Brick-wall OR >60 dB/oct | Suspicious but needs evidence |
+| 15-18 kHz | 2+ signals | More suspicious |
+| < 15 kHz | Codec-specific signature | Check for codec patterns |
 
-Clustering:  16-bit padded → values cluster on multiples of 256
-             True 24-bit → uniform distribution of LSBs
-```
+**For standard sample rates (44.1/48kHz):**
 
-### Pre-Echo Detection
+| Cutoff Ratio | Evidence Required |
+|--------------|-------------------|
+| ≥ 80% | None - pass |
+| 70-80% | Brick-wall OR >40 dB/oct |
+| < 70% | Flag with ratio-based confidence |
 
-MP3/AAC use MDCT which spreads energy across a ~25ms window. Before transients, this creates audible "pre-echo":
+---
 
-1. Find transients via envelope analysis
-2. Measure energy in 25ms window before each transient
-3. Compare to earlier reference windows
-4. High ratio = pre-echo present
+## DSP Utilities (`core/dsp/`)
 
-### Encoder Signatures
+The DSP module provides reusable signal processing functions:
 
-Known characteristics:
-- **MP3**: Brick-wall cutoff, ~15-20kHz depending on bitrate, steep rolloff (>50 dB/oct)
-- **AAC**: Softer rolloff, often shows "shelf" pattern before cutoff
-- **Vorbis**: Variable cutoff, smoother rolloff (15-45 dB/oct), no brick-wall
-- **Opus**: Very sharp cutoff at specific frequencies (8kHz, 12kHz, 20kHz modes)
-
-## Library Usage
-
+### FFT Processing (`fft.rs`)
 ```rust
-use audiocheckr::{AudioAnalyzer, AnalyzerBuilder, is_likely_lossless};
-use std::path::Path;
+use audiocheckr::core::dsp::{FftProcessor, WindowType};
 
-// Quick check
-let is_lossless = is_likely_lossless(Path::new("audio.flac"))?;
-
-// Full analysis
-let analyzer = AudioAnalyzer::new(Path::new("audio.flac"))?;
-let report = analyzer.analyze()?;
-
-println!("Quality score: {:.0}%", report.quality_score * 100.0);
-println!("Likely lossless: {}", report.is_likely_lossless);
-
-for defect in &report.defects {
-    println!("Defect: {:?} (confidence: {:.0}%)", 
-        defect.defect_type, defect.confidence * 100.0);
-}
-
-// Builder pattern for custom configuration
-let analyzer = AnalyzerBuilder::new()
-    .expected_bit_depth(24)
-    .check_upsampling(true)
-    .check_stereo(true)
-    .check_transients(true)
-    .min_confidence(0.6)
-    .build(Path::new("audio.flac"))?;
+let mut fft = FftProcessor::new(4096, WindowType::Hann);
+let magnitudes = fft.magnitude_spectrum(&samples);
+let power_db = fft.power_spectrum_db(&samples);
 ```
+
+### Window Functions (`windows.rs`)
+- Hann, Hamming, Blackman, Blackman-Harris, FlatTop
+- Kaiser with configurable beta parameter
+
+### Filters (`filters.rs`)
+- Pre-emphasis / de-emphasis
+- Sinc interpolation upsampling
+- Simple downsampling with anti-aliasing
+
+### Statistical Functions (`stats.rs`)
+- RMS, peak amplitude, dB conversion
+- Envelope computation, transient detection
+- Spectral centroid, spread, flatness, rolloff, flux, contrast
+- Zero-crossing rate, autocorrelation
+
+---
+
+## CI/CD Pipeline
+
+AudioCheckr uses Jenkins for continuous integration with multiple test types:
+
+| Test Type | Trigger | Files | Purpose |
+|-----------|---------|-------|---------|
+| **Qualification** | Every push | ~20 files | Quick validation |
+| **Qualification Genre** | Every push | ~50 files | Genre-specific quick tests |
+| **Regression** | Weekly | ~80 files | Comprehensive ground truth |
+| **Regression Genre** | Manual | ~289 files | Full genre coverage |
+| **Diagnostic** | Manual | Full suite | Debug false positives |
+
+### Running Tests Locally
+
+```bash
+# Build first
+cargo build --release
+
+# Run qualification tests (requires TestFiles/)
+cargo test --test qualification_test -- --nocapture
+
+# Run genre tests (requires GenreTestSuiteLite/)
+cargo test --test qualification_genre_test -- --nocapture
+
+# Run all tests
+cargo test -- --nocapture
+```
+
+---
 
 ## Technical Notes
 
@@ -302,20 +436,19 @@ let analyzer = AnalyzerBuilder::new()
 
 1. **Short-Time Fourier Transform (STFT)**: Time-frequency analysis
 2. **Mel Filterbank**: Perceptually-motivated frequency scale
-3. **Windowing**: Hann, Blackman-Harris windows for spectral leakage reduction
-4. **Pre-emphasis**: High-frequency boost for better visualization
+3. **Windowing**: Hann, Blackman-Harris for spectral leakage reduction
+4. **Pre-emphasis**: High-frequency boost for visualization
 5. **Sinc Interpolation**: Band-limited upsampling
 6. **Hilbert Transform Approximation**: Envelope extraction
-7. **Phase Vocoder Principles**: Instantaneous frequency analysis
-8. **ITU-R BS.1770**: True peak measurement standard
+7. **ITU-R BS.1770**: True peak measurement standard
 
 ### Limitations
 
-- **High-quality transcodes**: Very high bitrate lossy (320kbps MP3, 256kbps AAC) may not be detectable
-- **Sophisticated upsampling**: Modern resamplers with steep anti-aliasing may fool the detector
+- **High-quality transcodes**: Very high bitrate lossy (320kbps MP3) may not be detectable
+- **Sophisticated upsampling**: Modern resamplers may fool the detector
 - **Short files**: Less reliable on clips under 5 seconds
-- **Synthesized audio**: Electronic music may show unusual but legitimate spectral characteristics
-- **Naturally band-limited content**: Some recordings (old jazz, classical, ambient) legitimately have limited high-frequency content
+- **Synthesized audio**: Electronic music may show unusual but legitimate characteristics
+- **Naturally band-limited**: Some recordings legitimately have limited HF content
 
 ### Performance
 
@@ -324,17 +457,24 @@ let analyzer = AnalyzerBuilder::new()
 - Spectrogram generation adds ~1-3 seconds
 - Memory usage: ~100MB for typical 5-minute track
 
-## Changelog
+---
 
-### v0.2.1
-- **Fixed**: False positives on high sample rate files (88.2kHz, 96kHz, 176.4kHz, 192kHz)
-- **Changed**: Use absolute frequency thresholds instead of ratio-based for high-res files
-- **Changed**: Require positive codec identification before flagging transcodes
-- **Removed**: Default "Vorbis" fallback for unidentified cutoffs
-- **Improved**: More conservative thresholds for borderline cases
+## Migration from v0.2.x
 
-### v0.2.0
-- Initial release with comprehensive audio analysis
+If upgrading from v0.2.x, note these breaking changes:
+
+1. **Import paths changed**: 
+   - Old: `use audiocheckr::bit_depth::*`
+   - New: `use audiocheckr::core::analysis::bit_depth::*`
+
+2. **Library re-exports**: Common types are now available at crate root:
+   ```rust
+   use audiocheckr::{AudioAnalyzer, ProfileConfig, ProfilePreset};
+   ```
+
+3. **New dependencies**: The profile system uses `serde_json` for machine-readable data
+
+---
 
 ## Building from Source
 
@@ -348,9 +488,13 @@ cd audiocheckr
 cargo build --release
 ```
 
+---
+
 ## License
 
 GNU Affero General Public License v3.0 (AGPL-3.0)
+
+---
 
 ## References
 
