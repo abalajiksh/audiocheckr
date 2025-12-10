@@ -1,9 +1,9 @@
 // src/main.rs
 //
-// Audio Quality Checker - Detect fake lossless, transcodes, and upsampled audio.
-// Uses advanced DSP techniques for comprehensive audio analysis.
-
-#![allow(dead_code)] // Binary uses different subset than library
+// AudioCheckr CLI - Detect fake lossless, transcodes, and upsampled audio.
+// 
+// This is a thin CLI wrapper around the audiocheckr library.
+// All analysis logic lives in the `core` module.
 
 use anyhow::Result;
 use clap::Parser;
@@ -11,26 +11,14 @@ use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 use colorful::Colorful;
 
-mod analyzer;
-mod decoder;
-mod dsp;
-mod spectrogram;
-mod spectral;
-mod bit_depth;
-mod stereo;
-mod transients;
-mod phase;
-mod upsampling;
-mod true_peak;
-mod mfcc;
-mod detector;
-
-use analyzer::AudioAnalyzer;
-use detector::{QualityReport, DetectedDefect, DefectType, DetectionConfig};
+// Use the library modules
+use audiocheckr::core::{
+    AudioAnalyzer, QualityReport, DetectedDefect, DefectType, DetectionConfig,
+};
 
 #[derive(Parser, Debug)]
 #[command(name = "audiocheckr")]
-#[command(version = "0.2.0")]
+#[command(version = "0.3.0")]
 #[command(about = "Detect fake lossless, transcodes, and upsampled audio files with advanced spectral analysis")]
 struct Args {
     /// Input file or directory (defaults to current directory)
@@ -274,7 +262,8 @@ fn print_report(report: &QualityReport, verbose: bool) {
             
             if verbose {
                 for evidence in &defect.evidence {
-                    println!("      - {}", evidence.clone().dark_gray());
+                    let evidence_display = evidence.clone();
+                    println!("      - {}", evidence_display.dark_gray());
                 }
             }
         }

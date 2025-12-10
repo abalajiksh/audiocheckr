@@ -1,79 +1,62 @@
-// src/lib.rs
-//
-// Audio Quality Checker Library
-// Detect fake lossless, transcodes, and upsampled audio using advanced DSP.
+//! AudioCheckr - Detect fake lossless audio files
+//!
+//! A sophisticated audio analysis tool that detects fake lossless files,
+//! transcoding artifacts, and quality issues using advanced DSP techniques.
+//!
+//! ## Features
+//!
+//! - **Genre-aware detection profiles**: Adjust sensitivity based on audio type
+//! - **Multiple detectors**: Spectral analysis, pre-echo, bit depth, upsampling, etc.
+//! - **Confidence scoring**: Profile-adjusted confidence with suppression for edge cases
+//! - **Flexible CLI**: Profiles, individual overrides, and verbose debugging
+//!
+//! ## Module Structure
+//!
+//! - `core` - Audio analysis algorithms and DSP utilities
+//! - `cli` - Command-line interface
+//! - `config` - Detection profiles and configuration
+//! - `detection` - Detection result types
+//!
+//! ## Quick Start
+//!
+//! ```rust,ignore
+//! use audiocheckr::core::{AudioAnalyzer, DetectionConfig};
+//! use audiocheckr::config::{ProfileConfig, ProfilePreset};
+//!
+//! // Use a preset profile
+//! let profile = ProfileConfig::from_preset(ProfilePreset::Electronic);
+//!
+//! // Analyze a file
+//! let analyzer = AudioAnalyzer::new(path)?;
+//! let report = analyzer.analyze()?;
+//!
+//! println!("Quality score: {:.0}%", report.quality_score * 100.0);
+//! ```
+//!
+//! ## Detection Profiles
+//!
+//! | Profile    | Use Case                          | Key Adjustments                    |
+//! |------------|-----------------------------------|-----------------------------------|
+//! | Standard   | General music                     | Balanced defaults                 |
+//! | HighRes    | Verified hi-res sources           | Reduced cutoff sensitivity        |
+//! | Electronic | EDM, synthwave                    | Tolerates sharp cutoffs           |
+//! | Noise      | Ambient, drone, noise             | Full-spectrum tolerance           |
+//! | Classical  | Orchestral, acoustic              | Strict dynamic range              |
+//! | Podcast    | Speech, voice content             | Limited detectors enabled         |
 
-#![allow(dead_code)] // Many items are part of the public API even if not used internally
+// Core analysis functionality
+pub mod core;
 
-pub mod analyzer;
-pub mod decoder;
-pub mod dsp;
-pub mod spectrogram;
-pub mod spectral;
-pub mod bit_depth;
-pub mod stereo;
-pub mod transients;
-pub mod phase;
-pub mod upsampling;
-pub mod true_peak;
-pub mod mfcc;
-pub mod detector;
+// Command-line interface
+pub mod cli;
 
-// Re-export main types for convenience
-pub use analyzer::{AudioAnalyzer, AnalyzerBuilder, FileInfo};
-pub use decoder::AudioData;
-pub use detector::{
-    QualityReport, DetectedDefect, DefectType, DetectionConfig,
-    detect_quality_issues,
-};
-pub use spectral::SpectralAnalysis;
-pub use bit_depth::BitDepthAnalysis;
-pub use stereo::StereoAnalysis;
-pub use transients::{PreEchoAnalysis, FrameBoundaryAnalysis};
-pub use phase::PhaseAnalysis;
-pub use upsampling::UpsamplingAnalysis;
-pub use true_peak::TruePeakAnalysis;
-pub use mfcc::MfccAnalysis;
+// Configuration and profiles
+pub mod config;
 
-/// Version information
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+// Detection result types
+pub mod detection;
 
-/// Quick analysis - check if a file is likely lossless
-/// 
-/// # Example
-/// ```ignore
-/// use audio_quality_checker::is_likely_lossless;
-/// use std::path::Path;
-/// 
-/// let result = is_likely_lossless(Path::new("audio.flac"));
-/// println!("Likely lossless: {:?}", result);
-/// ```
-pub fn is_likely_lossless(path: &std::path::Path) -> anyhow::Result<bool> {
-    let analyzer = AudioAnalyzer::new(path)?;
-    analyzer.is_likely_lossless()
-}
-
-/// Analyze audio file with default settings
-/// 
-/// # Example
-/// ```ignore
-/// use audio_quality_checker::analyze_file;
-/// use std::path::Path;
-/// 
-/// let report = analyze_file(Path::new("audio.flac"))?;
-/// println!("Quality score: {}", report.quality_score);
-/// ```
-pub fn analyze_file(path: &std::path::Path) -> anyhow::Result<QualityReport> {
-    let analyzer = AudioAnalyzer::new(path)?;
-    analyzer.analyze()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_version() {
-        assert!(!VERSION.is_empty());
-    }
-}
+// Re-export commonly used types at crate root for convenience
+pub use config::{DetectorType, ProfileConfig, ProfilePreset, ProfileBuilder, ConfidenceModifier};
+pub use detection::{AnalysisResult, AnalysisVerdict, Finding, RawDetection, Severity};
+pub use core::{AudioAnalyzer, AnalyzerBuilder, FileInfo, AudioData, QualityReport, DetectedDefect, DefectType, DetectionConfig};

@@ -1,4 +1,4 @@
-// src/decoder.rs
+// src/core/decoder.rs
 //
 // Audio decoding module with enhanced metadata extraction and validation.
 // Uses Symphonia for format-agnostic decoding.
@@ -53,7 +53,6 @@ pub fn decode_audio(path: &Path) -> Result<AudioData> {
         .format(&hint, mss, &fmt_opts, &meta_opts)
         .context("Failed to probe file format - may be corrupted or unsupported")?;
 
-    // Get format name from metadata (if available)
     let format_name = probed.format.metadata()
         .current()
         .map(|m| format!("{:?}", m))
@@ -77,14 +76,12 @@ pub fn decode_audio(path: &Path) -> Result<AudioData> {
         bail!("File reports 0 audio channels");
     }
 
-    // Extract bit depth with inference tracking
     let (claimed_bit_depth, bit_depth_inferred) = 
         if let Some(bps) = track.codec_params.bits_per_sample {
             (bps, false)
         } else if let Some(bps) = track.codec_params.bits_per_coded_sample {
             (bps, true)
         } else {
-            // Last resort: infer from codec
             let inferred = infer_bit_depth_from_codec(&track.codec_params);
             (inferred, true)
         };
@@ -94,16 +91,10 @@ pub fn decode_audio(path: &Path) -> Result<AudioData> {
     let dec_opts = DecoderOptions::default();
     let mut decoder = symphonia::default::get_codecs()
         .make(&track.codec_params, &dec_opts)
-        .context("Failed to create decoder - codec may not be supported")?;
+        .context("Failed to create decoder for audio codec")?;
 
-    let mut sample_buf = None;
-    let mut all_samples = Vec::new();
-    
-    // Pre-allocate based on duration hint if available
-    if let Some(n_frames) = track.codec_params.n_frames {
-        let estimated_samples = n_frames as usize * channels;
-        all_samples.reserve(estimated_samples);
-    }
+    let mut samples: Vec<f32> = Vec::new();
+    let mut sample_buf: Option<SampleBuffer<f32>> = None;
 
     loop {
         let packet = match probed.format.next_packet() {
@@ -111,46 +102,42 @@ pub fn decode_audio(path: &Path) -> Result<AudioData> {
             Err(symphonia::core::errors::Error::IoError(ref e)) 
                 if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
             Err(symphonia::core::errors::Error::ResetRequired) => {
-                // Handle seek errors gracefully
                 decoder.reset();
                 continue;
             }
-            Err(_) => break,
+            Err(e) => return Err(e.into()),
         };
 
         if packet.track_id() != track_id {
             continue;
         }
 
-        match decoder.decode(&packet) {
-            Ok(decoded) => {
-                if sample_buf.is_none() {
-                    let spec = *decoded.spec();
-                    let duration = decoded.capacity() as u64;
-                    sample_buf = Some(SampleBuffer::<f32>::new(duration, spec));
-                }
+        let decoded = match decoder.decode(&packet) {
+            Ok(buf) => buf,
+            Err(symphonia::core::errors::Error::DecodeError(_)) => continue,
+            Err(e) => return Err(e.into()),
+        };
 
-                if let Some(buf) = &mut sample_buf {
-                    buf.copy_interleaved_ref(decoded);
-                    all_samples.extend_from_slice(buf.samples());
-                }
-            }
-            Err(symphonia::core::errors::Error::DecodeError(_)) => {
-                // Skip corrupted frames
-                continue;
-            }
-            Err(_) => continue,
+        if sample_buf.is_none() {
+            let spec = *decoded.spec();
+            let duration = decoded.capacity() as u64;
+            sample_buf = Some(SampleBuffer::new(duration, spec));
+        }
+
+        if let Some(ref mut buf) = sample_buf {
+            buf.copy_interleaved_ref(decoded);
+            samples.extend_from_slice(buf.samples());
         }
     }
 
-    if all_samples.is_empty() {
-        bail!("No audio samples could be decoded from file");
+    if samples.is_empty() {
+        bail!("No audio samples decoded from file");
     }
 
-    let duration_secs = all_samples.len() as f64 / (sample_rate as f64 * channels as f64);
+    let duration_secs = samples.len() as f64 / (sample_rate as f64 * channels as f64);
 
     Ok(AudioData {
-        samples: all_samples,
+        samples,
         sample_rate,
         channels,
         claimed_bit_depth,
@@ -161,91 +148,81 @@ pub fn decode_audio(path: &Path) -> Result<AudioData> {
     })
 }
 
-/// Infer bit depth from codec type
+/// Infer bit depth from codec parameters
 fn infer_bit_depth_from_codec(params: &symphonia::core::codecs::CodecParameters) -> u32 {
-    // Use string matching on codec name since CodecType variants may change between versions
-    let codec_str = format!("{:?}", params.codec).to_uppercase();
+    use symphonia::core::codecs::CodecType;
     
-    // PCM variants
-    if codec_str.contains("PCM") {
-        if codec_str.contains("S16") || codec_str.contains("U16") {
-            return 16;
-        }
-        if codec_str.contains("S24") || codec_str.contains("U24") {
-            return 24;
-        }
-        if codec_str.contains("S32") || codec_str.contains("U32") || codec_str.contains("F32") {
-            return 32;
-        }
-        if codec_str.contains("F64") || codec_str.contains("S64") {
-            return 64;
-        }
+    match params.codec {
+        // Lossless formats - typically 16 or 24 bit
+        c if c == CodecType::FLAC => 24,
+        c if c == CodecType::ALAC => 24,
+        c if c == CodecType::PCM_S16LE || c == CodecType::PCM_S16BE => 16,
+        c if c == CodecType::PCM_S24LE || c == CodecType::PCM_S24BE => 24,
+        c if c == CodecType::PCM_S32LE || c == CodecType::PCM_S32BE => 32,
+        c if c == CodecType::PCM_F32LE || c == CodecType::PCM_F32BE => 32,
+        
+        // Lossy formats - effectively 16-bit or less
+        c if c == CodecType::MP3 => 16,
+        c if c == CodecType::AAC => 16,
+        c if c == CodecType::VORBIS => 16,
+        c if c == CodecType::OPUS => 16,
+        
+        // Default assumption
+        _ => 16,
     }
-    
-    // Lossless codecs - typically 16 or 24 bit
-    if codec_str.contains("FLAC") || codec_str.contains("ALAC") || codec_str.contains("WAVPACK") {
-        return 16;  // Conservative default
-    }
-    
-    // Lossy codecs - output as floating point, but source was limited
-    if codec_str.contains("MP3") || codec_str.contains("AAC") || 
-       codec_str.contains("VORBIS") || codec_str.contains("OPUS") {
-        return 16;
-    }
-    
-    // Default
-    16
 }
 
-/// Extract mono channel from interleaved audio
+/// Extract mono samples from potentially multi-channel audio
 pub fn extract_mono(audio: &AudioData) -> Vec<f32> {
     if audio.channels == 1 {
-        audio.samples.clone()
-    } else {
-        audio.samples
-            .chunks(audio.channels)
-            .map(|chunk| {
-                // Average all channels
-                chunk.iter().sum::<f32>() / chunk.len() as f32
-            })
-            .collect()
+        return audio.samples.clone();
     }
+    
+    let num_samples = audio.samples.len() / audio.channels;
+    let mut mono = Vec::with_capacity(num_samples);
+    
+    for i in 0..num_samples {
+        let mut sum = 0.0f32;
+        for ch in 0..audio.channels {
+            sum += audio.samples[i * audio.channels + ch];
+        }
+        mono.push(sum / audio.channels as f32);
+    }
+    
+    mono
 }
 
-/// Extract left and right channels from stereo audio
+/// Extract stereo pair (left, right)
 pub fn extract_stereo(audio: &AudioData) -> Option<(Vec<f32>, Vec<f32>)> {
     if audio.channels < 2 {
         return None;
     }
     
-    let left: Vec<f32> = audio.samples
-        .chunks(audio.channels)
-        .map(|chunk| chunk[0])
-        .collect();
+    let num_samples = audio.samples.len() / audio.channels;
+    let mut left = Vec::with_capacity(num_samples);
+    let mut right = Vec::with_capacity(num_samples);
     
-    let right: Vec<f32> = audio.samples
-        .chunks(audio.channels)
-        .map(|chunk| chunk[1])
-        .collect();
+    for i in 0..num_samples {
+        left.push(audio.samples[i * audio.channels]);
+        right.push(audio.samples[i * audio.channels + 1]);
+    }
     
     Some((left, right))
 }
 
-/// Compute Mid-Side representation from stereo
-pub fn compute_mid_side(audio: &AudioData) -> Option<(Vec<f32>, Vec<f32>)> {
-    let (left, right) = extract_stereo(audio)?;
-    
+/// Compute mid-side from stereo
+pub fn compute_mid_side(left: &[f32], right: &[f32]) -> (Vec<f32>, Vec<f32>) {
     let mid: Vec<f32> = left.iter()
-        .zip(&right)
+        .zip(right.iter())
         .map(|(l, r)| (l + r) * 0.5)
         .collect();
     
     let side: Vec<f32> = left.iter()
-        .zip(&right)
+        .zip(right.iter())
         .map(|(l, r)| (l - r) * 0.5)
         .collect();
     
-    Some((mid, side))
+    (mid, side)
 }
 
 #[cfg(test)]
@@ -255,37 +232,32 @@ mod tests {
     #[test]
     fn test_extract_mono() {
         let audio = AudioData {
-            samples: vec![0.5, 0.3, 0.7, 0.1, -0.2, 0.4],
+            samples: vec![0.5, -0.5, 0.3, -0.3],
             sample_rate: 44100,
             channels: 2,
             claimed_bit_depth: 16,
             bit_depth_inferred: false,
             duration_secs: 0.0,
-            codec_name: "test".to_string(),
-            format_name: "test".to_string(),
+            codec_name: "Test".to_string(),
+            format_name: "Test".to_string(),
         };
         
         let mono = extract_mono(&audio);
-        assert_eq!(mono.len(), 3);
-        assert!((mono[0] - 0.4).abs() < 0.001); // (0.5 + 0.3) / 2
+        assert_eq!(mono.len(), 2);
+        assert!((mono[0] - 0.0).abs() < 0.001);
+        assert!((mono[1] - 0.0).abs() < 0.001);
     }
 
     #[test]
     fn test_mid_side() {
-        let audio = AudioData {
-            samples: vec![1.0, 0.0, 0.0, 1.0],  // L=1,R=0 then L=0,R=1
-            sample_rate: 44100,
-            channels: 2,
-            claimed_bit_depth: 16,
-            bit_depth_inferred: false,
-            duration_secs: 0.0,
-            codec_name: "test".to_string(),
-            format_name: "test".to_string(),
-        };
+        let left = vec![1.0, 0.5];
+        let right = vec![1.0, -0.5];
         
-        let (mid, side) = compute_mid_side(&audio).unwrap();
-        assert_eq!(mid.len(), 2);
-        assert!((mid[0] - 0.5).abs() < 0.001);
-        assert!((side[0] - 0.5).abs() < 0.001);
+        let (mid, side) = compute_mid_side(&left, &right);
+        
+        assert!((mid[0] - 1.0).abs() < 0.001);
+        assert!((side[0] - 0.0).abs() < 0.001);
+        assert!((mid[1] - 0.0).abs() < 0.001);
+        assert!((side[1] - 0.5).abs() < 0.001);
     }
 }
