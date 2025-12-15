@@ -483,7 +483,7 @@ Requirements:
 - ~300MB disk space for dependencies
 
 ```bash
-git clone https://github.com/yourusername/audiocheckr
+git clone https://github.com/abalajiksh/audiocheckr
 cd audiocheckr
 cargo build --release
 ```
