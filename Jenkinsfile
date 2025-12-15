@@ -47,6 +47,10 @@ pipeline {
         SONAR_PROJECT_NAME = 'AudioCheckr'
         SONAR_SOURCES = 'src'
         
+        // Allure configuration
+        ALLURE_RESULTS_DIR = 'target/allure-results'
+        ALLURE_REPORT_DIR = 'target/allure-report'
+        
         // Path setup
         PATH = "$HOME/bin:$HOME/.cargo/bin:/usr/bin:$PATH"
         
@@ -111,6 +115,7 @@ pipeline {
 ========================================================
   Test Type:     ${env.TEST_TYPE}
   ARM Build:     ${params.SKIP_ARM_BUILD ? 'DISABLED ⏭️' : 'ENABLED ✓'}
+  Allure:        ENABLED ✓
   Build #:       ${currentBuild.number}
   Triggered by:  ${currentBuild.getBuildCauses()[0].shortDescription}
 ========================================================
@@ -143,10 +148,21 @@ pipeline {
                                 . $HOME/.cargo/env
                             fi
                             
+                            # Install Allure if not present
+                            if ! command -v allure >/dev/null 2>&1; then
+                                echo "Installing Allure..."
+                                ALLURE_VERSION="2.25.0"
+                                wget -q https://github.com/allure-framework/allure2/releases/download/${ALLURE_VERSION}/allure-${ALLURE_VERSION}.tgz -O /tmp/allure.tgz
+                                tar -xzf /tmp/allure.tgz -C $HOME/bin
+                                ln -sf $HOME/bin/allure-${ALLURE_VERSION}/bin/allure $HOME/bin/allure
+                                rm /tmp/allure.tgz
+                            fi
+                            
                             echo "=== Tool Versions ==="
-                            mc --version
+                            mc --version || echo "MinIO client: not available"
                             cargo --version
                             rustc --version
+                            allure --version || echo "Allure: not available"
                             echo "===================="
                         '''
                     }
@@ -287,9 +303,6 @@ pipeline {
                                         rm -f ${MINIO_FILE_COMPACT}
                                         
                                         # Download and extract GenreTestSuiteLite
-                                        # NOTE: This file contains FLAC files directly, NOT in subdirectories
-                                        # The test expects subdirectories, so we skip this for now
-                                        # TODO: Either restructure the test or restructure the zip file
                                         echo "Downloading ${MINIO_FILE_GENRE_LITE}"
                                         mc cp myminio/${MINIO_BUCKET}/${MINIO_FILE_GENRE_LITE} .
                                         unzip -q -o ${MINIO_FILE_GENRE_LITE}
@@ -352,6 +365,37 @@ pipeline {
                         '''
                     }
                 }
+            }
+        }
+        
+        stage('Prepare Allure') {
+            when {
+                expression { return env.TEST_TYPE != 'DIAGNOSTIC' }
+            }
+            steps {
+                sh '''
+                    echo "=========================================="
+                    echo "Preparing Allure Results Directory"
+                    echo "=========================================="
+                    
+                    # Create allure results directory
+                    mkdir -p ${ALLURE_RESULTS_DIR}
+                    
+                    # Create environment.properties for Allure
+                    cat > ${ALLURE_RESULTS_DIR}/environment.properties << EOF
+OS=$(uname -s)
+Architecture=$(uname -m)
+Rust.Version=$(rustc --version | cut -d' ' -f2)
+AudioCheckr.Version=$(grep '^version' Cargo.toml | head -1 | cut -d'"' -f2)
+Test.Type=${TEST_TYPE}
+Build.Number=${BUILD_NUMBER}
+Git.Commit=${GIT_COMMIT_SHORT:-unknown}
+Git.Branch=${GIT_BRANCH:-unknown}
+EOF
+                    
+                    echo "✓ Allure environment configured"
+                    cat ${ALLURE_RESULTS_DIR}/environment.properties
+                '''
             }
         }
         
@@ -501,6 +545,42 @@ pipeline {
                         echo "✓ Diagnostic tests passed!"
                     fi
                 '''
+            }
+        }
+        
+        stage('Generate Allure Report') {
+            when {
+                expression { return env.TEST_TYPE != 'DIAGNOSTIC' }
+            }
+            steps {
+                script {
+                    sh '''
+                        echo "=========================================="
+                        echo "Generating Allure Report"
+                        echo "=========================================="
+                        
+                        # Check if allure is available
+                        if ! command -v allure >/dev/null 2>&1; then
+                            echo "⚠ Allure not found, skipping report generation"
+                            echo "  Install Allure to enable beautiful test reports"
+                            exit 0
+                        fi
+                        
+                        # Check if we have any results
+                        if [ -d "${ALLURE_RESULTS_DIR}" ] && [ "$(ls -A ${ALLURE_RESULTS_DIR} 2>/dev/null)" ]; then
+                            echo "Found Allure results in ${ALLURE_RESULTS_DIR}"
+                            ls -la ${ALLURE_RESULTS_DIR}/
+                            
+                            # Generate the report
+                            allure generate ${ALLURE_RESULTS_DIR} -o ${ALLURE_REPORT_DIR} --clean
+                            
+                            echo "✓ Allure report generated at ${ALLURE_REPORT_DIR}"
+                        else
+                            echo "⚠ No Allure results found in ${ALLURE_RESULTS_DIR}"
+                            echo "  Tests may not have generated Allure-compatible output"
+                        fi
+                    '''
+                }
             }
         }
         
@@ -669,9 +749,31 @@ pipeline {
             // Publish JUnit test results (shows in Jenkins UI)
             junit(
                 allowEmptyResults: true,
-                testResults: 'target/test-results/*.xml',
+                testResults: 'target/test-results/*.xml, target/allure-results/*-junit.xml',
                 skipPublishingChecks: false
             )
+            
+            // Publish Allure report
+            script {
+                try {
+                    allure([
+                        includeProperties: true,
+                        jdk: '',
+                        results: [[path: 'target/allure-results']]
+                    ])
+                    echo "✓ Allure report published"
+                } catch (Exception e) {
+                    echo "⚠ Allure plugin not configured or failed: ${e.message}"
+                    echo "  To enable: Install 'Allure Jenkins Plugin' from Plugin Manager"
+                    echo "  Configure: Manage Jenkins → Global Tool Configuration → Allure Commandline"
+                    
+                    // Archive the allure results as fallback
+                    archiveArtifacts artifacts: 'target/allure-results/**/*', 
+                                   allowEmptyArchive: true
+                    archiveArtifacts artifacts: 'target/allure-report/**/*', 
+                                   allowEmptyArchive: true
+                }
+            }
             
             // Clean up everything to save disk space
             script {

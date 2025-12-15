@@ -2,6 +2,8 @@
 // QUALIFICATION Test Suite - Compact subset for CI/CD quick validation
 // Uses a subset of files from TestFiles/ for fast validation on every push
 //
+// Now with Allure reporting support for better visualization
+//
 // Test Philosophy:
 // - CleanOrigin: Original master files → PASS (genuine high-res) except input192 (16-bit source)
 // - CleanTranscoded: 24→16 bit honest transcodes → PASS (genuinely 16-bit)
@@ -12,11 +14,18 @@
 //
 // Parallelization: Tests run in parallel (4 threads) for faster CI/CD
 
+mod test_utils;
+
 use std::env;
 use std::process::Command;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread;
+
+use test_utils::{
+    AllureTestBuilder, AllureTestSuite, AllureEnvironment, AllureSeverity, AllureStatus,
+    write_categories, default_audiocheckr_categories,
+};
 
 #[derive(Clone)]
 struct TestCase {
@@ -24,6 +33,8 @@ struct TestCase {
     should_pass: bool,
     expected_defects: Vec<String>,
     description: String,
+    category: String,
+    severity: AllureSeverity,
 }
 
 #[derive(Debug)]
@@ -32,8 +43,10 @@ struct TestResult {
     expected: bool,
     defects_found: Vec<String>,
     description: String,
-    #[allow(dead_code)]
+    category: String,
     file: String,
+    duration_ms: u64,
+    stdout: String,
 }
 
 /// Main qualification test - runs against TestFiles subset with parallel execution
@@ -42,6 +55,7 @@ fn test_qualification_suite() {
     let binary_path = get_binary_path();
     let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let test_base = project_root.join("TestFiles");
+    let allure_results_dir = project_root.join("target").join("allure-results");
 
     assert!(
         test_base.exists(),
@@ -53,7 +67,14 @@ fn test_qualification_suite() {
     println!("\n{}", "=".repeat(60));
     println!("QUALIFICATION TEST SUITE (Parallel Execution)");
     println!("Using: {}", test_base.display());
+    println!("Allure results: {}", allure_results_dir.display());
     println!("{}\n", "=".repeat(60));
+
+    // Setup Allure environment info
+    setup_allure_environment(&allure_results_dir);
+    
+    // Write default categories
+    let _ = write_categories(&default_audiocheckr_categories(), &allure_results_dir);
 
     let test_cases = define_qualification_tests(&test_base);
     let total_tests = test_cases.len();
@@ -61,31 +82,78 @@ fn test_qualification_suite() {
     println!("Running {} qualification tests in parallel...\n", total_tests);
 
     // Run tests in parallel with 4 threads
-    let results = run_tests_parallel(&binary_path, test_cases, 4);
+    let results = run_tests_parallel(&binary_path, test_cases.clone(), 4);
     
-    // Analyze results
+    // Create Allure test suite
+    let mut allure_suite = AllureTestSuite::new("Qualification Tests", &allure_results_dir);
+    
+    // Analyze results and generate Allure reports
     let mut passed = 0;
     let mut failed = 0;
     let mut false_positives = 0;
     let mut false_negatives = 0;
 
-    for (idx, result) in results.iter().enumerate() {
-        if result.passed == result.expected {
+    for (idx, (result, test_case)) in results.iter().zip(test_cases.iter()).enumerate() {
+        let test_passed = result.passed == result.expected;
+        
+        // Build Allure test result
+        let mut allure_builder = AllureTestBuilder::new(&result.description)
+            .full_name(&format!("qualification_test::{}", sanitize_name(&result.description)))
+            .severity(test_case.severity)
+            .epic("AudioCheckr")
+            .feature("Audio Quality Detection")
+            .story(&result.category)
+            .suite("Qualification")
+            .sub_suite(&result.category)
+            .tag("qualification")
+            .tag(&result.category.to_lowercase().replace(' ', "_"))
+            .parameter("file", &result.file)
+            .parameter("expected_pass", &result.expected.to_string())
+            .parameter("defects_found", &format!("{:?}", result.defects_found));
+        
+        // Add description with details
+        let description = format!(
+            "**File:** `{}`\n\n**Expected:** {}\n\n**Actual:** {}\n\n**Defects Found:** {:?}",
+            result.file,
+            if result.expected { "CLEAN (should pass)" } else { "DEFECTIVE (should fail)" },
+            if result.passed { "CLEAN" } else { "DEFECTIVE" },
+            result.defects_found
+        );
+        allure_builder = allure_builder.description(&description);
+        
+        // Attach stdout as evidence
+        let _ = allure_builder.attach_text("Analysis Output", &result.stdout, &allure_results_dir);
+        
+        if test_passed {
             passed += 1;
             println!("[{:2}/{}] ✓ PASS: {}", idx + 1, total_tests, result.description);
+            allure_builder = allure_builder.passed();
         } else {
             failed += 1;
 
             if result.passed && !result.expected {
                 false_negatives += 1;
+                let message = format!("FALSE NEGATIVE: Expected defects {:?} but got CLEAN", 
+                    test_case.expected_defects);
                 println!("[{:2}/{}] ✗ FALSE NEGATIVE: {}", idx + 1, total_tests, result.description);
                 println!("        Expected defects but got CLEAN");
+                allure_builder = allure_builder.failed(&message, Some(&result.stdout));
             } else {
                 false_positives += 1;
+                let message = format!("FALSE POSITIVE: Expected CLEAN but detected defects: {:?}", 
+                    result.defects_found);
                 println!("[{:2}/{}] ✗ FALSE POSITIVE: {}", idx + 1, total_tests, result.description);
                 println!("        Expected CLEAN but detected defects: {:?}", result.defects_found);
+                allure_builder = allure_builder.failed(&message, Some(&result.stdout));
             }
         }
+        
+        allure_suite.add_result(allure_builder.build());
+    }
+
+    // Write all Allure results
+    if let Err(e) = allure_suite.write_all() {
+        eprintln!("Warning: Failed to write Allure results: {}", e);
     }
 
     println!("\n{}", "=".repeat(60));
@@ -97,8 +165,37 @@ fn test_qualification_suite() {
     println!("  False Positives: {} (clean files marked as defective)", false_positives);
     println!("  False Negatives: {} (defective files marked as clean)", false_negatives);
     println!("{}", "=".repeat(60));
+    println!("\nAllure results written to: {}", allure_results_dir.display());
 
     assert_eq!(failed, 0, "Qualification failed: {} test(s) did not pass", failed);
+}
+
+fn setup_allure_environment(results_dir: &Path) {
+    let mut env = AllureEnvironment::new();
+    
+    // Get system info
+    env.add("OS", std::env::consts::OS);
+    env.add("Architecture", std::env::consts::ARCH);
+    env.add("Rust Version", env!("CARGO_PKG_VERSION"));
+    env.add("Test Suite", "Qualification");
+    
+    // Get hostname
+    if let Ok(hostname) = std::env::var("HOSTNAME") {
+        env.add("Host", &hostname);
+    }
+    
+    // Get build info from Jenkins if available
+    if let Ok(build_number) = std::env::var("BUILD_NUMBER") {
+        env.add("Jenkins Build", &build_number);
+    }
+    if let Ok(git_commit) = std::env::var("GIT_COMMIT") {
+        env.add("Git Commit", &git_commit);
+    }
+    if let Ok(branch) = std::env::var("GIT_BRANCH") {
+        env.add("Git Branch", &branch);
+    }
+    
+    let _ = env.write(results_dir);
 }
 
 /// Run tests in parallel using thread pool
@@ -204,6 +301,8 @@ fn parse_defects_from_output(stdout: &str) -> Vec<String> {
 }
 
 fn run_single_test(binary: &Path, test_case: &TestCase) -> TestResult {
+    let start = std::time::Instant::now();
+    
     let output = Command::new(binary)
         .arg("--input")
         .arg(&test_case.file_path)
@@ -213,7 +312,8 @@ fn run_single_test(binary: &Path, test_case: &TestCase) -> TestResult {
         .output()
         .expect("Failed to execute binary");
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let duration_ms = start.elapsed().as_millis() as u64;
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
 
     // First, parse all defects from the output
     let defects_found = parse_defects_from_output(&stdout);
@@ -237,7 +337,10 @@ fn run_single_test(binary: &Path, test_case: &TestCase) -> TestResult {
         expected: test_case.should_pass,
         defects_found,
         description: test_case.description.clone(),
+        category: test_case.category.clone(),
         file: test_case.file_path.clone(),
+        duration_ms,
+        stdout,
     }
 }
 
@@ -272,6 +375,12 @@ fn get_binary_path() -> PathBuf {
     panic!("Binary not found. Run: cargo build --release");
 }
 
+fn sanitize_name(s: &str) -> String {
+    s.chars()
+        .map(|c| if c.is_alphanumeric() || c == '_' { c } else { '_' })
+        .collect()
+}
+
 fn define_qualification_tests(base: &Path) -> Vec<TestCase> {
     let mut cases = Vec::new();
 
@@ -284,6 +393,8 @@ fn define_qualification_tests(base: &Path) -> Vec<TestCase> {
         should_pass: true,
         expected_defects: vec![],
         description: "CleanOrigin: 96kHz 24-bit original master".to_string(),
+        category: "CleanOrigin".to_string(),
+        severity: AllureSeverity::Critical,
     });
 
     // Note: input192.flac is 16-bit source in 24-bit container
@@ -292,6 +403,8 @@ fn define_qualification_tests(base: &Path) -> Vec<TestCase> {
         should_pass: false,
         expected_defects: vec!["BitDepthMismatch".to_string()],
         description: "CleanOrigin: 192kHz (16-bit source in 24-bit container)".to_string(),
+        category: "CleanOrigin".to_string(),
+        severity: AllureSeverity::Critical,
     });
 
     // =========================================================================
@@ -303,6 +416,8 @@ fn define_qualification_tests(base: &Path) -> Vec<TestCase> {
         should_pass: true,
         expected_defects: vec![],
         description: "CleanTranscoded: 96kHz honest 16-bit transcode".to_string(),
+        category: "CleanTranscoded".to_string(),
+        severity: AllureSeverity::Normal,
     });
 
     cases.push(TestCase {
@@ -310,6 +425,8 @@ fn define_qualification_tests(base: &Path) -> Vec<TestCase> {
         should_pass: true,
         expected_defects: vec![],
         description: "CleanTranscoded: 192kHz honest 16-bit transcode".to_string(),
+        category: "CleanTranscoded".to_string(),
+        severity: AllureSeverity::Normal,
     });
 
     // =========================================================================
@@ -323,6 +440,8 @@ fn define_qualification_tests(base: &Path) -> Vec<TestCase> {
             should_pass: true,
             expected_defects: vec![],
             description: format!("Resample96: 96→{}kHz downsampled (genuine)", rate),
+            category: "Resample96".to_string(),
+            severity: AllureSeverity::Normal,
         });
     }
 
@@ -336,6 +455,8 @@ fn define_qualification_tests(base: &Path) -> Vec<TestCase> {
             should_pass: false,
             expected_defects: vec!["BitDepthMismatch".to_string()],
             description: format!("Resample192: 192→{}kHz (16-bit source)", rate),
+            category: "Resample192".to_string(),
+            severity: AllureSeverity::Normal,
         });
     }
 
@@ -348,6 +469,8 @@ fn define_qualification_tests(base: &Path) -> Vec<TestCase> {
         should_pass: false,
         expected_defects: vec!["BitDepthMismatch".to_string()],
         description: "Upscale16: 96kHz 16→24-bit upscaled (fake depth)".to_string(),
+        category: "Upscale16".to_string(),
+        severity: AllureSeverity::Critical,
     });
 
     cases.push(TestCase {
@@ -355,6 +478,8 @@ fn define_qualification_tests(base: &Path) -> Vec<TestCase> {
         should_pass: false,
         expected_defects: vec!["BitDepthMismatch".to_string()],
         description: "Upscale16: 192kHz 16→24-bit upscaled (fake depth)".to_string(),
+        category: "Upscale16".to_string(),
+        severity: AllureSeverity::Critical,
     });
 
     // =========================================================================
@@ -368,6 +493,8 @@ fn define_qualification_tests(base: &Path) -> Vec<TestCase> {
         should_pass: false,
         expected_defects: vec!["Mp3Transcode".to_string()],
         description: "Upscaled: 96kHz from MP3 (lossy artifacts)".to_string(),
+        category: "Upscaled".to_string(),
+        severity: AllureSeverity::Critical,
     });
 
     // 192kHz lossy formats
@@ -384,6 +511,8 @@ fn define_qualification_tests(base: &Path) -> Vec<TestCase> {
             should_pass: false,
             expected_defects: vec![defect.to_string()],
             description: format!("Upscaled: 192kHz from {} (lossy artifacts)", format.to_uppercase()),
+            category: "Upscaled".to_string(),
+            severity: AllureSeverity::Critical,
         });
     }
 
@@ -397,6 +526,8 @@ fn define_qualification_tests(base: &Path) -> Vec<TestCase> {
         should_pass: true,
         expected_defects: vec![],
         description: "MasterScript: test96 original (reference, clean)".to_string(),
+        category: "MasterScript".to_string(),
+        severity: AllureSeverity::Critical,
     });
 
     // test192_original - 16-bit source, should FAIL
@@ -405,6 +536,8 @@ fn define_qualification_tests(base: &Path) -> Vec<TestCase> {
         should_pass: false,
         expected_defects: vec!["BitDepthMismatch".to_string()],
         description: "MasterScript: test192 original (16-bit source)".to_string(),
+        category: "MasterScript".to_string(),
+        severity: AllureSeverity::Normal,
     });
 
     // test96 bit depth degradation
@@ -413,6 +546,8 @@ fn define_qualification_tests(base: &Path) -> Vec<TestCase> {
         should_pass: false,
         expected_defects: vec!["BitDepthMismatch".to_string()],
         description: "MasterScript: test96 16-bit upscaled to 24-bit".to_string(),
+        category: "MasterScript".to_string(),
+        severity: AllureSeverity::Normal,
     });
 
     // test192 MP3 320 upscaled (BitDepthMismatch + Mp3Transcode)
@@ -421,6 +556,8 @@ fn define_qualification_tests(base: &Path) -> Vec<TestCase> {
         should_pass: false,
         expected_defects: vec!["BitDepthMismatch".to_string(), "Mp3Transcode".to_string()],
         description: "MasterScript: test192 MP3 320k upscaled".to_string(),
+        category: "MasterScript".to_string(),
+        severity: AllureSeverity::Normal,
     });
 
     // test192 Opus 128 upscaled (BitDepthMismatch + OpusTranscode)
@@ -429,10 +566,11 @@ fn define_qualification_tests(base: &Path) -> Vec<TestCase> {
         should_pass: false,
         expected_defects: vec!["BitDepthMismatch".to_string(), "OpusTranscode".to_string()],
         description: "MasterScript: test192 Opus 128k upscaled".to_string(),
+        category: "MasterScript".to_string(),
+        severity: AllureSeverity::Normal,
     });
 
     // Total: 2 + 2 + 3 + 5 + 2 + 5 + 5 = 24 test cases
-    // Note: Original request was 22, but the reference file shows 24 cases
     
     cases
 }

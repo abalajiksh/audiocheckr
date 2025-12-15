@@ -2,6 +2,8 @@
 // REGRESSION Test Suite - Comprehensive ground truth validation
 // Uses full TestFiles.zip (8.5GB) for complete coverage
 //
+// Now with Allure reporting support for better visualization
+//
 // Test Philosophy:
 // - CleanOrigin: Original master files → PASS (genuine high-res) except input192 (16-bit source)
 // - CleanTranscoded: 24→16 bit honest transcodes → PASS
@@ -13,20 +15,27 @@
 //
 // Parallelization: Tests run in parallel (4 threads) for faster CI/CD
 
+mod test_utils;
+
 use std::process::Command;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::collections::HashMap;
 
+use test_utils::{
+    AllureTestBuilder, AllureTestSuite, AllureEnvironment, AllureSeverity,
+    write_categories, default_audiocheckr_categories,
+};
+
 #[derive(Clone)]
 struct TestCase {
     file_path: String,
     should_pass: bool,
-    #[allow(dead_code)]
     expected_defects: Vec<String>,
     category: String,
     description: String,
+    severity: AllureSeverity,
 }
 
 #[derive(Debug)]
@@ -36,11 +45,11 @@ struct TestResult {
     defects_found: Vec<String>,
     description: String,
     category: String,
-    #[allow(dead_code)]
     file: String,
-    #[allow(dead_code)]
     quality_score: Option<f32>,
     skipped: bool,
+    duration_ms: u64,
+    stdout: String,
 }
 
 /// Main regression test - comprehensive coverage with parallel execution
@@ -49,6 +58,7 @@ fn test_regression_suite() {
     let binary_path = get_binary_path();
     let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let test_base = project_root.join("TestFiles");
+    let allure_results_dir = project_root.join("target").join("allure-results");
 
     assert!(
         test_base.exists(),
@@ -60,7 +70,14 @@ fn test_regression_suite() {
     println!("\n{}", "=".repeat(70));
     println!("REGRESSION TEST SUITE (Parallel Execution)");
     println!("Using: {}", test_base.display());
+    println!("Allure results: {}", allure_results_dir.display());
     println!("{}\n", "=".repeat(70));
+
+    // Setup Allure environment info
+    setup_allure_environment(&allure_results_dir);
+    
+    // Write default categories
+    let _ = write_categories(&default_audiocheckr_categories(), &allure_results_dir);
 
     let test_cases = define_regression_tests(&test_base);
     let total_tests = test_cases.len();
@@ -68,7 +85,10 @@ fn test_regression_suite() {
     println!("Running {} regression tests in parallel (4 threads)...\n", total_tests);
 
     // Run tests in parallel with 4 threads
-    let results = run_tests_parallel(&binary_path, test_cases, 4);
+    let results = run_tests_parallel(&binary_path, test_cases.clone(), 4);
+    
+    // Create Allure test suite
+    let mut allure_suite = AllureTestSuite::new("Regression Tests", &allure_results_dir);
     
     // Analyze results
     let mut passed = 0;
@@ -78,33 +98,83 @@ fn test_regression_suite() {
     let mut false_negatives = 0;
     let mut category_results: HashMap<String, (u32, u32)> = HashMap::new();
 
-    for (idx, result) in results.iter().enumerate() {
+    for (idx, (result, test_case)) in results.iter().zip(test_cases.iter()).enumerate() {
+        // Build Allure test result
+        let mut allure_builder = AllureTestBuilder::new(&result.description)
+            .full_name(&format!("regression_test::{}", sanitize_name(&result.description)))
+            .severity(test_case.severity)
+            .epic("AudioCheckr")
+            .feature("Audio Quality Detection")
+            .story(&result.category)
+            .suite("Regression")
+            .sub_suite(&result.category)
+            .tag("regression")
+            .tag(&result.category.to_lowercase().replace(' ', "_").replace('-', "_"))
+            .parameter("file", &result.file)
+            .parameter("expected_pass", &result.expected.to_string())
+            .parameter("defects_found", &format!("{:?}", result.defects_found));
+        
+        if let Some(score) = result.quality_score {
+            allure_builder = allure_builder.parameter("quality_score", &format!("{:.1}%", score * 100.0));
+        }
+        
+        // Add description with details
+        let description = format!(
+            "**File:** `{}`\n\n**Expected:** {}\n\n**Actual:** {}\n\n**Defects Found:** {:?}\n\n**Quality Score:** {}",
+            result.file,
+            if result.expected { "CLEAN (should pass)" } else { "DEFECTIVE (should fail)" },
+            if result.passed { "CLEAN" } else { "DEFECTIVE" },
+            result.defects_found,
+            result.quality_score.map(|s| format!("{:.1}%", s * 100.0)).unwrap_or_else(|| "N/A".to_string())
+        );
+        allure_builder = allure_builder.description(&description);
+        
+        // Attach stdout as evidence
+        let _ = allure_builder.attach_text("Analysis Output", &result.stdout, &allure_results_dir);
+        
         if result.skipped {
             skipped += 1;
             println!("[{:3}/{}] SKIP: {} (file not found)", idx + 1, total_tests, result.description);
+            allure_builder = allure_builder.skipped("File not found");
+            allure_suite.add_result(allure_builder.build());
             continue;
         }
 
         let entry = category_results.entry(result.category.clone()).or_insert((0, 0));
+        let test_passed = result.passed == result.expected;
 
-        if result.passed == result.expected {
+        if test_passed {
             passed += 1;
             entry.0 += 1;
             println!("[{:3}/{}] ✓ PASS: {}", idx + 1, total_tests, result.description);
+            allure_builder = allure_builder.passed();
         } else {
             failed += 1;
             entry.1 += 1;
 
             if result.passed && !result.expected {
                 false_negatives += 1;
+                let message = format!("FALSE NEGATIVE: Expected defects {:?} but got CLEAN", 
+                    test_case.expected_defects);
                 println!("[{:3}/{}] ✗ FALSE NEGATIVE: {}", idx + 1, total_tests, result.description);
                 println!("        Expected defects but got CLEAN");
+                allure_builder = allure_builder.failed(&message, Some(&result.stdout));
             } else {
                 false_positives += 1;
+                let message = format!("FALSE POSITIVE: Expected CLEAN but detected defects: {:?}", 
+                    result.defects_found);
                 println!("[{:3}/{}] ✗ FALSE POSITIVE: {}", idx + 1, total_tests, result.description);
                 println!("        Expected CLEAN but detected defects: {:?}", result.defects_found);
+                allure_builder = allure_builder.failed(&message, Some(&result.stdout));
             }
         }
+        
+        allure_suite.add_result(allure_builder.build());
+    }
+
+    // Write all Allure results
+    if let Err(e) = allure_suite.write_all() {
+        eprintln!("Warning: Failed to write Allure results: {}", e);
     }
 
     let total_run = total_tests - skipped;
@@ -132,6 +202,8 @@ fn test_regression_suite() {
         }
     }
 
+    println!("\nAllure results written to: {}", allure_results_dir.display());
+
     if failed > 0 {
         println!("\n⚠️  Detector needs improvement in {} areas", failed);
     } else {
@@ -141,6 +213,34 @@ fn test_regression_suite() {
     // For regression tests, we report but don't fail on detection issues
     // This allows tracking detector improvements over time
     // Change to assert_eq!(failed, 0, ...) if strict pass/fail is needed
+}
+
+fn setup_allure_environment(results_dir: &Path) {
+    let mut env = AllureEnvironment::new();
+    
+    // Get system info
+    env.add("OS", std::env::consts::OS);
+    env.add("Architecture", std::env::consts::ARCH);
+    env.add("Rust Version", env!("CARGO_PKG_VERSION"));
+    env.add("Test Suite", "Regression");
+    
+    // Get hostname
+    if let Ok(hostname) = std::env::var("HOSTNAME") {
+        env.add("Host", &hostname);
+    }
+    
+    // Get build info from Jenkins if available
+    if let Ok(build_number) = std::env::var("BUILD_NUMBER") {
+        env.add("Jenkins Build", &build_number);
+    }
+    if let Ok(git_commit) = std::env::var("GIT_COMMIT") {
+        env.add("Git Commit", &git_commit);
+    }
+    if let Ok(branch) = std::env::var("GIT_BRANCH") {
+        env.add("Git Branch", &branch);
+    }
+    
+    let _ = env.write(results_dir);
 }
 
 /// Run tests in parallel using thread pool
@@ -257,9 +357,13 @@ fn run_single_test(binary: &Path, test_case: &TestCase) -> TestResult {
             file: test_case.file_path.clone(),
             quality_score: None,
             skipped: true,
+            duration_ms: 0,
+            stdout: "File not found".to_string(),
         };
     }
 
+    let start = std::time::Instant::now();
+    
     let output = Command::new(binary)
         .arg("--input")
         .arg(&test_case.file_path)
@@ -269,7 +373,8 @@ fn run_single_test(binary: &Path, test_case: &TestCase) -> TestResult {
         .output()
         .expect("Failed to execute binary");
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let duration_ms = start.elapsed().as_millis() as u64;
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
 
     // Extract quality score
     let quality_score = extract_quality_score(&stdout);
@@ -300,6 +405,8 @@ fn run_single_test(binary: &Path, test_case: &TestCase) -> TestResult {
         file: test_case.file_path.clone(),
         quality_score,
         skipped: false,
+        duration_ms,
+        stdout,
     }
 }
 
@@ -350,6 +457,12 @@ fn get_binary_path() -> PathBuf {
     panic!("Binary not found. Run: cargo build --release");
 }
 
+fn sanitize_name(s: &str) -> String {
+    s.chars()
+        .map(|c| if c.is_alphanumeric() || c == '_' { c } else { '_' })
+        .collect()
+}
+
 fn define_regression_tests(base: &Path) -> Vec<TestCase> {
     let mut cases = Vec::new();
 
@@ -363,6 +476,7 @@ fn define_regression_tests(base: &Path) -> Vec<TestCase> {
         expected_defects: vec![],
         category: "CleanOrigin".to_string(),
         description: "CleanOrigin: 96kHz 24-bit original".to_string(),
+        severity: AllureSeverity::Critical,
     });
 
     // input192.flac is documented as 16-bit source
@@ -372,6 +486,7 @@ fn define_regression_tests(base: &Path) -> Vec<TestCase> {
         expected_defects: vec!["BitDepthMismatch".to_string()],
         category: "CleanOrigin".to_string(),
         description: "CleanOrigin: 192kHz (16-bit source)".to_string(),
+        severity: AllureSeverity::Critical,
     });
 
     // =========================================================================
@@ -384,6 +499,7 @@ fn define_regression_tests(base: &Path) -> Vec<TestCase> {
         expected_defects: vec![],
         category: "CleanTranscoded".to_string(),
         description: "CleanTranscoded: 96kHz honest 16-bit".to_string(),
+        severity: AllureSeverity::Normal,
     });
 
     cases.push(TestCase {
@@ -392,6 +508,7 @@ fn define_regression_tests(base: &Path) -> Vec<TestCase> {
         expected_defects: vec![],
         category: "CleanTranscoded".to_string(),
         description: "CleanTranscoded: 192kHz honest 16-bit".to_string(),
+        severity: AllureSeverity::Normal,
     });
 
     // =========================================================================
@@ -407,6 +524,7 @@ fn define_regression_tests(base: &Path) -> Vec<TestCase> {
             expected_defects: vec![],
             category: "Resample96".to_string(),
             description: format!("Resample96: 96→{}kHz downsampled", rate),
+            severity: AllureSeverity::Normal,
         });
     }
 
@@ -418,6 +536,7 @@ fn define_regression_tests(base: &Path) -> Vec<TestCase> {
             expected_defects: vec!["Upsampled".to_string()],
             category: "Resample96".to_string(),
             description: format!("Resample96: 96→{}kHz upsampled (interpolated)", rate),
+            severity: AllureSeverity::Normal,
         });
     }
 
@@ -432,6 +551,7 @@ fn define_regression_tests(base: &Path) -> Vec<TestCase> {
             expected_defects: vec!["BitDepthMismatch".to_string()],
             category: "Resample192".to_string(),
             description: format!("Resample192: 192→{}kHz (16-bit source)", rate),
+            severity: AllureSeverity::Normal,
         });
     }
 
@@ -445,6 +565,7 @@ fn define_regression_tests(base: &Path) -> Vec<TestCase> {
         expected_defects: vec!["BitDepthMismatch".to_string()],
         category: "Upscale16".to_string(),
         description: "Upscale16: 96kHz 16→24-bit".to_string(),
+        severity: AllureSeverity::Critical,
     });
 
     cases.push(TestCase {
@@ -453,6 +574,7 @@ fn define_regression_tests(base: &Path) -> Vec<TestCase> {
         expected_defects: vec!["BitDepthMismatch".to_string()],
         category: "Upscale16".to_string(),
         description: "Upscale16: 192kHz 16→24-bit".to_string(),
+        severity: AllureSeverity::Critical,
     });
 
     // =========================================================================
@@ -466,6 +588,7 @@ fn define_regression_tests(base: &Path) -> Vec<TestCase> {
         expected_defects: vec!["Mp3Transcode".to_string()],
         category: "Upscaled".to_string(),
         description: "Upscaled: 96kHz from MP3".to_string(),
+        severity: AllureSeverity::Critical,
     });
 
     cases.push(TestCase {
@@ -474,6 +597,7 @@ fn define_regression_tests(base: &Path) -> Vec<TestCase> {
         expected_defects: vec!["AacTranscode".to_string()],
         category: "Upscaled".to_string(),
         description: "Upscaled: 96kHz from AAC".to_string(),
+        severity: AllureSeverity::Critical,
     });
 
     cases.push(TestCase {
@@ -482,6 +606,7 @@ fn define_regression_tests(base: &Path) -> Vec<TestCase> {
         expected_defects: vec!["OpusTranscode".to_string()],
         category: "Upscaled".to_string(),
         description: "Upscaled: 96kHz from Opus".to_string(),
+        severity: AllureSeverity::Critical,
     });
 
     cases.push(TestCase {
@@ -490,6 +615,7 @@ fn define_regression_tests(base: &Path) -> Vec<TestCase> {
         expected_defects: vec!["OggVorbisTranscode".to_string()],
         category: "Upscaled".to_string(),
         description: "Upscaled: 96kHz from Vorbis".to_string(),
+        severity: AllureSeverity::Critical,
     });
 
     // 192kHz source (16-bit) - both lossy + bit depth issues
@@ -499,6 +625,7 @@ fn define_regression_tests(base: &Path) -> Vec<TestCase> {
         expected_defects: vec!["Mp3Transcode".to_string(), "BitDepthMismatch".to_string()],
         category: "Upscaled".to_string(),
         description: "Upscaled: 192kHz from MP3 (16-bit source)".to_string(),
+        severity: AllureSeverity::Critical,
     });
 
     cases.push(TestCase {
@@ -507,6 +634,7 @@ fn define_regression_tests(base: &Path) -> Vec<TestCase> {
         expected_defects: vec!["AacTranscode".to_string(), "BitDepthMismatch".to_string()],
         category: "Upscaled".to_string(),
         description: "Upscaled: 192kHz from AAC (16-bit source)".to_string(),
+        severity: AllureSeverity::Critical,
     });
 
     cases.push(TestCase {
@@ -515,6 +643,7 @@ fn define_regression_tests(base: &Path) -> Vec<TestCase> {
         expected_defects: vec!["OpusTranscode".to_string(), "BitDepthMismatch".to_string()],
         category: "Upscaled".to_string(),
         description: "Upscaled: 192kHz from Opus (16-bit source)".to_string(),
+        severity: AllureSeverity::Critical,
     });
 
     cases.push(TestCase {
@@ -523,6 +652,7 @@ fn define_regression_tests(base: &Path) -> Vec<TestCase> {
         expected_defects: vec!["OggVorbisTranscode".to_string(), "BitDepthMismatch".to_string()],
         category: "Upscaled".to_string(),
         description: "Upscaled: 192kHz from Vorbis (16-bit source)".to_string(),
+        severity: AllureSeverity::Critical,
     });
 
     // =========================================================================
@@ -536,6 +666,7 @@ fn define_regression_tests(base: &Path) -> Vec<TestCase> {
         expected_defects: vec![],
         category: "MasterScript-96".to_string(),
         description: "MasterScript: test96 original (reference)".to_string(),
+        severity: AllureSeverity::Critical,
     });
 
     // test96 bit depth degradations
@@ -545,6 +676,7 @@ fn define_regression_tests(base: &Path) -> Vec<TestCase> {
         expected_defects: vec!["BitDepthMismatch".to_string()],
         category: "MasterScript-96".to_string(),
         description: "MasterScript: test96 16-bit upscaled".to_string(),
+        severity: AllureSeverity::Normal,
     });
 
     cases.push(TestCase {
@@ -553,6 +685,7 @@ fn define_regression_tests(base: &Path) -> Vec<TestCase> {
         expected_defects: vec!["BitDepthMismatch".to_string()],
         category: "MasterScript-96".to_string(),
         description: "MasterScript: test96 16-bit 44.1kHz upscaled".to_string(),
+        severity: AllureSeverity::Normal,
     });
 
     cases.push(TestCase {
@@ -561,6 +694,7 @@ fn define_regression_tests(base: &Path) -> Vec<TestCase> {
         expected_defects: vec!["BitDepthMismatch".to_string(), "Mp3Transcode".to_string()],
         category: "MasterScript-96".to_string(),
         description: "MasterScript: test96 16-bit 44.1kHz MP3 128k upscaled".to_string(),
+        severity: AllureSeverity::Normal,
     });
 
     // test96 resample degradations
@@ -570,6 +704,7 @@ fn define_regression_tests(base: &Path) -> Vec<TestCase> {
         expected_defects: vec!["Upsampled".to_string()],
         category: "MasterScript-96".to_string(),
         description: "MasterScript: test96 44.1kHz→192kHz upsampled".to_string(),
+        severity: AllureSeverity::Normal,
     });
 
     cases.push(TestCase {
@@ -578,6 +713,7 @@ fn define_regression_tests(base: &Path) -> Vec<TestCase> {
         expected_defects: vec!["Upsampled".to_string()],
         category: "MasterScript-96".to_string(),
         description: "MasterScript: test96 48kHz→192kHz upsampled".to_string(),
+        severity: AllureSeverity::Normal,
     });
 
     // test96 MP3 degradations (various bitrates and VBR modes)
@@ -588,6 +724,7 @@ fn define_regression_tests(base: &Path) -> Vec<TestCase> {
             expected_defects: vec!["Mp3Transcode".to_string()],
             category: "MasterScript-96".to_string(),
             description: format!("MasterScript: test96 MP3 {}k upscaled", bitrate),
+            severity: AllureSeverity::Normal,
         });
     }
 
@@ -598,6 +735,7 @@ fn define_regression_tests(base: &Path) -> Vec<TestCase> {
             expected_defects: vec!["Mp3Transcode".to_string()],
             category: "MasterScript-96".to_string(),
             description: format!("MasterScript: test96 MP3 {} upscaled", vbr),
+            severity: AllureSeverity::Normal,
         });
     }
 
@@ -607,6 +745,7 @@ fn define_regression_tests(base: &Path) -> Vec<TestCase> {
         expected_defects: vec!["Mp3Transcode".to_string()],
         category: "MasterScript-96".to_string(),
         description: "MasterScript: test96 MP3 320k re-encoded upscaled".to_string(),
+        severity: AllureSeverity::Normal,
     });
 
     // test96 AAC degradations
@@ -617,6 +756,7 @@ fn define_regression_tests(base: &Path) -> Vec<TestCase> {
             expected_defects: vec!["AacTranscode".to_string()],
             category: "MasterScript-96".to_string(),
             description: format!("MasterScript: test96 AAC {}k upscaled", bitrate),
+            severity: AllureSeverity::Normal,
         });
     }
 
@@ -628,6 +768,7 @@ fn define_regression_tests(base: &Path) -> Vec<TestCase> {
             expected_defects: vec!["OpusTranscode".to_string()],
             category: "MasterScript-96".to_string(),
             description: format!("MasterScript: test96 Opus {}k upscaled", bitrate),
+            severity: AllureSeverity::Normal,
         });
     }
 
@@ -639,6 +780,7 @@ fn define_regression_tests(base: &Path) -> Vec<TestCase> {
             expected_defects: vec!["OggVorbisTranscode".to_string()],
             category: "MasterScript-96".to_string(),
             description: format!("MasterScript: test96 Vorbis {} upscaled", quality),
+            severity: AllureSeverity::Normal,
         });
     }
 
@@ -649,6 +791,7 @@ fn define_regression_tests(base: &Path) -> Vec<TestCase> {
         expected_defects: vec!["Mp3Transcode".to_string(), "AacTranscode".to_string()],
         category: "MasterScript-96".to_string(),
         description: "MasterScript: test96 MP3→AAC upscaled".to_string(),
+        severity: AllureSeverity::Normal,
     });
 
     cases.push(TestCase {
@@ -657,6 +800,7 @@ fn define_regression_tests(base: &Path) -> Vec<TestCase> {
         expected_defects: vec!["OpusTranscode".to_string(), "Mp3Transcode".to_string()],
         category: "MasterScript-96".to_string(),
         description: "MasterScript: test96 Opus→MP3 upscaled".to_string(),
+        severity: AllureSeverity::Normal,
     });
 
     // =========================================================================
@@ -670,6 +814,7 @@ fn define_regression_tests(base: &Path) -> Vec<TestCase> {
         expected_defects: vec!["BitDepthMismatch".to_string()],
         category: "MasterScript-192".to_string(),
         description: "MasterScript: test192 original (16-bit source)".to_string(),
+        severity: AllureSeverity::Normal,
     });
 
     // test192 bit depth degradations
@@ -679,6 +824,7 @@ fn define_regression_tests(base: &Path) -> Vec<TestCase> {
         expected_defects: vec!["BitDepthMismatch".to_string()],
         category: "MasterScript-192".to_string(),
         description: "MasterScript: test192 16-bit upscaled".to_string(),
+        severity: AllureSeverity::Normal,
     });
 
     cases.push(TestCase {
@@ -687,6 +833,7 @@ fn define_regression_tests(base: &Path) -> Vec<TestCase> {
         expected_defects: vec!["BitDepthMismatch".to_string()],
         category: "MasterScript-192".to_string(),
         description: "MasterScript: test192 16-bit 44.1kHz upscaled".to_string(),
+        severity: AllureSeverity::Normal,
     });
 
     cases.push(TestCase {
@@ -695,6 +842,7 @@ fn define_regression_tests(base: &Path) -> Vec<TestCase> {
         expected_defects: vec!["BitDepthMismatch".to_string(), "Mp3Transcode".to_string()],
         category: "MasterScript-192".to_string(),
         description: "MasterScript: test192 16-bit 44.1kHz MP3 128k upscaled".to_string(),
+        severity: AllureSeverity::Normal,
     });
 
     // test192 resample degradations
@@ -704,6 +852,7 @@ fn define_regression_tests(base: &Path) -> Vec<TestCase> {
         expected_defects: vec!["BitDepthMismatch".to_string()],
         category: "MasterScript-192".to_string(),
         description: "MasterScript: test192 44.1kHz→192kHz (16-bit source)".to_string(),
+        severity: AllureSeverity::Normal,
     });
 
     cases.push(TestCase {
@@ -712,6 +861,7 @@ fn define_regression_tests(base: &Path) -> Vec<TestCase> {
         expected_defects: vec!["BitDepthMismatch".to_string()],
         category: "MasterScript-192".to_string(),
         description: "MasterScript: test192 48kHz→192kHz (16-bit source)".to_string(),
+        severity: AllureSeverity::Normal,
     });
 
     // test192 MP3 degradations
@@ -722,6 +872,7 @@ fn define_regression_tests(base: &Path) -> Vec<TestCase> {
             expected_defects: vec!["BitDepthMismatch".to_string(), "Mp3Transcode".to_string()],
             category: "MasterScript-192".to_string(),
             description: format!("MasterScript: test192 MP3 {}k upscaled", bitrate),
+            severity: AllureSeverity::Normal,
         });
     }
 
@@ -732,6 +883,7 @@ fn define_regression_tests(base: &Path) -> Vec<TestCase> {
             expected_defects: vec!["BitDepthMismatch".to_string(), "Mp3Transcode".to_string()],
             category: "MasterScript-192".to_string(),
             description: format!("MasterScript: test192 MP3 {} upscaled", vbr),
+            severity: AllureSeverity::Normal,
         });
     }
 
@@ -741,6 +893,7 @@ fn define_regression_tests(base: &Path) -> Vec<TestCase> {
         expected_defects: vec!["BitDepthMismatch".to_string(), "Mp3Transcode".to_string()],
         category: "MasterScript-192".to_string(),
         description: "MasterScript: test192 MP3 320k re-encoded upscaled".to_string(),
+        severity: AllureSeverity::Normal,
     });
 
     // test192 AAC degradations
@@ -751,6 +904,7 @@ fn define_regression_tests(base: &Path) -> Vec<TestCase> {
             expected_defects: vec!["BitDepthMismatch".to_string(), "AacTranscode".to_string()],
             category: "MasterScript-192".to_string(),
             description: format!("MasterScript: test192 AAC {}k upscaled", bitrate),
+            severity: AllureSeverity::Normal,
         });
     }
 
@@ -762,6 +916,7 @@ fn define_regression_tests(base: &Path) -> Vec<TestCase> {
             expected_defects: vec!["BitDepthMismatch".to_string(), "OpusTranscode".to_string()],
             category: "MasterScript-192".to_string(),
             description: format!("MasterScript: test192 Opus {}k upscaled", bitrate),
+            severity: AllureSeverity::Normal,
         });
     }
 
@@ -773,6 +928,7 @@ fn define_regression_tests(base: &Path) -> Vec<TestCase> {
             expected_defects: vec!["BitDepthMismatch".to_string(), "OggVorbisTranscode".to_string()],
             category: "MasterScript-192".to_string(),
             description: format!("MasterScript: test192 Vorbis {} upscaled", quality),
+            severity: AllureSeverity::Normal,
         });
     }
 
@@ -783,6 +939,7 @@ fn define_regression_tests(base: &Path) -> Vec<TestCase> {
         expected_defects: vec!["BitDepthMismatch".to_string(), "Mp3Transcode".to_string(), "AacTranscode".to_string()],
         category: "MasterScript-192".to_string(),
         description: "MasterScript: test192 MP3→AAC upscaled".to_string(),
+        severity: AllureSeverity::Normal,
     });
 
     cases.push(TestCase {
@@ -791,6 +948,7 @@ fn define_regression_tests(base: &Path) -> Vec<TestCase> {
         expected_defects: vec!["BitDepthMismatch".to_string(), "OpusTranscode".to_string(), "Mp3Transcode".to_string()],
         category: "MasterScript-192".to_string(),
         description: "MasterScript: test192 Opus→MP3 upscaled".to_string(),
+        severity: AllureSeverity::Normal,
     });
 
     cases
