@@ -7,9 +7,10 @@
 // - Creating Allure result JSON files directly
 // - Test case metadata (severity, epic, feature, story)
 
+#![allow(dead_code)]
+
 use std::collections::HashMap;
-use std::fs::{self, File};
-use std::io::Write;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH, Duration};
 use serde::{Deserialize, Serialize};
@@ -693,7 +694,8 @@ fn generate_uuid() -> String {
         .duration_since(UNIX_EPOCH)
         .unwrap_or(Duration::from_secs(0));
     let nanos = duration.as_nanos();
-    let random: u64 = (nanos as u64) ^ (std::process::id() as u64 * 0x517cc1b727220a95);
+    // Use wrapping_mul to avoid overflow panic in debug builds
+    let random: u64 = (nanos as u64) ^ (std::process::id() as u64).wrapping_mul(0x517cc1b727220a95);
     format!("{:016x}-{:04x}-{:04x}-{:04x}-{:012x}",
         random,
         (nanos >> 64) as u16,
