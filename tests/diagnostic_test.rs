@@ -2,15 +2,22 @@
 // DIAGNOSTIC Test - Analyze spectral characteristics of control files
 // to understand why false positives are occurring
 //
+// Now with Allure reporting support for better visualization
+//
 // Run with: cargo test --test diagnostic_test -- --nocapture
+
+mod test_utils;
 
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::collections::HashMap;
-
-// We'll call the binary with verbose output and parse the results
 use std::process::Command;
+
+use test_utils::{
+    AllureTestBuilder, AllureTestSuite, AllureEnvironment, AllureSeverity,
+    write_categories, default_audiocheckr_categories,
+};
 
 #[derive(Debug, Clone)]
 struct DiagnosticResult {
@@ -26,6 +33,7 @@ struct DiagnosticResult {
     quality_score: f32,
     detected_defects: Vec<String>,
     is_false_positive: bool,
+    stdout: String,
 }
 
 #[test]
@@ -33,6 +41,7 @@ fn diagnose_control_files() {
     let binary_path = get_binary_path();
     let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let test_base = project_root.join("TestSuite").join("Control_Original");
+    let allure_results_dir = project_root.join("target").join("allure-results");
     
     if !test_base.exists() {
         println!("TestSuite/Control_Original not found. Skipping diagnostic.");
@@ -42,7 +51,12 @@ fn diagnose_control_files() {
     println!("\n{}", "=".repeat(100));
     println!("DIAGNOSTIC ANALYSIS: Control_Original Files");
     println!("Purpose: Understand why genuine files are being flagged as transcodes");
+    println!("Allure results: {}", allure_results_dir.display());
     println!("{}\n", "=".repeat(100));
+    
+    // Setup Allure environment
+    setup_allure_environment(&allure_results_dir, "Diagnostic");
+    let _ = write_categories(&default_audiocheckr_categories(), &allure_results_dir);
     
     let mut results: Vec<DiagnosticResult> = Vec::new();
     
@@ -73,13 +87,16 @@ fn diagnose_control_files() {
             .output()
             .expect("Failed to execute binary");
         
-        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
         let result = parse_verbose_output(&filename, &stdout);
         results.push(result);
     }
     
     // Sort by cutoff ratio (lowest first - most likely to be flagged)
     results.sort_by(|a, b| a.cutoff_ratio.partial_cmp(&b.cutoff_ratio).unwrap());
+    
+    // Create Allure test suite
+    let mut allure_suite = AllureTestSuite::new("Diagnostic Tests", &allure_results_dir);
     
     // Print detailed analysis
     println!("\n{}", "-".repeat(100));
@@ -88,6 +105,9 @@ fn diagnose_control_files() {
     println!("{:<50} {:>8} {:>8} {:>10} {:>8} {:>10} {:>12}",
         "Filename", "SR(kHz)", "Bits", "Cutoff", "Ratio", "Steepness", "Defects");
     println!("{}", "-".repeat(100));
+    
+    let mut false_positive_count = 0;
+    let mut clean_count = 0;
     
     for r in &results {
         let defects_str = if r.detected_defects.is_empty() {
@@ -108,19 +128,88 @@ fn diagnose_control_files() {
             r.rolloff_steepness,
             defects_str
         );
+        
+        // Build Allure test result
+        let test_name = format!("Diagnostic: {}", r.filename);
+        let mut allure_builder = AllureTestBuilder::new(&test_name)
+            .full_name(&format!("diagnostic_test::diagnose::{}", sanitize_name(&r.filename)))
+            .severity(if r.is_false_positive { AllureSeverity::Critical } else { AllureSeverity::Normal })
+            .epic("AudioCheckr")
+            .feature("Diagnostic Analysis")
+            .story("Control File Analysis")
+            .suite("Diagnostic")
+            .sub_suite("Control_Original")
+            .tag("diagnostic")
+            .tag("control")
+            .parameter("sample_rate", &format!("{} Hz", r.sample_rate))
+            .parameter("bit_depth", &format!("{}-bit", r.bit_depth))
+            .parameter("frequency_cutoff", &format!("{:.0} Hz", r.frequency_cutoff))
+            .parameter("cutoff_ratio", &format!("{:.1}%", r.cutoff_ratio * 100.0))
+            .parameter("rolloff_steepness", &format!("{:.1} dB/oct", r.rolloff_steepness))
+            .parameter("has_brick_wall", &r.has_brick_wall.to_string())
+            .parameter("quality_score", &format!("{:.1}%", r.quality_score * 100.0));
+        
+        let description = format!(
+            "**Diagnostic Analysis**\n\n\
+            **File:** `{}`\n\n\
+            **Audio Properties:**\n\
+            - Sample Rate: {} Hz\n\
+            - Bit Depth: {}-bit\n\
+            - Nyquist: {:.0} Hz\n\n\
+            **Spectral Analysis:**\n\
+            - Frequency Cutoff: {:.0} Hz\n\
+            - Cutoff Ratio: {:.1}%\n\
+            - Rolloff Steepness: {:.1} dB/oct\n\
+            - Brick Wall: {}\n\
+            - Spectral Flatness: {:.3}\n\n\
+            **Result:** {}\n\n\
+            **Defects Found:** {:?}",
+            r.filename,
+            r.sample_rate,
+            r.bit_depth,
+            r.nyquist,
+            r.frequency_cutoff,
+            r.cutoff_ratio * 100.0,
+            r.rolloff_steepness,
+            if r.has_brick_wall { "Yes" } else { "No" },
+            r.spectral_flatness,
+            if r.is_false_positive { "FALSE POSITIVE" } else { "CLEAN (correct)" },
+            r.detected_defects
+        );
+        allure_builder = allure_builder.description(&description);
+        
+        // Attach verbose output
+        let _ = allure_builder.attach_text("Verbose Analysis Output", &r.stdout, &allure_results_dir);
+        
+        if r.is_false_positive {
+            false_positive_count += 1;
+            let message = format!("FALSE POSITIVE: Control file incorrectly flagged with defects: {:?}", 
+                r.detected_defects);
+            allure_builder = allure_builder.failed(&message, Some(&r.stdout));
+        } else {
+            clean_count += 1;
+            allure_builder = allure_builder.passed();
+        }
+        
+        allure_suite.add_result(allure_builder.build());
+    }
+    
+    // Write all Allure results
+    if let Err(e) = allure_suite.write_all() {
+        eprintln!("Warning: Failed to write Allure results: {}", e);
     }
     
     // Statistical analysis
+    let false_positives: Vec<_> = results.iter().filter(|r| r.is_false_positive).collect();
+    let clean: Vec<_> = results.iter().filter(|r| !r.is_false_positive).collect();
+    
     println!("\n{}", "=".repeat(100));
     println!("STATISTICAL ANALYSIS");
     println!("{}", "=".repeat(100));
     
-    let false_positives: Vec<_> = results.iter().filter(|r| r.is_false_positive).collect();
-    let clean: Vec<_> = results.iter().filter(|r| !r.is_false_positive).collect();
-    
     println!("\nTotal files analyzed: {}", results.len());
     println!("False positives: {} ({:.1}%)", false_positives.len(), 
-        (false_positives.len() as f32 / results.len() as f32) * 100.0);
+        if !results.is_empty() { (false_positives.len() as f32 / results.len() as f32) * 100.0 } else { 0.0 });
     println!("Clean (correct): {}", clean.len());
     
     // Cutoff ratio analysis
@@ -185,7 +274,7 @@ fn diagnose_control_files() {
         println!("   Average false positive cutoff ratio: {:.1}%", fp_avg * 100.0);
         
         if fp_min < 0.85 {
-            let suggested = (fp_min * 0.95).max(0.60);  // 5% below minimum, but not below 60%
+            let suggested = (fp_min * 0.95).max(0.60);
             println!("   SUGGESTION: Lower threshold to {:.0}% or require additional evidence", suggested * 100.0);
         }
         
@@ -202,7 +291,6 @@ fn diagnose_control_files() {
         println!("   Consider requiring BOTH cutoff ratio AND brick-wall/steepness");
         println!("   to reduce false positives on naturally band-limited content");
         
-        // Check for brick wall in false positives
         let fp_brick_wall_count = false_positives.iter().filter(|r| r.has_brick_wall).count();
         println!("\n4. BRICK WALL ANALYSIS:");
         println!("   False positives with brick-wall: {} / {}", fp_brick_wall_count, false_positives.len());
@@ -232,6 +320,33 @@ fn diagnose_control_files() {
     }
     
     println!("\n{}", "=".repeat(100));
+    println!("\nAllure results written to: {}", allure_results_dir.display());
+    println!("Analyzed {} files: {} clean, {} false positives", 
+        results.len(), clean_count, false_positive_count);
+}
+
+fn setup_allure_environment(results_dir: &Path, suite_name: &str) {
+    let mut env = AllureEnvironment::new();
+    
+    env.add("OS", std::env::consts::OS);
+    env.add("Architecture", std::env::consts::ARCH);
+    env.add("Rust Version", env!("CARGO_PKG_VERSION"));
+    env.add("Test Suite", suite_name);
+    
+    if let Ok(hostname) = std::env::var("HOSTNAME") {
+        env.add("Host", &hostname);
+    }
+    if let Ok(build_number) = std::env::var("BUILD_NUMBER") {
+        env.add("Jenkins Build", &build_number);
+    }
+    if let Ok(git_commit) = std::env::var("GIT_COMMIT") {
+        env.add("Git Commit", &git_commit);
+    }
+    if let Ok(branch) = std::env::var("GIT_BRANCH") {
+        env.add("Git Branch", &branch);
+    }
+    
+    let _ = env.write(results_dir);
 }
 
 fn parse_verbose_output(filename: &str, output: &str) -> DiagnosticResult {
@@ -248,6 +363,7 @@ fn parse_verbose_output(filename: &str, output: &str) -> DiagnosticResult {
         quality_score: 1.0,
         detected_defects: Vec::new(),
         is_false_positive: false,
+        stdout: output.to_string(),
     };
     
     for line in output.lines() {
@@ -285,12 +401,6 @@ fn parse_verbose_output(filename: &str, output: &str) -> DiagnosticResult {
         }
         
         // Parse rolloff steepness
-        if line.contains("Spectral rolloff:") || line.contains("rolloff:") {
-            if let Some(hz_str) = extract_number_before(line, "Hz") {
-                // This might be rolloff frequency, not steepness
-            }
-        }
-        
         if line.contains("Rolloff steepness:") || line.contains("steepness:") {
             if let Some(db_oct) = extract_number_before(line, "dB") {
                 result.rolloff_steepness = db_oct;
@@ -358,12 +468,10 @@ fn parse_verbose_output(filename: &str, output: &str) -> DiagnosticResult {
 fn extract_number_before(line: &str, suffix: &str) -> Option<f32> {
     if let Some(pos) = line.find(suffix) {
         let before = &line[..pos];
-        // Find the last number-like sequence before the suffix
         let chars: Vec<char> = before.chars().collect();
         let mut end = chars.len();
         let mut start = end;
         
-        // Walk backwards to find digits
         for i in (0..chars.len()).rev() {
             if chars[i].is_ascii_digit() || chars[i] == '.' || chars[i] == '-' {
                 if start == end {
@@ -386,7 +494,6 @@ fn extract_number_before(line: &str, suffix: &str) -> Option<f32> {
 fn extract_number_after_colon(line: &str) -> Option<f32> {
     if let Some(pos) = line.rfind(':') {
         let after = line[pos + 1..].trim();
-        // Get first number-like token
         let num_str: String = after.chars()
             .take_while(|c| c.is_ascii_digit() || *c == '.' || *c == '-')
             .collect();
@@ -401,6 +508,12 @@ fn truncate_filename(name: &str, max_len: usize) -> String {
     } else {
         format!("{}...", &name[..max_len - 3])
     }
+}
+
+fn sanitize_name(s: &str) -> String {
+    s.chars()
+        .map(|c| if c.is_alphanumeric() || c == '_' { c } else { '_' })
+        .collect()
 }
 
 fn get_binary_path() -> PathBuf {
@@ -439,6 +552,7 @@ fn compare_control_vs_transcoded() {
     let binary_path = get_binary_path();
     let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let test_suite = project_root.join("TestSuite");
+    let allure_results_dir = project_root.join("target").join("allure-results");
     
     if !test_suite.exists() {
         println!("TestSuite not found. Skipping comparison.");
@@ -450,7 +564,6 @@ fn compare_control_vs_transcoded() {
     println!("Looking for distinguishing characteristics");
     println!("{}\n", "=".repeat(100));
     
-    // Analyze a few control files
     let control_dir = test_suite.join("Control_Original");
     let mp3_dir = test_suite.join("MP3_128_Boundary");
     
@@ -458,6 +571,9 @@ fn compare_control_vs_transcoded() {
         println!("Required directories not found. Skipping.");
         return;
     }
+    
+    // Create Allure suite for comparison tests
+    let mut allure_suite = AllureTestSuite::new("Comparison Tests", &allure_results_dir);
     
     println!("Analyzing Control files...");
     let control_results = analyze_directory(&binary_path, &control_dir, 5);
@@ -475,24 +591,76 @@ fn compare_control_vs_transcoded() {
     
     println!("\n--- CONTROL FILES (should be CLEAN) ---");
     for r in &control_results {
+        let result_type = if r.detected_defects.is_empty() { "CLEAN" } else { &r.detected_defects.join(",") };
         println!("{:<40} {:>10.0}Hz {:>10.1}% {:>12.1}dB/oct {:>15}",
             truncate_filename(&r.filename, 40),
             r.frequency_cutoff,
             r.cutoff_ratio * 100.0,
             r.rolloff_steepness,
-            if r.detected_defects.is_empty() { "CLEAN" } else { &r.detected_defects.join(",") }
+            result_type
         );
+        
+        // Add Allure result for each control file
+        let mut builder = AllureTestBuilder::new(&format!("Compare Control: {}", r.filename))
+            .full_name(&format!("diagnostic_test::compare::control::{}", sanitize_name(&r.filename)))
+            .severity(AllureSeverity::Normal)
+            .epic("AudioCheckr")
+            .feature("Comparison Analysis")
+            .story("Control vs Transcoded")
+            .suite("Comparison")
+            .sub_suite("Control")
+            .tag("comparison")
+            .tag("control")
+            .parameter("cutoff_ratio", &format!("{:.1}%", r.cutoff_ratio * 100.0))
+            .parameter("steepness", &format!("{:.1} dB/oct", r.rolloff_steepness));
+        
+        if r.is_false_positive {
+            builder = builder.failed("Control file incorrectly flagged", Some(&r.stdout));
+        } else {
+            builder = builder.passed();
+        }
+        
+        allure_suite.add_result(builder.build());
     }
     
     println!("\n--- MP3 128k FILES (should be DEFECTIVE) ---");
     for r in &mp3_results {
+        let result_type = if r.detected_defects.is_empty() { "CLEAN" } else { &r.detected_defects.join(",") };
         println!("{:<40} {:>10.0}Hz {:>10.1}% {:>12.1}dB/oct {:>15}",
             truncate_filename(&r.filename, 40),
             r.frequency_cutoff,
             r.cutoff_ratio * 100.0,
             r.rolloff_steepness,
-            if r.detected_defects.is_empty() { "CLEAN" } else { &r.detected_defects.join(",") }
+            result_type
         );
+        
+        // Add Allure result for each MP3 file
+        let detected = !r.detected_defects.is_empty();
+        let mut builder = AllureTestBuilder::new(&format!("Compare MP3: {}", r.filename))
+            .full_name(&format!("diagnostic_test::compare::mp3::{}", sanitize_name(&r.filename)))
+            .severity(AllureSeverity::Normal)
+            .epic("AudioCheckr")
+            .feature("Comparison Analysis")
+            .story("Control vs Transcoded")
+            .suite("Comparison")
+            .sub_suite("MP3_128")
+            .tag("comparison")
+            .tag("mp3")
+            .parameter("cutoff_ratio", &format!("{:.1}%", r.cutoff_ratio * 100.0))
+            .parameter("steepness", &format!("{:.1} dB/oct", r.rolloff_steepness));
+        
+        if detected {
+            builder = builder.passed();
+        } else {
+            builder = builder.failed("MP3 file not detected as transcode", Some(&r.stdout));
+        }
+        
+        allure_suite.add_result(builder.build());
+    }
+    
+    // Write Allure results
+    if let Err(e) = allure_suite.write_all() {
+        eprintln!("Warning: Failed to write Allure results: {}", e);
     }
     
     // Statistical comparison
@@ -517,7 +685,6 @@ fn compare_control_vs_transcoded() {
         println!("  MP3 128k average: {:.1} dB/oct", mp3_steep_avg);
         println!("  Difference: {:.1} dB/oct", ctrl_steep_avg - mp3_steep_avg);
         
-        // Suggest threshold
         let suggested_cutoff = (ctrl_cutoff_avg + mp3_cutoff_avg) / 2.0;
         let suggested_steep = (ctrl_steep_avg + mp3_steep_avg) / 2.0;
         
@@ -528,6 +695,8 @@ fn compare_control_vs_transcoded() {
         println!("  - Cutoff ratio: < {:.1}% to flag as transcode", (suggested_cutoff - 0.05) * 100.0);
         println!("  - Steepness: > {:.1} dB/oct required for MP3", suggested_steep + 5.0);
     }
+    
+    println!("\nAllure results written to: {}", allure_results_dir.display());
 }
 
 fn analyze_directory(binary: &Path, dir: &Path, limit: usize) -> Vec<DiagnosticResult> {
@@ -565,7 +734,7 @@ fn analyze_directory(binary: &Path, dir: &Path, limit: usize) -> Vec<DiagnosticR
             .output()
             .expect("Failed to execute binary");
         
-        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
         results.push(parse_verbose_output(&filename, &stdout));
     }
     
