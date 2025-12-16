@@ -1,4 +1,4 @@
-# AudioCheckr
+# AudioCheckr Test Suite
 
 A high-resolution audio quality validator that detects fake lossless files, upsampling, bit-depth padding, and lossy codec transcodes.
 
@@ -73,6 +73,7 @@ Test results appear in Jenkins UI:
 - **Test Result Trend**: Graph showing pass/fail over time
 - **Test Results**: Detailed breakdown of each test case
 - **Console Output**: Full test output with individual file results
+- **Allure Report**: Interactive test report with detailed analytics
 
 ### Pipeline Stages
 
@@ -92,8 +93,119 @@ Test results appear in Jenkins UI:
                                                               │
                                                               ▼
                               ┌────────────────────────────────────────┐
+                              │     Allure Report Generation           │
+                              └────────────────────────────────────────┘
+                                                              │
+                                                              ▼
+                              ┌────────────────────────────────────────┐
                               │  Cleanup (delete test files & cache)   │
                               └────────────────────────────────────────┘
+```
+
+---
+
+## Allure Reporting
+
+AudioCheckr tests generate Allure-compatible reports for detailed test visualization.
+
+### Features
+
+- **Test categorization** by Epic, Feature, Story hierarchy
+- **Severity levels** (Blocker, Critical, Normal, Minor, Trivial)
+- **Test parameters** display for each test case
+- **Attachments** with detailed analysis output
+- **Categories** for automatic failure classification:
+  - False Positives (clean files incorrectly flagged)
+  - False Negatives (defective files missed)
+  - Bit Depth Detection Issues
+  - Transcode Detection Issues
+  - Upsampling Detection Issues
+
+### Viewing Reports
+
+#### In Jenkins
+Click on "Allure Report" in the build sidebar to view the interactive report.
+
+#### Local Development
+```bash
+# Run tests to generate results
+cargo test --test qualification_test -- --nocapture
+
+# Generate and serve the report
+allure serve target/allure-results
+
+# Or generate static report
+allure generate target/allure-results -o allure-report --clean
+```
+
+### Report Structure
+
+```
+target/allure-results/
+├── *-result.json           # Individual test results
+├── *-attachment.txt        # Test output attachments
+├── categories.json         # Failure categorization rules
+├── environment.properties  # Build environment info
+└── *-junit.xml            # JUnit XML for Jenkins compatibility
+```
+
+### Allure Result Format
+
+Each test generates a JSON result file with:
+- **uuid**: Unique test identifier
+- **historyId**: For tracking test results over time
+- **name/fullName**: Test identification
+- **status**: passed/failed/broken/skipped
+- **labels**: Epic, Feature, Story, Suite, Tags, Severity
+- **parameters**: Test input parameters (as array of {name, value} objects)
+- **attachments**: Analysis output, verbose logs
+- **statusDetails**: Failure messages and stack traces
+
+### Troubleshooting Allure Issues
+
+#### Empty Dashboard (Only Build Number)
+
+**Symptoms**: Allure dashboard shows build number but no test data
+
+**Common Causes**:
+1. **Invalid XML characters in output**: ANSI escape codes (color codes) in test output
+2. **Wrong JSON format**: Parameters as object instead of array
+3. **Missing result files**: Tests not writing to `target/allure-results`
+
+**Solutions**:
+1. Ensure `test_utils/mod.rs` uses `strip_ansi_codes()` on all text content
+2. Verify `AllureParameter` struct has `name` and `value` fields (not HashMap)
+3. Check `parameters` field is `Vec<AllureParameter>` not `HashMap`
+4. Run `allure serve target/allure-results` locally to see parser errors
+
+#### XML Parse Errors
+
+**Symptoms**: `An invalid XML character (Unicode: 0x1b) was found`
+
+**Solution**: The test output contains ANSI escape codes. The `test_utils` module 
+includes `strip_ansi_codes()` function that must be called on:
+- Test descriptions
+- Failure messages
+- Trace/stack traces
+- Attachments content
+
+#### JSON Deserialization Errors
+
+**Symptoms**: `Cannot deserialize value of type ArrayList from Object value`
+
+**Solution**: Allure expects `parameters` as an array:
+```json
+"parameters": [
+  {"name": "file", "value": "/path/to/test.flac"},
+  {"name": "expected", "value": "CLEAN"}
+]
+```
+
+Not as an object:
+```json
+"parameters": {
+  "file": "/path/to/test.flac"
+}
 ```
 
 ---
@@ -204,6 +316,10 @@ cargo test --test qualification_test -- --nocapture
 
 # Run regression tests (requires full TestFiles/)
 cargo test --test regression_test -- --nocapture
+
+# Run with Allure report generation
+cargo test --test qualification_test -- --nocapture
+allure serve target/allure-results
 ```
 
 ### Test Files Setup
@@ -281,6 +397,12 @@ Track progress in the v0.2 branch.
 2. Manually clean: `rm -rf /var/lib/jenkins/workspace/audiocheckr-ci`
 3. Clean Cargo cache: `rm -rf ~/.cargo/registry/cache`
 
+### Allure Report Empty
+
+**Symptom**: Only build number shows in Allure dashboard
+
+**Fix**: See [Allure Reporting - Troubleshooting](#troubleshooting-allure-issues) section above.
+
 ---
 
 ## License
@@ -309,3 +431,4 @@ See [LICENSE](LICENSE) file.
 | AAC Detection | ⚠️ Partial | 192kHz works, 96kHz in progress |
 | Opus Detection | ⚠️ Partial | 192kHz works, 96kHz in progress |
 | Vorbis Detection | ⚠️ Partial | 192kHz works, 96kHz in progress |
+| Allure Reporting | ✅ Working | v2 with proper JSON format |

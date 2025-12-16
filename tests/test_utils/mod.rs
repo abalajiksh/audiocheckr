@@ -6,10 +6,14 @@
 // - Generating JUnit XML output with Allure extensions
 // - Creating Allure result JSON files directly
 // - Test case metadata (severity, epic, feature, story)
+//
+// v2: Fixed Allure JSON format issues:
+// - Parameters now use array format [{name, value}] instead of HashMap
+// - Added ANSI escape code stripping from all text content
+// - Improved XML character escaping
 
 #![allow(dead_code)]
 
-use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH, Duration};
@@ -123,6 +127,23 @@ impl AllureLabel {
     }
 }
 
+/// Allure parameter - used for test parameterization
+/// IMPORTANT: Allure expects parameters as an array of {name, value} objects
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AllureParameter {
+    pub name: String,
+    pub value: String,
+}
+
+impl AllureParameter {
+    pub fn new(name: &str, value: &str) -> Self {
+        Self {
+            name: name.to_string(),
+            value: strip_ansi_codes(value),
+        }
+    }
+}
+
 /// Allure attachment
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AllureAttachment {
@@ -144,6 +165,7 @@ pub struct AllureStep {
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub attachments: Vec<AllureAttachment>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "statusDetails")]
     pub status_details: Option<AllureStatusDetails>,
 }
 
@@ -163,6 +185,7 @@ pub struct AllureStatusDetails {
 }
 
 /// Allure test result (main structure written to allure-results)
+/// This matches the Allure 2 JSON format exactly
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AllureTestResult {
@@ -185,8 +208,9 @@ pub struct AllureTestResult {
     pub description: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description_html: Option<String>,
-    #[serde(skip_serializing_if = "HashMap::is_empty", default)]
-    pub parameters: HashMap<String, String>,
+    /// Parameters as array of {name, value} objects - this is the correct Allure format
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub parameters: Vec<AllureParameter>,
 }
 
 /// Builder for AllureTestResult
@@ -216,7 +240,7 @@ impl AllureTestBuilder {
                 status_details: None,
                 description: None,
                 description_html: None,
-                parameters: HashMap::new(),
+                parameters: vec![],
             },
             current_step: None,
         }
@@ -228,12 +252,12 @@ impl AllureTestBuilder {
     }
     
     pub fn description(mut self, desc: &str) -> Self {
-        self.result.description = Some(desc.to_string());
+        self.result.description = Some(strip_ansi_codes(desc));
         self
     }
     
     pub fn description_html(mut self, html: &str) -> Self {
-        self.result.description_html = Some(html.to_string());
+        self.result.description_html = Some(strip_ansi_codes(html));
         self
     }
     
@@ -282,8 +306,9 @@ impl AllureTestBuilder {
         self
     }
     
+    /// Add a parameter (for test parameterization display in Allure)
     pub fn parameter(mut self, name: &str, value: &str) -> Self {
-        self.result.parameters.insert(name.to_string(), value.to_string());
+        self.result.parameters.push(AllureParameter::new(name, value));
         self
     }
     
@@ -333,8 +358,8 @@ impl AllureTestBuilder {
             known: None,
             muted: None,
             flaky: None,
-            message: Some(message.to_string()),
-            trace: trace.map(|s| s.to_string()),
+            message: Some(strip_ansi_codes(message)),
+            trace: trace.map(|s| strip_ansi_codes(s)),
         });
         self
     }
@@ -346,8 +371,8 @@ impl AllureTestBuilder {
             known: None,
             muted: None,
             flaky: None,
-            message: Some(message.to_string()),
-            trace: trace.map(|s| s.to_string()),
+            message: Some(strip_ansi_codes(message)),
+            trace: trace.map(|s| strip_ansi_codes(s)),
         });
         self
     }
@@ -359,7 +384,7 @@ impl AllureTestBuilder {
             known: None,
             muted: None,
             flaky: None,
-            message: Some(reason.to_string()),
+            message: Some(strip_ansi_codes(reason)),
             trace: None,
         });
         self
@@ -368,7 +393,10 @@ impl AllureTestBuilder {
     pub fn attach_text(&mut self, name: &str, content: &str, results_dir: &Path) -> std::io::Result<()> {
         let filename = format!("{}-attachment.txt", generate_uuid());
         let filepath = results_dir.join(&filename);
-        fs::write(&filepath, content)?;
+        
+        // Strip ANSI codes from attachment content
+        let clean_content = strip_ansi_codes(content);
+        fs::write(&filepath, clean_content)?;
         
         self.result.attachments.push(AllureAttachment {
             name: name.to_string(),
@@ -542,11 +570,12 @@ impl AllureTestSuite {
                 _ => {}
             }
             
-            // Add system-out with description
+            // Add system-out with description (sanitized)
             if let Some(ref desc) = result.description {
+                let clean_desc = strip_ansi_codes(desc);
                 xml.push_str(&format!(
                     "    <system-out><![CDATA[{}]]></system-out>\n",
-                    desc
+                    sanitize_cdata(&clean_desc)
                 ));
             }
             
@@ -565,18 +594,18 @@ impl AllureTestSuite {
 /// Environment info for Allure report
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AllureEnvironment {
-    pub properties: HashMap<String, String>,
+    pub properties: Vec<(String, String)>,
 }
 
 impl AllureEnvironment {
     pub fn new() -> Self {
         Self {
-            properties: HashMap::new(),
+            properties: Vec::new(),
         }
     }
     
     pub fn add(&mut self, key: &str, value: &str) -> &mut Self {
-        self.properties.insert(key.to_string(), value.to_string());
+        self.properties.push((key.to_string(), value.to_string()));
         self
     }
     
@@ -686,10 +715,12 @@ pub fn default_audiocheckr_categories() -> Vec<AllureCategory> {
     ]
 }
 
+// =============================================================================
 // Helper functions
+// =============================================================================
 
+/// Generate a unique identifier for Allure results
 fn generate_uuid() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
     let duration = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or(Duration::from_secs(0));
@@ -705,6 +736,7 @@ fn generate_uuid() -> String {
     )
 }
 
+/// Generate a history ID for tracking test results over time
 fn generate_history_id(name: &str) -> String {
     // Simple hash of the test name for history tracking
     let mut hash: u64 = 0xcbf29ce484222325; // FNV-1a offset basis
@@ -715,6 +747,7 @@ fn generate_history_id(name: &str) -> String {
     format!("{:016x}", hash)
 }
 
+/// Get current timestamp in milliseconds
 fn current_timestamp_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -722,19 +755,84 @@ fn current_timestamp_ms() -> u64 {
         .as_millis() as u64
 }
 
+/// Escape special XML characters and remove invalid XML characters
 fn escape_xml(s: &str) -> String {
-    s.replace('&', "&amp;")
+    // First strip ANSI codes, then escape XML entities
+    let clean = strip_ansi_codes(s);
+    clean
+        .replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('"', "&quot;")
         .replace('\'', "&apos;")
 }
 
+/// Sanitize content for CDATA sections (remove invalid XML characters)
+fn sanitize_cdata(s: &str) -> String {
+    // Remove any ]]> sequences that would break CDATA
+    let clean = strip_ansi_codes(s);
+    clean.replace("]]>", "]]]]><![CDATA[>")
+}
+
+/// Strip ANSI escape codes from a string
+/// This handles color codes, cursor movements, and other terminal escape sequences
+pub fn strip_ansi_codes(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            // Start of escape sequence
+            if let Some(&next) = chars.peek() {
+                if next == '[' {
+                    // CSI sequence: ESC [ ... final_byte
+                    chars.next(); // consume '['
+                    // Skip until we find a letter (the final byte)
+                    while let Some(&c) = chars.peek() {
+                        chars.next();
+                        if c.is_ascii_alphabetic() || c == '~' {
+                            break;
+                        }
+                    }
+                    continue;
+                } else if next == ']' {
+                    // OSC sequence: ESC ] ... BEL or ESC \
+                    chars.next(); // consume ']'
+                    while let Some(&c) = chars.peek() {
+                        chars.next();
+                        if c == '\x07' || c == '\\' {
+                            break;
+                        }
+                    }
+                    continue;
+                }
+            }
+            // Unknown escape sequence, skip just the ESC
+            continue;
+        }
+        
+        // Filter out other control characters that are invalid in XML
+        // Valid XML 1.0 characters: #x9 | #xA | #xD | [#x20-#xD7FF] | [#xE000-#xFFFD]
+        if c == '\t' || c == '\n' || c == '\r' || (c >= '\x20' && c <= '\u{D7FF}') || 
+           (c >= '\u{E000}' && c <= '\u{FFFD}') {
+            result.push(c);
+        }
+        // Drop all other control characters (0x00-0x08, 0x0B, 0x0C, 0x0E-0x1F)
+    }
+    
+    result
+}
+
+/// Sanitize a string for use as a filename
 fn sanitize_filename(s: &str) -> String {
     s.chars()
         .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
         .collect()
 }
+
+// =============================================================================
+// Unit tests
+// =============================================================================
 
 #[cfg(test)]
 mod tests {
@@ -756,6 +854,9 @@ mod tests {
         assert_eq!(result.name, "test_example");
         assert!(matches!(result.status, AllureStatus::Passed));
         assert!(!result.labels.is_empty());
+        assert_eq!(result.parameters.len(), 1);
+        assert_eq!(result.parameters[0].name, "sample_rate");
+        assert_eq!(result.parameters[0].value, "96000");
     }
     
     #[test]
@@ -767,5 +868,61 @@ mod tests {
         assert_ne!(uuid1, uuid2);
         // UUIDs should have expected format
         assert!(uuid1.contains('-'));
+    }
+    
+    #[test]
+    fn test_strip_ansi_codes() {
+        // Test basic color codes
+        let input = "\x1b[32mPASS\x1b[0m: test";
+        let expected = "PASS: test";
+        assert_eq!(strip_ansi_codes(input), expected);
+        
+        // Test multiple codes
+        let input2 = "\x1b[1;31mERROR\x1b[0m: \x1b[33mwarning\x1b[0m";
+        let expected2 = "ERROR: warning";
+        assert_eq!(strip_ansi_codes(input2), expected2);
+        
+        // Test no codes
+        let input3 = "plain text";
+        assert_eq!(strip_ansi_codes(input3), input3);
+        
+        // Test control character filtering
+        let input4 = "text\x00with\x1fcontrol\x0bchars";
+        let expected4 = "textwithcontrolchars";
+        assert_eq!(strip_ansi_codes(input4), expected4);
+    }
+    
+    #[test]
+    fn test_escape_xml() {
+        let input = "<test & \"value\">";
+        let expected = "&lt;test &amp; &quot;value&quot;&gt;";
+        assert_eq!(escape_xml(input), expected);
+    }
+    
+    #[test]
+    fn test_parameter_format() {
+        let param = AllureParameter::new("file", "/path/to/file.flac");
+        assert_eq!(param.name, "file");
+        assert_eq!(param.value, "/path/to/file.flac");
+        
+        // Verify JSON serialization produces correct format
+        let json = serde_json::to_string(&param).unwrap();
+        assert!(json.contains("\"name\""));
+        assert!(json.contains("\"value\""));
+    }
+    
+    #[test]
+    fn test_parameters_array_in_result() {
+        let result = AllureTestBuilder::new("test")
+            .parameter("key1", "value1")
+            .parameter("key2", "value2")
+            .passed()
+            .build();
+        
+        // Verify parameters is an array
+        let json = serde_json::to_string_pretty(&result).unwrap();
+        assert!(json.contains("\"parameters\": ["));
+        assert!(json.contains("\"name\": \"key1\""));
+        assert!(json.contains("\"value\": \"value1\""));
     }
 }
