@@ -5,7 +5,9 @@
 //
 // Key insight: Genuine 24-bit audio has random distribution in lower 8 bits.
 // Fake 24-bit (upscaled 16-bit) has nearly ALL samples with lower 8 bits as 0x00 or 0x80.
-// We need VERY high thresholds to avoid false positives on real 24-bit audio.
+//
+// IMPORTANT: We use VERY conservative thresholds to avoid false positives.
+// It's better to miss a fake than to wrongly flag genuine audio.
 
 use std::collections::HashMap;
 
@@ -83,17 +85,24 @@ pub fn analyze_bit_depth(audio: &crate::core::AudioData) -> BitDepthAnalysis {
         audio.claimed_bit_depth,
     );
     
-    // Very conservative mismatch detection:
-    // - Require high confidence from multiple methods
-    // - Only flag if claimed 24-bit but detected as 16-bit
+    // VERY conservative mismatch detection:
+    // - Require VERY high confidence (0.90+)
+    // - Must be claimed 24-bit but detected as 16-bit
+    // - At least 3 methods must strongly agree
+    let high_confidence_16_count = [lsb_result, histogram_result, noise_result, clustering_result]
+        .iter()
+        .filter(|(bd, conf)| *bd == 16 && *conf >= 0.85)
+        .count();
+    
     let is_mismatch = actual_bit_depth == 16 
         && audio.claimed_bit_depth >= 24
-        && confidence >= 0.85;  // Increased threshold
+        && confidence >= 0.90
+        && high_confidence_16_count >= 3;
     
     if is_mismatch {
         evidence.push(format!(
-            "MISMATCH: File claims {} bit but analysis indicates {} bit with {:.0}% confidence",
-            audio.claimed_bit_depth, actual_bit_depth, confidence * 100.0
+            "MISMATCH: File claims {} bit but {} methods strongly agree it's {} bit (confidence: {:.0}%)",
+            audio.claimed_bit_depth, high_confidence_16_count, actual_bit_depth, confidence * 100.0
         ));
     }
 
@@ -117,7 +126,7 @@ pub fn analyze_bit_depth(audio: &crate::core::AudioData) -> BitDepthAnalysis {
 /// Genuine 24-bit audio: Random distribution of trailing zeros (0-7 mostly)
 /// Fake 24-bit (16-bit upscaled): Nearly ALL samples have exactly 8 trailing zeros
 fn analyze_lsb_precision(samples: &[f32]) -> (u32, f32) {
-    let test_samples = samples.len().min(200000);
+    let test_samples = samples.len().min(300000);
     
     let mut trailing_zero_counts: HashMap<u32, u32> = HashMap::new();
     let mut total_samples = 0u32;
@@ -161,24 +170,30 @@ fn analyze_lsb_precision(samples: &[f32]) -> (u32, f32) {
         .sum();
     let ratio_low_zeros = samples_with_low_zeros as f32 / total_samples as f32;
     
-    // VERY CONSERVATIVE thresholds to avoid false positives:
-    // - True 16-bit upscaled will have >95% samples with exactly 8 trailing zeros
+    // EXTREMELY CONSERVATIVE thresholds to avoid false positives:
+    // - True 16-bit upscaled will have >97% samples with exactly 8 trailing zeros
     // - True 24-bit will have significant activity in lower bits
     
-    if ratio_exactly_8 > 0.95 && ratio_low_zeros < 0.02 {
-        // Almost certainly 16-bit upscaled - very little activity in lower 8 bits
-        (16, 0.95)
-    } else if ratio_8plus > 0.90 && ratio_low_zeros < 0.05 {
+    if ratio_exactly_8 > 0.97 && ratio_low_zeros < 0.01 {
+        // Almost certainly 16-bit upscaled - virtually no activity in lower 8 bits
+        (16, 0.98)
+    } else if ratio_exactly_8 > 0.95 && ratio_low_zeros < 0.02 {
         // Very likely 16-bit upscaled
+        (16, 0.92)
+    } else if ratio_8plus > 0.93 && ratio_low_zeros < 0.03 {
+        // Likely 16-bit upscaled
         (16, 0.85)
-    } else if ratio_low_zeros > 0.30 {
+    } else if ratio_low_zeros > 0.20 {
         // Significant activity in lower bits - genuine 24-bit
-        (24, 0.90)
-    } else if ratio_low_zeros > 0.15 {
+        (24, 0.95)
+    } else if ratio_low_zeros > 0.10 {
         // Some activity in lower bits - likely genuine 24-bit
-        (24, 0.75)
-    } else if ratio_8plus > 0.70 {
-        // Suspicious but not conclusive - could be quiet recording
+        (24, 0.85)
+    } else if ratio_low_zeros > 0.05 {
+        // Minimal but present activity - probably genuine 24-bit
+        (24, 0.70)
+    } else if ratio_8plus > 0.85 {
+        // Suspicious but not conclusive - could be quiet recording or dithered
         (16, 0.55)
     } else {
         // Default to 24-bit to avoid false positives
@@ -187,7 +202,7 @@ fn analyze_lsb_precision(samples: &[f32]) -> (u32, f32) {
 }
 
 fn analyze_histogram(samples: &[f32]) -> (u32, f32) {
-    let test_samples = samples.len().min(200000);
+    let test_samples = samples.len().min(300000);
     
     let mut values_16bit: HashMap<i32, u32> = HashMap::new();
     let mut values_24bit: HashMap<i32, u32> = HashMap::new();
@@ -225,20 +240,26 @@ fn analyze_histogram(samples: &[f32]) -> (u32, f32) {
     let boundary_ratio = multiples_of_256 as f32 / unique_24.max(1) as f32;
     
     // VERY CONSERVATIVE: Only flag as 16-bit if evidence is overwhelming
-    if ratio < 1.2 && boundary_ratio > 0.85 {
-        // Almost certainly 16-bit: very few unique values, most on boundaries
-        (16, 0.95)
-    } else if ratio < 1.5 && boundary_ratio > 0.70 {
+    if ratio < 1.1 && boundary_ratio > 0.90 {
+        // Almost certainly 16-bit: virtually all values on boundaries
+        (16, 0.98)
+    } else if ratio < 1.2 && boundary_ratio > 0.85 {
+        // Very likely 16-bit upscaled
+        (16, 0.90)
+    } else if ratio < 1.3 && boundary_ratio > 0.80 {
         // Likely 16-bit upscaled
         (16, 0.80)
-    } else if ratio > 100.0 {
+    } else if ratio > 50.0 {
         // Definitely 24-bit: massive increase in unique values
-        (24, 0.95)
+        (24, 0.98)
     } else if ratio > 20.0 {
         // Very likely genuine 24-bit
-        (24, 0.85)
-    } else if ratio > 5.0 {
+        (24, 0.90)
+    } else if ratio > 10.0 {
         // Probably genuine 24-bit
+        (24, 0.80)
+    } else if ratio > 3.0 {
+        // Likely genuine 24-bit
         (24, 0.70)
     } else {
         // Inconclusive - default to 24-bit to avoid false positives
@@ -248,7 +269,7 @@ fn analyze_histogram(samples: &[f32]) -> (u32, f32) {
 
 fn analyze_quantization_noise(samples: &[f32]) -> (u32, f32) {
     let section_size = 16384;
-    let num_sections = (samples.len() / section_size).min(20);
+    let num_sections = (samples.len() / section_size).min(30);
     
     if num_sections == 0 {
         return (24, 0.3);
@@ -280,7 +301,7 @@ fn analyze_quantization_noise(samples: &[f32]) -> (u32, f32) {
     let mut lsb_noise_sum = 0.0f32;
     let mut count = 0;
     
-    for (start, _) in quiet_sections.iter().take(5) {
+    for (start, _) in quiet_sections.iter().take(8) {
         let end = (*start + section_size).min(samples.len());
         let section = &samples[*start..end];
         
@@ -311,15 +332,15 @@ fn analyze_quantization_noise(samples: &[f32]) -> (u32, f32) {
     let step_24bit = 1.0 / 8388608.0; // ~1.19e-7
     
     // CONSERVATIVE thresholds
-    if avg_noise_step > step_16bit * 0.7 {
+    if avg_noise_step > step_16bit * 0.8 {
         // Noise floor matches 16-bit quantization
-        (16, 0.80)
-    } else if avg_noise_step < step_24bit * 50.0 {
+        (16, 0.85)
+    } else if avg_noise_step < step_24bit * 100.0 {
         // Very fine noise floor - genuine 24-bit
-        (24, 0.85)
-    } else if avg_noise_step < step_16bit * 0.2 {
+        (24, 0.90)
+    } else if avg_noise_step < step_16bit * 0.3 {
         // Noise floor finer than 16-bit would allow
-        (24, 0.70)
+        (24, 0.75)
     } else {
         // Inconclusive
         (24, 0.45)
@@ -327,7 +348,7 @@ fn analyze_quantization_noise(samples: &[f32]) -> (u32, f32) {
 }
 
 fn analyze_value_clustering(samples: &[f32]) -> (u32, f32) {
-    let test_samples = samples.len().min(200000);
+    let test_samples = samples.len().min(300000);
     let mut lsb_distribution: HashMap<u8, u32> = HashMap::new();
     let mut total_non_silent = 0u32;
     
@@ -362,27 +383,30 @@ fn analyze_value_clustering(samples: &[f32]) -> (u32, f32) {
     let normalized_entropy = entropy / max_entropy;
     
     // VERY CONSERVATIVE thresholds
-    if concentrated_ratio > 0.95 && unique_lsb_values < 5 {
+    if concentrated_ratio > 0.97 && unique_lsb_values < 5 {
         // Almost all samples at 0x00 or 0x80 - definitely 16-bit upscaled
-        (16, 0.95)
-    } else if concentrated_ratio > 0.85 && unique_lsb_values < 20 {
+        (16, 0.98)
+    } else if concentrated_ratio > 0.93 && unique_lsb_values < 10 {
         // Very likely 16-bit upscaled
-        (16, 0.85)
+        (16, 0.90)
+    } else if concentrated_ratio > 0.88 && unique_lsb_values < 20 {
+        // Likely 16-bit upscaled
+        (16, 0.82)
     } else if normalized_entropy > 0.90 && unique_lsb_values > 200 {
         // High entropy, many unique values - definitely genuine 24-bit
-        (24, 0.95)
+        (24, 0.98)
     } else if normalized_entropy > 0.80 && unique_lsb_values > 150 {
         // Good entropy - likely genuine 24-bit
-        (24, 0.80)
+        (24, 0.85)
     } else if unique_lsb_values > 100 {
         // Moderate variety - probably genuine 24-bit
-        (24, 0.65)
-    } else if concentrated_ratio > 0.70 {
+        (24, 0.70)
+    } else if concentrated_ratio > 0.80 {
         // Suspicious clustering but not definitive
         (16, 0.55)
     } else {
         // Default to 24-bit to avoid false positives
-        (24, 0.50)
+        (24, 0.55)
     }
 }
 
@@ -410,12 +434,16 @@ fn vote_bit_depth_conservative(
     let mut vote_16 = 0.0f32;
     let mut vote_24 = 0.0f32;
     let mut high_confidence_16_count = 0;
+    let mut very_high_confidence_16_count = 0;
     
     for &(bit_depth, confidence) in results {
         if bit_depth <= 16 {
             vote_16 += confidence;
             if confidence >= 0.80 {
                 high_confidence_16_count += 1;
+            }
+            if confidence >= 0.90 {
+                very_high_confidence_16_count += 1;
             }
         } else {
             vote_24 += confidence;
@@ -428,14 +456,17 @@ fn vote_bit_depth_conservative(
         return (claimed_bit_depth, 0.3);
     }
     
-    // CONSERVATIVE: Require MULTIPLE high-confidence 16-bit votes to flag
+    // VERY CONSERVATIVE: Require MULTIPLE high-confidence 16-bit votes to flag
     // This prevents false positives from a single noisy detector
-    if vote_16 > vote_24 && high_confidence_16_count >= 3 {
-        // Strong consensus for 16-bit
+    if vote_16 > vote_24 && very_high_confidence_16_count >= 3 {
+        // Very strong consensus for 16-bit (3+ methods with 90%+ confidence)
         (16, vote_16 / total)
-    } else if vote_16 > vote_24 * 1.5 && high_confidence_16_count >= 2 {
-        // Good evidence for 16-bit
-        (16, (vote_16 / total) * 0.9)  // Slightly reduce confidence
+    } else if vote_16 > vote_24 && high_confidence_16_count >= 4 {
+        // All 4 methods agree with high confidence
+        (16, (vote_16 / total) * 0.95)
+    } else if vote_16 > vote_24 * 2.0 && high_confidence_16_count >= 3 {
+        // Strong evidence for 16-bit
+        (16, (vote_16 / total) * 0.90)
     } else if vote_24 > vote_16 {
         // Evidence favors 24-bit
         (24, vote_24 / total)

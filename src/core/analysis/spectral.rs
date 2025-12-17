@@ -1,8 +1,10 @@
-// spectral_improved.rs
-// Improved spectral analysis for detecting lossy codec transcodes
-// This replaces/supplements the existing spectral.rs that returns 100% for everything
+// src/core/analysis/spectral.rs
+//
+// Spectral analysis for detecting lossy codec transcodes.
+// Uses FFT-based frequency analysis to find cutoff frequencies and codec signatures.
 
-use std::f64::consts::PI;
+use rustfft::{FftPlanner, num_complex::Complex};
+use std::f32::consts::PI;
 
 /// Frequency cutoff detection results
 #[derive(Debug, Clone)]
@@ -41,28 +43,45 @@ pub enum Codec {
 }
 
 /// Known cutoff frequencies for various codecs/bitrates
+/// Format: (Codec, Bitrate, Typical Cutoff Hz, Tolerance Hz)
 const CODEC_CUTOFFS: &[(Codec, u32, f32, f32)] = &[
-    // (Codec, Bitrate, Typical Cutoff Hz, Tolerance Hz)
-    (Codec::MP3, 128, 16000.0, 500.0),
-    (Codec::MP3, 192, 18500.0, 500.0),
-    (Codec::MP3, 256, 19500.0, 500.0),
-    (Codec::MP3, 320, 20500.0, 500.0),
-    (Codec::AAC, 128, 15500.0, 500.0),
-    (Codec::AAC, 192, 18000.0, 500.0),
-    (Codec::AAC, 256, 19000.0, 500.0),
-    (Codec::Opus, 64, 12000.0, 500.0),
-    (Codec::Opus, 128, 20000.0, 500.0),
+    // MP3 - LAME encoder typical cutoffs
+    (Codec::MP3, 64, 11000.0, 1000.0),
+    (Codec::MP3, 96, 14000.0, 1000.0),
+    (Codec::MP3, 128, 16000.0, 1000.0),
+    (Codec::MP3, 160, 17500.0, 1000.0),
+    (Codec::MP3, 192, 18500.0, 1000.0),
+    (Codec::MP3, 224, 19000.0, 1000.0),
+    (Codec::MP3, 256, 19500.0, 1000.0),
+    (Codec::MP3, 320, 20500.0, 1000.0),
+    
+    // AAC - typical cutoffs
+    (Codec::AAC, 96, 14000.0, 1000.0),
+    (Codec::AAC, 128, 15500.0, 1000.0),
+    (Codec::AAC, 160, 17000.0, 1000.0),
+    (Codec::AAC, 192, 18000.0, 1000.0),
+    (Codec::AAC, 256, 19000.0, 1000.0),
+    (Codec::AAC, 320, 20000.0, 1000.0),
+    
+    // Opus - typical cutoffs
+    (Codec::Opus, 48, 12000.0, 500.0),
+    (Codec::Opus, 64, 14000.0, 1000.0),
+    (Codec::Opus, 96, 18000.0, 1000.0),
+    (Codec::Opus, 128, 20000.0, 1000.0),
     (Codec::Opus, 192, 20000.0, 500.0),
-    (Codec::Vorbis, 128, 16000.0, 500.0),
-    (Codec::Vorbis, 192, 18500.0, 500.0),
+    
+    // Vorbis - quality levels
+    (Codec::Vorbis, 80, 14000.0, 1000.0),   // ~q3
+    (Codec::Vorbis, 112, 16000.0, 1000.0),  // ~q5
+    (Codec::Vorbis, 160, 18000.0, 1000.0),  // ~q7
+    (Codec::Vorbis, 192, 19000.0, 1000.0),  // ~q8
+    (Codec::Vorbis, 256, 20000.0, 500.0),   // ~q9
 ];
 
-/// Improved spectral analyzer
+/// Improved spectral analyzer using proper FFT
 pub struct SpectralAnalyzer {
     /// FFT size (larger = better frequency resolution)
     fft_size: usize,
-    /// Overlap between FFT windows (0.0 - 0.99)
-    overlap: f32,
     /// Number of windows to average
     num_windows: usize,
     /// Smoothing factor for spectrum
@@ -72,10 +91,9 @@ pub struct SpectralAnalyzer {
 impl Default for SpectralAnalyzer {
     fn default() -> Self {
         Self {
-            fft_size: 8192,       // Good balance of resolution and speed
-            overlap: 0.75,        // 75% overlap for better averaging
-            num_windows: 64,      // Average 64 windows
-            smoothing_bins: 16,   // Smooth over 16 bins
+            fft_size: 8192,       // Good frequency resolution
+            num_windows: 50,      // Average 50 windows for stability
+            smoothing_bins: 8,    // Smooth over 8 bins
         }
     }
 }
@@ -92,8 +110,21 @@ impl SpectralAnalyzer {
     pub fn analyze(&self, samples: &[f32], sample_rate: u32) -> SpectralAnalysis {
         let nyquist = sample_rate as f32 / 2.0;
         
-        // Step 1: Compute averaged magnitude spectrum
-        let spectrum_linear = self.compute_averaged_spectrum(samples);
+        if samples.len() < self.fft_size * 2 {
+            // Not enough samples for analysis
+            return SpectralAnalysis {
+                cutoff_hz: nyquist,
+                cutoff_ratio: 1.0,
+                rolloff_steepness: 0.0,
+                confidence: 0.0,
+                likely_codec: None,
+                spectrum_db: vec![],
+                frequencies: vec![],
+            };
+        }
+        
+        // Step 1: Compute averaged magnitude spectrum using rustfft
+        let spectrum_linear = self.compute_averaged_spectrum_fft(samples);
         
         // Step 2: Convert to dB and smooth
         let spectrum_db = self.to_db_smoothed(&spectrum_linear);
@@ -127,17 +158,26 @@ impl SpectralAnalyzer {
         }
     }
 
-    /// Compute averaged magnitude spectrum using Welch's method
-    fn compute_averaged_spectrum(&self, samples: &[f32]) -> Vec<f32> {
-        let hop_size = ((1.0 - self.overlap) * self.fft_size as f32) as usize;
+    /// Compute averaged magnitude spectrum using rustfft (fast!)
+    fn compute_averaged_spectrum_fft(&self, samples: &[f32]) -> Vec<f32> {
+        let mut planner = FftPlanner::new();
+        let fft = planner.plan_fft_forward(self.fft_size);
+        
+        // Hop size for 50% overlap
+        let hop_size = self.fft_size / 2;
         let num_windows = ((samples.len() - self.fft_size) / hop_size + 1).min(self.num_windows);
         
         if num_windows == 0 {
             return vec![0.0; self.fft_size / 2];
         }
         
+        // Pre-compute Hann window
+        let window: Vec<f32> = (0..self.fft_size)
+            .map(|i| 0.5 * (1.0 - (2.0 * PI * i as f32 / self.fft_size as f32).cos()))
+            .collect();
+        
         let mut spectrum_sum = vec![0.0f64; self.fft_size / 2];
-        let window = self.hann_window(self.fft_size);
+        let mut buffer = vec![Complex::new(0.0f32, 0.0f32); self.fft_size];
         
         for w in 0..num_windows {
             let start = w * hop_size;
@@ -145,53 +185,23 @@ impl SpectralAnalyzer {
                 break;
             }
             
-            // Apply window
-            let windowed: Vec<f32> = samples[start..start + self.fft_size]
-                .iter()
-                .zip(window.iter())
-                .map(|(&s, &w)| s * w)
-                .collect();
+            // Apply window and copy to buffer
+            for i in 0..self.fft_size {
+                buffer[i] = Complex::new(samples[start + i] * window[i], 0.0);
+            }
             
-            // Compute FFT magnitude
-            let magnitudes = self.compute_fft_magnitude(&windowed);
+            // Compute FFT
+            fft.process(&mut buffer);
             
-            for (i, &mag) in magnitudes.iter().enumerate() {
+            // Accumulate magnitude spectrum
+            for (i, c) in buffer.iter().take(self.fft_size / 2).enumerate() {
+                let mag = (c.re * c.re + c.im * c.im).sqrt();
                 spectrum_sum[i] += mag as f64;
             }
         }
         
         // Average
         spectrum_sum.iter().map(|&s| (s / num_windows as f64) as f32).collect()
-    }
-
-    /// Compute FFT magnitude spectrum
-    fn compute_fft_magnitude(&self, samples: &[f32]) -> Vec<f32> {
-        // Using simple DFT for demonstration - replace with rustfft in production
-        let n = samples.len();
-        let mut magnitudes = vec![0.0f32; n / 2];
-        
-        // Only compute up to Nyquist
-        for k in 0..n/2 {
-            let mut real = 0.0f64;
-            let mut imag = 0.0f64;
-            
-            for (i, &sample) in samples.iter().enumerate() {
-                let angle = -2.0 * PI * k as f64 * i as f64 / n as f64;
-                real += sample as f64 * angle.cos();
-                imag += sample as f64 * angle.sin();
-            }
-            
-            magnitudes[k] = ((real * real + imag * imag).sqrt() / n as f64) as f32;
-        }
-        
-        magnitudes
-    }
-
-    /// Generate Hann window
-    fn hann_window(&self, size: usize) -> Vec<f32> {
-        (0..size)
-            .map(|i| 0.5 * (1.0 - (2.0 * PI * i as f64 / (size - 1) as f64).cos()) as f32)
-            .collect()
     }
 
     /// Convert to dB scale and apply smoothing
@@ -202,7 +212,7 @@ impl SpectralAnalyzer {
                 if mag > 1e-10 {
                     20.0 * mag.log10()
                 } else {
-                    -200.0
+                    -120.0
                 }
             })
             .collect();
@@ -230,7 +240,7 @@ impl SpectralAnalyzer {
     ) -> (f32, f32, f32) {
         let nyquist = sample_rate as f32 / 2.0;
         
-        // Method 1: Energy drop detection
+        // Method 1: Energy drop detection (most reliable)
         let cutoff1 = self.detect_cutoff_energy_drop(spectrum_db, frequencies, nyquist);
         
         // Method 2: Derivative-based edge detection
@@ -239,30 +249,34 @@ impl SpectralAnalyzer {
         // Method 3: Noise floor comparison
         let cutoff3 = self.detect_cutoff_noise_floor(spectrum_db, frequencies, nyquist);
         
-        // Combine results (weighted average of agreeing methods)
-        let mut cutoffs = vec![cutoff1, cutoff2, cutoff3];
-        cutoffs.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+        // Combine results (weighted by confidence)
+        let mut results = vec![cutoff1, cutoff2, cutoff3];
+        results.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
         
         // Check for agreement
-        let spread = cutoffs[2].0 - cutoffs[0].0;
-        let tolerance = nyquist * 0.05;  // 5% of Nyquist
+        let spread = results[2].0 - results[0].0;
+        let tolerance = nyquist * 0.08;  // 8% tolerance
         
         if spread < tolerance {
             // Good agreement - use weighted average
-            let total_weight: f32 = cutoffs.iter().map(|c| c.2).sum();
-            let weighted_cutoff = cutoffs.iter()
+            let total_weight: f32 = results.iter().map(|c| c.2).sum();
+            if total_weight < 0.01 {
+                return (nyquist, 0.0, 0.1);
+            }
+            
+            let weighted_cutoff = results.iter()
                 .map(|c| c.0 * c.2)
                 .sum::<f32>() / total_weight;
-            let weighted_rolloff = cutoffs.iter()
+            let weighted_rolloff = results.iter()
                 .map(|c| c.1 * c.2)
                 .sum::<f32>() / total_weight;
-            let confidence = cutoffs.iter().map(|c| c.2).sum::<f32>() / 3.0;
+            let confidence = (results.iter().map(|c| c.2).sum::<f32>() / 3.0).min(0.95);
             
-            (weighted_cutoff, weighted_rolloff, confidence.min(1.0))
+            (weighted_cutoff, weighted_rolloff, confidence)
         } else {
-            // Disagreement - use median with lower confidence
-            let median_idx = 1;
-            (cutoffs[median_idx].0, cutoffs[median_idx].1, cutoffs[median_idx].2 * 0.6)
+            // Disagreement - use the method with highest confidence
+            let best = results.iter().max_by(|a, b| a.2.partial_cmp(&b.2).unwrap()).unwrap();
+            (best.0, best.1, best.2 * 0.7)  // Reduce confidence on disagreement
         }
     }
 
@@ -273,39 +287,48 @@ impl SpectralAnalyzer {
         frequencies: &[f32],
         nyquist: f32,
     ) -> (f32, f32, f32) {
-        // Find the average energy in the "reference" band (1-10 kHz typically has content)
-        let ref_start = frequencies.iter().position(|&f| f >= 1000.0).unwrap_or(0);
-        let ref_end = frequencies.iter().position(|&f| f >= 10000.0).unwrap_or(spectrum_db.len() / 2);
+        if spectrum_db.len() < 100 {
+            return (nyquist, 0.0, 0.0);
+        }
+        
+        // Find the average energy in the "reference" band (2-8 kHz typically has content)
+        let ref_start = frequencies.iter().position(|&f| f >= 2000.0).unwrap_or(0);
+        let ref_end = frequencies.iter().position(|&f| f >= 8000.0).unwrap_or(spectrum_db.len() / 4);
         
         if ref_end <= ref_start {
             return (nyquist, 0.0, 0.0);
         }
         
-        let ref_energy: f32 = spectrum_db[ref_start..ref_end].iter().sum::<f32>() 
-            / (ref_end - ref_start) as f32;
+        // Find peak level in reference band
+        let ref_peak: f32 = spectrum_db[ref_start..ref_end].iter()
+            .cloned()
+            .fold(f32::MIN, f32::max);
         
-        // Threshold: 20dB below reference
-        let threshold = ref_energy - 20.0;
+        // Threshold: 25dB below peak (lossy codecs typically cut 30-40dB)
+        let threshold = ref_peak - 25.0;
         
-        // Search from high frequencies down for sustained drop
-        let search_start = frequencies.iter().position(|&f| f >= 12000.0).unwrap_or(ref_end);
+        // Search from 10kHz upward for sustained drop below threshold
+        let search_start = frequencies.iter().position(|&f| f >= 10000.0).unwrap_or(ref_end);
         let mut consecutive_below = 0;
-        let consecutive_required = 20;  // Need ~20 consecutive bins below threshold
+        let consecutive_required = 30;  // Need consecutive bins below threshold
+        let mut first_drop_idx = spectrum_db.len() - 1;
         
-        for i in (search_start..spectrum_db.len()).rev() {
+        for i in search_start..spectrum_db.len() {
             if spectrum_db[i] < threshold {
+                if consecutive_below == 0 {
+                    first_drop_idx = i;
+                }
                 consecutive_below += 1;
                 if consecutive_below >= consecutive_required {
-                    // Found cutoff - calculate rolloff
-                    let cutoff_idx = (i + consecutive_required).min(spectrum_db.len() - 1);
-                    let cutoff_hz = frequencies[cutoff_idx];
+                    // Found cutoff
+                    let cutoff_hz = frequencies[first_drop_idx];
                     
                     // Calculate rolloff steepness
-                    let rolloff = self.calculate_rolloff(spectrum_db, frequencies, cutoff_idx);
+                    let rolloff = self.calculate_rolloff(spectrum_db, frequencies, first_drop_idx);
                     
                     // Confidence based on how clear the drop is
-                    let drop_magnitude = ref_energy - spectrum_db[i];
-                    let confidence = (drop_magnitude / 30.0).clamp(0.3, 0.9);
+                    let drop_magnitude = ref_peak - spectrum_db[i];
+                    let confidence = (drop_magnitude / 40.0).clamp(0.4, 0.95);
                     
                     return (cutoff_hz, rolloff, confidence);
                 }
@@ -314,7 +337,7 @@ impl SpectralAnalyzer {
             }
         }
         
-        // No clear cutoff found
+        // No clear cutoff found - likely genuine lossless
         (nyquist, 0.0, 0.3)
     }
 
@@ -325,46 +348,44 @@ impl SpectralAnalyzer {
         frequencies: &[f32],
         nyquist: f32,
     ) -> (f32, f32, f32) {
-        if spectrum_db.len() < 10 {
+        if spectrum_db.len() < 50 {
             return (nyquist, 0.0, 0.0);
         }
         
-        // Compute smoothed first derivative
-        let mut derivative = Vec::with_capacity(spectrum_db.len());
-        let deriv_window = 5;
+        // Compute smoothed first derivative (dB per Hz)
+        let deriv_window = 10;
+        let mut max_neg_deriv = 0.0f32;
+        let mut max_neg_idx = spectrum_db.len() - 1;
         
-        for i in deriv_window..spectrum_db.len() - deriv_window {
+        // Only search in upper frequency range (10kHz+)
+        let search_start = frequencies.iter()
+            .position(|&f| f >= 10000.0)
+            .unwrap_or(spectrum_db.len() / 2);
+        
+        for i in (search_start + deriv_window)..(spectrum_db.len() - deriv_window) {
             let diff = spectrum_db[i + deriv_window] - spectrum_db[i - deriv_window];
             let freq_diff = frequencies[i + deriv_window] - frequencies[i - deriv_window];
-            if freq_diff > 0.0 {
-                derivative.push((i, diff / freq_diff));
-            }
-        }
-        
-        // Find the most negative derivative (steepest drop) in upper frequencies
-        let search_start = derivative.iter()
-            .position(|(i, _)| frequencies[*i] >= 12000.0)
-            .unwrap_or(0);
-        
-        let mut min_deriv = 0.0f32;
-        let mut min_idx = derivative.len() - 1;
-        
-        for &(idx, deriv) in &derivative[search_start..] {
-            if deriv < min_deriv {
-                min_deriv = deriv;
-                min_idx = idx;
-            }
-        }
-        
-        // Threshold for significant cutoff
-        if min_deriv < -0.001 {  // Significant negative slope
-            let cutoff_hz = frequencies[min_idx];
-            let rolloff = (-min_deriv * 1000.0 * 6.0) as f32;  // Convert to dB/octave approx
-            let confidence = (-min_deriv * 1000.0).clamp(0.3, 0.85);
             
-            (cutoff_hz, rolloff, confidence as f32)
+            if freq_diff > 0.0 {
+                let derivative = diff / freq_diff;
+                
+                // Looking for steep negative slope (energy dropping)
+                if derivative < max_neg_deriv {
+                    max_neg_deriv = derivative;
+                    max_neg_idx = i;
+                }
+            }
+        }
+        
+        // Significant negative slope indicates cutoff
+        if max_neg_deriv < -0.003 {  // -3dB per kHz or steeper
+            let cutoff_hz = frequencies[max_neg_idx];
+            let rolloff = (-max_neg_deriv * 6000.0).min(200.0);  // Convert to approx dB/octave
+            let confidence = (-max_neg_deriv * 200.0).clamp(0.3, 0.85);
+            
+            (cutoff_hz, rolloff, confidence)
         } else {
-            (nyquist, 0.0, 0.3)
+            (nyquist, 0.0, 0.2)
         }
     }
 
@@ -375,10 +396,12 @@ impl SpectralAnalyzer {
         frequencies: &[f32],
         nyquist: f32,
     ) -> (f32, f32, f32) {
-        // Estimate noise floor from the quietest 10% of spectrum above 15kHz
-        let high_freq_start = frequencies.iter()
-            .position(|&f| f >= 15000.0)
-            .unwrap_or(spectrum_db.len() * 3 / 4);
+        // Estimate noise floor from the highest frequencies (near Nyquist)
+        let high_freq_start = (spectrum_db.len() * 9) / 10;  // Top 10%
+        
+        if high_freq_start >= spectrum_db.len() {
+            return (nyquist, 0.0, 0.0);
+        }
         
         let mut high_freq_values: Vec<f32> = spectrum_db[high_freq_start..].to_vec();
         high_freq_values.sort_by(|a, b| a.partial_cmp(b).unwrap());
@@ -387,38 +410,43 @@ impl SpectralAnalyzer {
             return (nyquist, 0.0, 0.0);
         }
         
-        // Use 10th percentile as noise floor estimate
-        let noise_floor_idx = high_freq_values.len() / 10;
-        let noise_floor = high_freq_values[noise_floor_idx];
+        // Use 20th percentile as noise floor estimate
+        let noise_floor_idx = high_freq_values.len() / 5;
+        let noise_floor = high_freq_values[noise_floor_idx.min(high_freq_values.len() - 1)];
         
-        // Threshold: 10dB above noise floor
-        let threshold = noise_floor + 10.0;
+        // Threshold: 15dB above noise floor
+        let threshold = noise_floor + 15.0;
         
-        // Find where signal drops to near noise floor (searching backward from Nyquist)
+        // Find where signal drops to near noise floor (searching backward from high frequencies)
+        let search_start = frequencies.iter()
+            .position(|&f| f >= 10000.0)
+            .unwrap_or(spectrum_db.len() / 2);
+        
         let mut last_above = spectrum_db.len() - 1;
-        for i in (0..spectrum_db.len()).rev() {
+        for i in (search_start..spectrum_db.len()).rev() {
             if spectrum_db[i] > threshold {
                 last_above = i;
                 break;
             }
         }
         
-        let cutoff_hz = frequencies[last_above];
+        let cutoff_hz = frequencies[last_above.min(frequencies.len() - 1)];
         
-        // If cutoff is near Nyquist, no significant cutoff detected
+        // If cutoff is very near Nyquist, no significant cutoff detected
         if cutoff_hz > nyquist * 0.95 {
-            return (nyquist, 0.0, 0.3);
+            return (nyquist, 0.0, 0.25);
         }
         
         let rolloff = self.calculate_rolloff(spectrum_db, frequencies, last_above);
         
         // Confidence based on signal-to-noise margin
-        let signal_level = spectrum_db[..last_above].iter()
-            .skip(spectrum_db.len() / 4)
+        let mid_freq_start = frequencies.iter().position(|&f| f >= 2000.0).unwrap_or(0);
+        let mid_freq_end = frequencies.iter().position(|&f| f >= 8000.0).unwrap_or(spectrum_db.len() / 4);
+        let signal_level = spectrum_db[mid_freq_start..mid_freq_end].iter()
             .cloned()
             .fold(f32::MIN, f32::max);
         let snr = signal_level - noise_floor;
-        let confidence = (snr / 40.0).clamp(0.3, 0.85);
+        let confidence = (snr / 50.0).clamp(0.3, 0.8);
         
         (cutoff_hz, rolloff, confidence)
     }
@@ -430,51 +458,59 @@ impl SpectralAnalyzer {
         frequencies: &[f32],
         cutoff_idx: usize,
     ) -> f32 {
-        if cutoff_idx >= spectrum_db.len() - 10 || cutoff_idx < 10 {
+        if cutoff_idx >= spectrum_db.len() - 20 || cutoff_idx < 20 || frequencies.is_empty() {
             return 0.0;
         }
         
-        // Measure energy drop over one octave above cutoff
+        // Measure energy drop over half an octave above cutoff
         let cutoff_freq = frequencies[cutoff_idx];
-        let octave_freq = cutoff_freq * 2.0;
+        let half_octave_freq = cutoff_freq * 1.414;  // sqrt(2) = half octave
         
-        let octave_idx = frequencies.iter()
-            .position(|&f| f >= octave_freq)
+        let half_octave_idx = frequencies.iter()
+            .position(|&f| f >= half_octave_freq)
             .unwrap_or(spectrum_db.len() - 1);
         
-        if octave_idx <= cutoff_idx {
+        if half_octave_idx <= cutoff_idx || half_octave_idx >= spectrum_db.len() {
             return 0.0;
         }
         
         let energy_at_cutoff = spectrum_db[cutoff_idx];
-        let energy_at_octave = spectrum_db[octave_idx];
+        let energy_at_half_octave = spectrum_db[half_octave_idx];
         
-        // dB drop per octave
-        (energy_at_cutoff - energy_at_octave).max(0.0)
+        // dB drop per half octave, scaled to per octave
+        let drop = energy_at_cutoff - energy_at_half_octave;
+        (drop * 2.0).max(0.0)  // Multiply by 2 for full octave
     }
 
     /// Match detected cutoff against known codec signatures
     fn match_codec_signature(&self, cutoff_hz: f32, rolloff: f32) -> Option<CodecSignature> {
-        // Only match if we have a clear cutoff below ~20kHz and significant rolloff
-        if cutoff_hz > 20000.0 || rolloff < 10.0 {
+        // Only match if we have a clear cutoff below ~20.5kHz and some rolloff
+        if cutoff_hz > 20500.0 || rolloff < 5.0 {
             return None;
         }
         
         let mut best_match: Option<(Codec, u32, f32)> = None;
-        let mut best_distance = f32::MAX;
+        let mut best_score = 0.0f32;
         
         for &(codec, bitrate, typical_cutoff, tolerance) in CODEC_CUTOFFS {
             let distance = (cutoff_hz - typical_cutoff).abs();
-            if distance < tolerance && distance < best_distance {
-                best_distance = distance;
-                best_match = Some((codec, bitrate, 1.0 - distance / tolerance));
+            if distance < tolerance {
+                // Score based on distance and rolloff
+                let distance_score = 1.0 - (distance / tolerance);
+                let rolloff_score = (rolloff / 60.0).min(1.0);  // Lossy codecs have steep rolloff
+                let combined_score = distance_score * 0.7 + rolloff_score * 0.3;
+                
+                if combined_score > best_score {
+                    best_score = combined_score;
+                    best_match = Some((codec, bitrate, combined_score));
+                }
             }
         }
         
         best_match.map(|(codec, bitrate, confidence)| CodecSignature {
             codec,
             bitrate: Some(bitrate),
-            confidence: confidence * (rolloff / 100.0).min(1.0),
+            confidence,
         })
     }
 }
@@ -487,25 +523,34 @@ pub fn detect_transcode(samples: &[f32], sample_rate: u32) -> TranscodeResult {
     let nyquist = sample_rate as f32 / 2.0;
     
     // Determine if it's likely a transcode
-    let is_transcode = analysis.cutoff_ratio < 0.92 && // Cutoff below 92% of Nyquist
-                       analysis.rolloff_steepness > 20.0 && // Sharp rolloff
-                       analysis.confidence > 0.5;          // Reasonable confidence
+    // Key criteria:
+    // 1. Cutoff below 95% of Nyquist (leaving room for natural rolloff)
+    // 2. Some rolloff steepness (lossy codecs have steep cutoffs)
+    // 3. Reasonable confidence in detection
+    let is_transcode = analysis.cutoff_ratio < 0.95 && 
+                       analysis.rolloff_steepness > 10.0 && 
+                       analysis.confidence > 0.4;
     
     TranscodeResult {
         is_transcode,
-        confidence: if is_transcode { analysis.confidence } else { 1.0 - analysis.confidence },
+        confidence: if is_transcode { 
+            analysis.confidence 
+        } else { 
+            // For non-transcodes, confidence that it's genuine
+            (1.0 - analysis.confidence * 0.5).max(0.5)
+        },
         cutoff_hz: analysis.cutoff_hz,
         cutoff_ratio: analysis.cutoff_ratio,
         rolloff_steepness: analysis.rolloff_steepness,
         likely_codec: analysis.likely_codec,
         reason: if is_transcode {
             format!(
-                "Frequency cutoff at {:.1} Hz ({:.1}% of Nyquist) with {:.1} dB/oct rolloff",
+                "Frequency cutoff at {:.0} Hz ({:.1}% of Nyquist) with {:.0} dB/oct rolloff",
                 analysis.cutoff_hz, analysis.cutoff_ratio * 100.0, analysis.rolloff_steepness
             )
         } else {
             format!(
-                "Full frequency response to {:.1} Hz ({:.1}% of Nyquist)",
+                "Full frequency response to {:.0} Hz ({:.1}% of Nyquist)",
                 analysis.cutoff_hz, analysis.cutoff_ratio * 100.0
             )
         },
@@ -536,14 +581,14 @@ mod tests {
             let mut sample = 0.0f32;
             
             // Add harmonics up to cutoff
-            for harmonic in 1..50 {
+            for harmonic in 1..100 {
                 let freq = 100.0 * harmonic as f32;
                 if freq < cutoff_hz {
                     sample += (2.0 * PI * freq * t).sin() / harmonic as f32;
                 }
             }
             
-            samples.push(sample * 0.3);  // Normalize
+            samples.push(sample * 0.3);
         }
         
         samples
@@ -566,5 +611,16 @@ mod tests {
         
         assert!(result.is_transcode, "MP3 128k-like cutoff should be detected");
         assert!(result.cutoff_hz < 17000.0, "Cutoff should be detected around 16kHz");
+    }
+    
+    #[test]
+    fn test_mp3_320k_cutoff_detection() {
+        // MP3 320k typically cuts off around 20.5kHz
+        let samples = generate_test_signal(44100, 20500.0, 1.0);
+        let result = detect_transcode(&samples, 44100);
+        
+        // This is borderline - may or may not detect
+        println!("320k test: is_transcode={}, cutoff={}, ratio={}", 
+                 result.is_transcode, result.cutoff_hz, result.cutoff_ratio);
     }
 }
