@@ -1,6 +1,7 @@
 // src/core/detector.rs
 //
 // Quality issue detection with configurable thresholds and profiles.
+// This version actually uses spectral analysis to detect lossy transcodes.
 
 use serde::{Deserialize, Serialize};
 use super::decoder::AudioData;
@@ -9,6 +10,7 @@ use super::analysis::{
     analyze_upsampling, UpsamplingAnalysis,
     analyze_pre_echo, PreEchoAnalysis,
     analyze_stereo,
+    SpectralAnalyzer, detect_transcode, Codec,
 };
 
 /// Detection configuration
@@ -105,24 +107,39 @@ pub struct QualityReport {
 pub fn detect_quality_issues(audio: &AudioData, config: &DetectionConfig) -> QualityReport {
     let mono = super::decoder::extract_mono(audio);
     
-    // Run bit depth analysis
+    // =========================================================================
+    // SPECTRAL ANALYSIS - Detect lossy codec transcodes
+    // =========================================================================
+    let spectral_analyzer = SpectralAnalyzer::default();
+    let spectral_analysis = spectral_analyzer.analyze(&mono, audio.sample_rate);
+    let transcode_result = detect_transcode(&mono, audio.sample_rate);
+    
+    // =========================================================================
+    // BIT DEPTH ANALYSIS
+    // =========================================================================
     let bit_depth_analysis = analyze_bit_depth(audio);
     
-    // Run upsampling analysis
+    // =========================================================================
+    // UPSAMPLING ANALYSIS
+    // =========================================================================
     let upsampling_analysis = if config.check_upsampling {
         analyze_upsampling(&mono, audio.sample_rate)
     } else {
         UpsamplingAnalysis::default()
     };
     
-    // Run pre-echo analysis
+    // =========================================================================
+    // PRE-ECHO ANALYSIS
+    // =========================================================================
     let pre_echo_analysis = if config.check_transients {
         analyze_pre_echo(&mono, audio.sample_rate)
     } else {
         PreEchoAnalysis::default()
     };
     
-    // Run stereo analysis
+    // =========================================================================
+    // STEREO ANALYSIS
+    // =========================================================================
     let stereo_analysis = if config.check_stereo && audio.channels >= 2 {
         if let Some((left, right)) = super::decoder::extract_stereo(audio) {
             Some(analyze_stereo(&left, &right, audio.sample_rate))
@@ -133,10 +150,66 @@ pub fn detect_quality_issues(audio: &AudioData, config: &DetectionConfig) -> Qua
         None
     };
     
-    // Collect defects
+    // =========================================================================
+    // COLLECT DEFECTS
+    // =========================================================================
     let mut defects = Vec::new();
     
-    // Check bit depth mismatch
+    // ----- Check for lossy transcode (CRITICAL: This was missing!) -----
+    if transcode_result.is_transcode && transcode_result.confidence > config.min_confidence {
+        let mut evidence = vec![transcode_result.reason.clone()];
+        
+        // Add codec-specific evidence
+        if let Some(ref codec_sig) = transcode_result.likely_codec {
+            evidence.push(format!(
+                "Matches {:?} signature at {}kbps (confidence: {:.0}%)",
+                codec_sig.codec,
+                codec_sig.bitrate.unwrap_or(0),
+                codec_sig.confidence * 100.0
+            ));
+        }
+        
+        // Determine the specific codec type
+        let defect_type = match transcode_result.likely_codec {
+            Some(ref sig) => match sig.codec {
+                Codec::MP3 => DefectType::Mp3Transcode {
+                    cutoff_hz: transcode_result.cutoff_hz as u32,
+                    estimated_bitrate: sig.bitrate,
+                },
+                Codec::AAC => DefectType::AacTranscode {
+                    cutoff_hz: transcode_result.cutoff_hz as u32,
+                    estimated_bitrate: sig.bitrate,
+                },
+                Codec::Opus => DefectType::OpusTranscode {
+                    cutoff_hz: transcode_result.cutoff_hz as u32,
+                    mode: format!("{}kbps", sig.bitrate.unwrap_or(0)),
+                },
+                Codec::Vorbis => DefectType::OggVorbisTranscode {
+                    cutoff_hz: transcode_result.cutoff_hz as u32,
+                    estimated_quality: sig.bitrate.map(|b| b as f32 / 32.0), // Rough Q estimate
+                },
+                Codec::Unknown => DefectType::Mp3Transcode {
+                    cutoff_hz: transcode_result.cutoff_hz as u32,
+                    estimated_bitrate: estimate_bitrate_from_cutoff(transcode_result.cutoff_hz),
+                },
+            },
+            None => {
+                // No specific codec matched, but transcode detected
+                DefectType::Mp3Transcode {
+                    cutoff_hz: transcode_result.cutoff_hz as u32,
+                    estimated_bitrate: estimate_bitrate_from_cutoff(transcode_result.cutoff_hz),
+                }
+            }
+        };
+        
+        defects.push(DetectedDefect {
+            defect_type,
+            confidence: transcode_result.confidence,
+            evidence,
+        });
+    }
+    
+    // ----- Check bit depth mismatch -----
     if bit_depth_analysis.is_mismatch && bit_depth_analysis.confidence > config.min_confidence {
         defects.push(DetectedDefect {
             defect_type: DefectType::BitDepthMismatch {
@@ -149,7 +222,7 @@ pub fn detect_quality_issues(audio: &AudioData, config: &DetectionConfig) -> Qua
         });
     }
     
-    // Check upsampling
+    // ----- Check upsampling -----
     if upsampling_analysis.is_upsampled && upsampling_analysis.confidence > config.min_confidence {
         if let Some(orig_rate) = upsampling_analysis.original_sample_rate {
             defects.push(DetectedDefect {
@@ -164,7 +237,7 @@ pub fn detect_quality_issues(audio: &AudioData, config: &DetectionConfig) -> Qua
         }
     }
     
-    // Check pre-echo
+    // ----- Check pre-echo -----
     if pre_echo_analysis.pre_echo_score > 0.5 {
         let confidence = pre_echo_analysis.pre_echo_score.min(1.0);
         if confidence > config.min_confidence {
@@ -178,16 +251,23 @@ pub fn detect_quality_issues(audio: &AudioData, config: &DetectionConfig) -> Qua
         }
     }
     
-    // Calculate overall quality score
+    // =========================================================================
+    // CALCULATE OVERALL QUALITY SCORE
+    // =========================================================================
     let quality_score = calculate_quality_score(&defects, &bit_depth_analysis, &upsampling_analysis);
     let is_likely_lossless = defects.is_empty() && quality_score > 0.8;
     
-    // Compute basic metrics
+    // =========================================================================
+    // COMPUTE BASIC METRICS
+    // =========================================================================
     let peak = mono.iter().map(|s| s.abs()).fold(0.0f32, f32::max);
     let rms = (mono.iter().map(|s| s * s).sum::<f32>() / mono.len() as f32).sqrt();
     let dynamic_range = if rms > 1e-10 { 20.0 * (peak / rms).log10() } else { 0.0 };
     let peak_db = if peak > 1e-10 { 20.0 * peak.log10() } else { -100.0 };
     let crest_factor = if rms > 1e-10 { 20.0 * (peak / rms).log10() } else { 0.0 };
+    
+    // Determine if there's a brick-wall cutoff
+    let has_brick_wall = spectral_analysis.rolloff_steepness > 60.0;
     
     QualityReport {
         sample_rate: audio.sample_rate,
@@ -196,15 +276,16 @@ pub fn detect_quality_issues(audio: &AudioData, config: &DetectionConfig) -> Qua
         actual_bit_depth: bit_depth_analysis.actual_bit_depth,
         duration_secs: audio.duration_secs,
         
-        frequency_cutoff: audio.sample_rate as f32 / 2.0,  // Placeholder
-        spectral_rolloff: audio.sample_rate as f32 / 2.0 * 0.85,  // Placeholder
-        rolloff_steepness: 0.0,  // Placeholder
-        has_brick_wall: false,  // Placeholder
-        spectral_flatness: 0.5,  // Placeholder
+        // Use actual spectral analysis results!
+        frequency_cutoff: spectral_analysis.cutoff_hz,
+        spectral_rolloff: spectral_analysis.cutoff_hz * 0.85, // 85% rolloff point
+        rolloff_steepness: spectral_analysis.rolloff_steepness,
+        has_brick_wall,
+        spectral_flatness: 0.5, // TODO: implement
         
         dynamic_range,
         peak_amplitude: peak_db,
-        true_peak: peak_db,  // Simplified
+        true_peak: peak_db, // Simplified
         crest_factor,
         
         stereo_width: stereo_analysis.as_ref().map(|s| s.stereo_width),
@@ -217,6 +298,26 @@ pub fn detect_quality_issues(audio: &AudioData, config: &DetectionConfig) -> Qua
         bit_depth_analysis,
         upsampling_analysis,
         pre_echo_analysis,
+    }
+}
+
+/// Estimate MP3 bitrate from cutoff frequency
+fn estimate_bitrate_from_cutoff(cutoff_hz: f32) -> Option<u32> {
+    // Common MP3 cutoff frequencies
+    if cutoff_hz < 12000.0 {
+        Some(64)
+    } else if cutoff_hz < 14000.0 {
+        Some(96)
+    } else if cutoff_hz < 17000.0 {
+        Some(128)
+    } else if cutoff_hz < 19000.0 {
+        Some(192)
+    } else if cutoff_hz < 20000.0 {
+        Some(256)
+    } else if cutoff_hz < 20500.0 {
+        Some(320)
+    } else {
+        None // No clear cutoff, likely genuine lossless
     }
 }
 
