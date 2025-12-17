@@ -10,7 +10,13 @@
 // - Focuses on high-confidence detection scenarios
 // - Parallel execution (4 threads) for faster CI/CD
 //
-// v3: Added Allure reporting integration
+// v4: Fixed validation logic to check SPECIFIC defect types, not just defective/clean status
+//     - Expected CLEAN + got CLEAN → PASS
+//     - Expected CLEAN + got DEFECTIVE → FAIL (false positive)
+//     - Expected DEFECTIVE + got CLEAN → FAIL (false negative)
+//     - Expected DEFECTIVE + got correct defect type(s) → PASS
+//     - Expected DEFECTIVE + got correct + extra defects → PASS (with warning)
+//     - Expected DEFECTIVE + got ONLY wrong defect types → FAIL (wrong detection)
 
 mod test_utils;
 
@@ -37,11 +43,30 @@ struct GenreTestCase {
     defect_category: String,
 }
 
+/// Result of validating a test
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum ValidationResult {
+    /// Test passed - correct detection
+    Pass,
+    /// Test passed but extra defects were detected beyond expected
+    PassWithWarning,
+    /// Test failed - false positive (clean file flagged as defective)
+    FalsePositive,
+    /// Test failed - false negative (defective file marked as clean)
+    FalseNegative,
+    /// Test failed - wrong defect type detected (none of the expected defects found)
+    WrongDefectType,
+}
+
 #[derive(Debug)]
 struct TestResult {
-    passed: bool,
-    expected: bool,
+    passed: bool,                    // Whether file was detected as clean
+    expected: bool,                  // Whether file should be clean
     defects_found: Vec<String>,
+    expected_defects: Vec<String>,   // Store expected defects for validation
+    validation_result: ValidationResult,  // Detailed validation result
+    extra_defects: Vec<String>,      // Defects detected beyond expected
+    missing_defects: Vec<String>,    // Expected defects not detected
     description: String,
     category: String,
     file: String,
@@ -98,9 +123,11 @@ fn test_qualification_genre_suite() {
 
     // Analyze results by category
     let mut passed = 0;
+    let mut passed_with_warning = 0;
     let mut failed = 0;
     let mut false_positives = 0;
     let mut false_negatives = 0;
+    let mut wrong_defect_type = 0;
     let mut results_by_category: HashMap<String, Vec<&TestResult>> = HashMap::new();
 
     for (idx, result) in results.iter().enumerate() {
@@ -133,7 +160,9 @@ fn test_qualification_genre_suite() {
             .parameter("file", &result.file)
             .parameter("genre", &result.genre)
             .parameter("expected_pass", &result.expected.to_string())
-            .parameter("defects_found", &format!("{:?}", result.defects_found));
+            .parameter("defects_found", &format!("{:?}", result.defects_found))
+            .parameter("expected_defects", &format!("{:?}", result.expected_defects))
+            .parameter("validation_result", &format!("{:?}", result.validation_result));
         
         let description = format!(
             "**File:** `{}`\n\n\
@@ -142,43 +171,72 @@ fn test_qualification_genre_suite() {
             **Expected:** {}\n\n\
             **Actual:** {}\n\n\
             **Defects Found:** {:?}\n\n\
-            **Expected Defects:** {:?}",
+            **Expected Defects:** {:?}\n\n\
+            **Missing Defects:** {:?}\n\n\
+            **Extra Defects:** {:?}\n\n\
+            **Validation Result:** {:?}",
             result.file,
             result.genre,
             result.category,
-            if result.expected { "CLEAN (should pass)" } else { "DEFECTIVE (should fail)" },
+            if result.expected { "CLEAN (should pass)" } else { format!("DEFECTIVE with {:?}", result.expected_defects) },
             if result.passed { "CLEAN" } else { "DEFECTIVE" },
             result.defects_found,
-            test_case.expected_defects
+            result.expected_defects,
+            result.missing_defects,
+            result.extra_defects,
+            result.validation_result
         );
         allure_builder = allure_builder.description(&description);
         
         // Attach stdout as evidence
         let _ = allure_builder.attach_text("Analysis Output", &result.stdout, &allure_results_dir);
 
-        let test_passed = result.passed == result.expected;
-        
-        if test_passed {
-            passed += 1;
-            allure_builder = allure_builder.passed();
-        } else {
-            failed += 1;
-            if result.passed && !result.expected {
-                false_negatives += 1;
-                let message = format!("FALSE NEGATIVE: Expected defects {:?} but got CLEAN", 
-                    test_case.expected_defects);
+        match result.validation_result {
+            ValidationResult::Pass => {
+                passed += 1;
+                allure_builder = allure_builder.passed();
+            }
+            ValidationResult::PassWithWarning => {
+                passed_with_warning += 1;
+                passed += 1;  // Still counts as pass
                 println!(
-                    "✗ FALSE NEGATIVE [{}]: {}",
-                    result.category, result.description
+                    "⚠ WARNING [{}]: {} - Extra defects: {:?}",
+                    result.category, result.description, result.extra_defects
                 );
-                allure_builder = allure_builder.failed(&message, Some(&result.stdout));
-            } else {
+                allure_builder = allure_builder.passed();
+            }
+            ValidationResult::FalsePositive => {
+                failed += 1;
                 false_positives += 1;
                 let message = format!("FALSE POSITIVE: Expected CLEAN but detected defects: {:?}", 
                     result.defects_found);
                 println!(
                     "✗ FALSE POSITIVE [{}]: {} - Found: {:?}",
                     result.category, result.description, result.defects_found
+                );
+                allure_builder = allure_builder.failed(&message, Some(&result.stdout));
+            }
+            ValidationResult::FalseNegative => {
+                failed += 1;
+                false_negatives += 1;
+                let message = format!("FALSE NEGATIVE: Expected defects {:?} but got CLEAN", 
+                    result.expected_defects);
+                println!(
+                    "✗ FALSE NEGATIVE [{}]: {}",
+                    result.category, result.description
+                );
+                allure_builder = allure_builder.failed(&message, Some(&result.stdout));
+            }
+            ValidationResult::WrongDefectType => {
+                failed += 1;
+                wrong_defect_type += 1;
+                let message = format!(
+                    "WRONG DEFECT TYPE: Expected {:?} but detected {:?} (none of expected defects found)",
+                    result.expected_defects, result.defects_found
+                );
+                println!(
+                    "✗ WRONG DEFECT [{}]: {} - Expected {:?}, Got {:?}",
+                    result.category, result.description, result.expected_defects, result.defects_found
                 );
                 allure_builder = allure_builder.failed(&message, Some(&result.stdout));
             }
@@ -201,9 +259,12 @@ fn test_qualification_genre_suite() {
         passed,
         (passed as f32 / total_tests as f32) * 100.0
     );
+    println!("  - Clean passes: {}", passed - passed_with_warning);
+    println!("  - Passed with warnings (extra defects): {}", passed_with_warning);
     println!("Failed: {}", failed);
-    println!("  False Positives: {}", false_positives);
-    println!("  False Negatives: {}", false_negatives);
+    println!("  - False Positives: {}", false_positives);
+    println!("  - False Negatives: {}", false_negatives);
+    println!("  - Wrong Defect Type: {}", wrong_defect_type);
 
     // Category breakdown
     println!("\n{}", "-".repeat(70));
@@ -214,14 +275,27 @@ fn test_qualification_genre_suite() {
     categories.sort_by_key(|(k, _)| k.as_str());
     
     for (category, cat_results) in categories {
-        let cat_passed = cat_results.iter().filter(|r| r.passed == r.expected).count();
+        let cat_passed = cat_results.iter()
+            .filter(|r| matches!(r.validation_result, ValidationResult::Pass | ValidationResult::PassWithWarning))
+            .count();
         let cat_total = cat_results.len();
+        let cat_wrong = cat_results.iter()
+            .filter(|r| matches!(r.validation_result, ValidationResult::WrongDefectType))
+            .count();
+        
+        let status = if cat_wrong > 0 {
+            format!(" [⚠ {} wrong type]", cat_wrong)
+        } else {
+            String::new()
+        };
+        
         println!(
-            "{:35} {:3}/{:3} ({:.0}%)",
+            "{:35} {:3}/{:3} ({:.0}%){}",
             category,
             cat_passed,
             cat_total,
-            (cat_passed as f32 / cat_total as f32) * 100.0
+            (cat_passed as f32 / cat_total as f32) * 100.0,
+            status
         );
     }
     println!("{}", "=".repeat(70));
@@ -533,6 +607,80 @@ fn parse_defects_from_output(stdout: &str) -> Vec<String> {
     defects_found
 }
 
+/// Validate test results with proper defect type matching
+/// 
+/// Returns:
+/// - Pass: Correct detection (clean==clean, or expected defects found)
+/// - PassWithWarning: Expected defects found + extra defects
+/// - FalsePositive: Expected clean but got defective
+/// - FalseNegative: Expected defective but got clean
+/// - WrongDefectType: Expected specific defects but none of them were found
+fn validate_test_result(
+    is_clean: bool,
+    should_pass: bool,
+    expected_defects: &[String],
+    defects_found: &[String],
+) -> (ValidationResult, Vec<String>, Vec<String>) {
+    let expected_set: HashSet<&String> = expected_defects.iter().collect();
+    let found_set: HashSet<&String> = defects_found.iter().collect();
+    
+    // Calculate missing and extra defects
+    let missing: Vec<String> = expected_defects.iter()
+        .filter(|d| !found_set.contains(d))
+        .cloned()
+        .collect();
+    
+    let extra: Vec<String> = defects_found.iter()
+        .filter(|d| !expected_set.contains(d))
+        .cloned()
+        .collect();
+    
+    // Case 1: Expected CLEAN
+    if should_pass {
+        if is_clean {
+            // Expected clean, got clean -> PASS
+            return (ValidationResult::Pass, missing, extra);
+        } else {
+            // Expected clean, got defective -> FALSE POSITIVE
+            return (ValidationResult::FalsePositive, missing, extra);
+        }
+    }
+    
+    // Case 2: Expected DEFECTIVE
+    if is_clean {
+        // Expected defective, got clean -> FALSE NEGATIVE
+        return (ValidationResult::FalseNegative, missing, extra);
+    }
+    
+    // File is defective as expected, now check if correct defects were found
+    
+    // If no specific defects expected (just "should be defective"), any defect is OK
+    if expected_defects.is_empty() {
+        if extra.is_empty() {
+            return (ValidationResult::Pass, missing, extra);
+        } else {
+            return (ValidationResult::PassWithWarning, missing, extra);
+        }
+    }
+    
+    // Check if ANY expected defect was found
+    let any_expected_found = expected_defects.iter().any(|d| found_set.contains(d));
+    
+    if !any_expected_found {
+        // None of the expected defects were found -> WRONG DEFECT TYPE
+        return (ValidationResult::WrongDefectType, missing, extra);
+    }
+    
+    // At least one expected defect was found
+    if extra.is_empty() {
+        // All detected defects were expected
+        return (ValidationResult::Pass, missing, extra);
+    } else {
+        // Expected defects found but also extra ones
+        return (ValidationResult::PassWithWarning, missing, extra);
+    }
+}
+
 fn run_single_test(binary: &Path, test_case: &GenreTestCase) -> TestResult {
     let start = std::time::Instant::now();
     
@@ -550,10 +698,22 @@ fn run_single_test(binary: &Path, test_case: &GenreTestCase) -> TestResult {
     let defects_found = parse_defects_from_output(&stdout);
     let is_clean = defects_found.is_empty();
 
+    // Use new validation logic
+    let (validation_result, missing_defects, extra_defects) = validate_test_result(
+        is_clean,
+        test_case.should_pass,
+        &test_case.expected_defects,
+        &defects_found,
+    );
+
     TestResult {
         passed: is_clean,
         expected: test_case.should_pass,
         defects_found,
+        expected_defects: test_case.expected_defects.clone(),
+        validation_result,
+        extra_defects,
+        missing_defects,
         description: test_case.description.clone(),
         category: test_case.defect_category.clone(),
         file: test_case.file_path.clone(),
