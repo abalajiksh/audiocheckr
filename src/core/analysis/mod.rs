@@ -18,6 +18,7 @@ mod transients;
 mod phase;
 mod true_peak;
 mod mfcc;
+pub mod dither;
 
 // Re-export all analysis modules
 pub use bit_depth::{analyze_bit_depth, BitDepthAnalysis, BitDepthMethodResults};
@@ -43,3 +44,5 @@ pub use true_peak::{
     analyze_true_peak_stereo, ChannelTruePeak,
 };
 pub use mfcc::{analyze_mfcc, MfccAnalysis, MfccParams};
+
+pub use dither::{DitherAnalyzer, DitherAnalysis, DitherType};
