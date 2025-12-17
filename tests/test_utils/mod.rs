@@ -3,6 +3,7 @@
 // Shared utilities for test suites with Allure reporting support
 // 
 // v2: Added "Wrong Defect Type" category for detecting incorrect defect classification
+// v3: Added AllureStatus enum for compatibility with qualification_test.rs
 
 use std::collections::HashMap;
 use std::fs::{self, File};
@@ -74,6 +75,37 @@ pub struct AllureCategory {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(rename = "messageRegex")]
     pub message_regex: Option<String>,
+}
+
+// ============================================================================
+// Status Enum (for compatibility with qualification_test.rs)
+// ============================================================================
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AllureStatus {
+    Passed,
+    Failed,
+    Broken,
+    Skipped,
+    Unknown,
+}
+
+impl AllureStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            AllureStatus::Passed => "passed",
+            AllureStatus::Failed => "failed",
+            AllureStatus::Broken => "broken",
+            AllureStatus::Skipped => "skipped",
+            AllureStatus::Unknown => "unknown",
+        }
+    }
+}
+
+impl Default for AllureStatus {
+    fn default() -> Self {
+        AllureStatus::Unknown
+    }
 }
 
 // ============================================================================

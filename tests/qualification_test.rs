@@ -13,6 +13,8 @@
 // - Upscaled: Lossy → Lossless = FAIL (lossy artifacts detected)
 //
 // Parallelization: Tests run in parallel (4 threads) for faster CI/CD
+//
+// v2: Fixed unused import of AllureStatus
 
 mod test_utils;
 
@@ -23,7 +25,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 
 use test_utils::{
-    AllureTestBuilder, AllureTestSuite, AllureEnvironment, AllureSeverity, AllureStatus,
+    AllureTestBuilder, AllureTestSuite, AllureEnvironment, AllureSeverity,
     write_categories, default_audiocheckr_categories,
 };
 

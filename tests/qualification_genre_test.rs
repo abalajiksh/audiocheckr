@@ -17,6 +17,7 @@
 //     - Expected DEFECTIVE + got correct defect type(s) → PASS
 //     - Expected DEFECTIVE + got correct + extra defects → PASS (with warning)
 //     - Expected DEFECTIVE + got ONLY wrong defect types → FAIL (wrong detection)
+// v5: Fixed type mismatch in description formatting (line 181)
 
 mod test_utils;
 
@@ -146,6 +147,13 @@ fn test_qualification_genre_suite() {
             _ => AllureSeverity::Normal,
         };
         
+        // Fixed: ensure both branches return String for consistent types
+        let expected_str = if result.expected { 
+            "CLEAN (should pass)".to_string() 
+        } else { 
+            format!("DEFECTIVE with {:?}", result.expected_defects) 
+        };
+        
         let mut allure_builder = AllureTestBuilder::new(&result.description)
             .full_name(&format!("qualification_genre_test::{}", sanitize_name(&result.description)))
             .severity(severity)
@@ -178,7 +186,7 @@ fn test_qualification_genre_suite() {
             result.file,
             result.genre,
             result.category,
-            if result.expected { "CLEAN (should pass)" } else { format!("DEFECTIVE with {:?}", result.expected_defects) },
+            expected_str,
             if result.passed { "CLEAN" } else { "DEFECTIVE" },
             result.defects_found,
             result.expected_defects,
