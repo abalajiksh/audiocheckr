@@ -1,4 +1,4 @@
-// dither_detection.rs
+// src/core/analysis/dither.rs
 // Module for detecting dithering patterns in audio files
 // This helps distinguish genuine 24-bit audio from upscaled 16-bit audio
 
@@ -101,8 +101,6 @@ impl DitherAnalyzer {
         // Analyze multiple LSB levels (8 LSBs for 24-bit)
         let analyze_bits = 8.min(container_bits);
         let mut bit_activity = vec![0.0f32; analyze_bits as usize];
-        let mut histogram_1bit = vec![0u64; 2];    // For LSB
-        let mut histogram_2bit = vec![0u64; 4];    // For 2 LSBs
         let mut histogram_8bit = vec![0u64; 256];  // For 8 LSBs
         
         let mut prev_sample_int = 0i32;
@@ -122,12 +120,8 @@ impl DitherAnalyzer {
             
             // Build histograms
             let lsb_8 = (sample_int & 0xFF) as usize;
-            let lsb_2 = (sample_int & 0x03) as usize;
-            let lsb_1 = (sample_int & 0x01) as usize;
             
             histogram_8bit[lsb_8] += 1;
-            histogram_2bit[lsb_2] += 1;
-            histogram_1bit[lsb_1] += 1;
             
             // Check for zero LSBs (indicates possible truncation/upscaling)
             if lsb_8 == 0 {
@@ -377,7 +371,6 @@ impl DitherAnalyzer {
         }
         
         // Use linear regression on log-log plot
-        let n = spectrum.len();
         let mut sum_x = 0.0;
         let mut sum_y = 0.0;
         let mut sum_xy = 0.0;
@@ -494,7 +487,7 @@ struct DeltaStats {
 }
 
 /// Statistics from noise analysis
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct NoiseStats {
     floor_db: f32,
     spectral_tilt: f32,

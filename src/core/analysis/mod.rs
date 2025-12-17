@@ -9,6 +9,7 @@
 //! - Phase analysis
 //! - True peak measurement
 //! - MFCC (codec fingerprinting)
+//! - Dithering detection
 
 mod bit_depth;
 mod spectral;
@@ -23,8 +24,8 @@ pub mod dither;
 // Re-export all analysis modules
 pub use bit_depth::{analyze_bit_depth, BitDepthAnalysis, BitDepthMethodResults};
 pub use spectral::{
-    SpectralAnalyzer, SpectralAnalysis, SpectralSignature,
-    get_encoder_signatures, match_signature,
+    SpectralAnalyzer, SpectralAnalysis, CodecSignature, Codec,
+    detect_transcode, TranscodeResult,
 };
 pub use upsampling::{
     analyze_upsampling, UpsamplingAnalysis, UpsamplingMethodResults,
