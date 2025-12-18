@@ -9,7 +9,8 @@
 //! - Phase analysis
 //! - True peak measurement
 //! - MFCC (codec fingerprinting)
-//! - Dithering detection
+//! - Dithering detection (rectangular, triangular, Shibata, etc.)
+//! - Resampling detection (SWR, SoXR, quality levels)
 
 mod bit_depth;
 mod spectral;
@@ -20,6 +21,8 @@ mod phase;
 mod true_peak;
 mod mfcc;
 pub mod dither;
+pub mod dither_detection;
+pub mod resample_detection;
 
 // Re-export all analysis modules
 pub use bit_depth::{analyze_bit_depth, BitDepthAnalysis, BitDepthMethodResults};
@@ -46,4 +49,15 @@ pub use true_peak::{
 };
 pub use mfcc::{analyze_mfcc, MfccAnalysis, MfccParams};
 
+// Legacy dither module
 pub use dither::{DitherAnalyzer, DitherAnalysis, DitherType};
+
+// New enhanced detection modules
+pub use dither_detection::{
+    DitherDetector, DitherDetectionResult, DitherAlgorithm, DitherScale,
+    NoiseSpectrumProfile,
+};
+pub use resample_detection::{
+    ResampleDetector, ResampleDetectionResult, ResamplerEngine,
+    ResampleQuality, ResampleDirection,
+};

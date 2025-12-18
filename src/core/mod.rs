@@ -18,3 +18,16 @@ pub use detector::{
     detect_quality_issues, detect_quality_issues_simple,
 };
 pub use analyzer::{AudioAnalyzer, AnalyzerBuilder, FileInfo};
+
+// Re-export enhanced analysis types
+pub use analysis::{
+    // Dithering detection
+    DitherDetector, DitherDetectionResult, DitherAlgorithm, DitherScale,
+    NoiseSpectrumProfile,
+    // Resampling detection
+    ResampleDetector, ResampleDetectionResult, ResamplerEngine,
+    ResampleQuality, ResampleDirection,
+    // Existing analysis types
+    BitDepthAnalysis, SpectralAnalysis, UpsamplingAnalysis,
+    PreEchoAnalysis, StereoAnalysis, TranscodeResult,
+};

@@ -1,7 +1,7 @@
 // src/core/detector.rs
 //
 // Quality issue detection with configurable thresholds and profiles.
-// This version actually uses spectral analysis to detect lossy transcodes.
+// Now includes enhanced dithering and resampling detection.
 
 use serde::{Deserialize, Serialize};
 use super::decoder::AudioData;
@@ -11,6 +11,8 @@ use super::analysis::{
     analyze_pre_echo, PreEchoAnalysis,
     analyze_stereo,
     SpectralAnalyzer, detect_transcode, Codec,
+    DitherDetector, DitherDetectionResult, DitherAlgorithm, DitherScale,
+    ResampleDetector, ResampleDetectionResult, ResamplerEngine, ResampleQuality,
 };
 
 /// Detection configuration
@@ -22,6 +24,8 @@ pub struct DetectionConfig {
     pub check_transients: bool,
     pub check_phase: bool,
     pub check_mfcc: bool,
+    pub check_dithering: bool,
+    pub check_resampling: bool,
     pub min_confidence: f32,
 }
 
@@ -34,6 +38,8 @@ impl Default for DetectionConfig {
             check_transients: true,
             check_phase: false,
             check_mfcc: false,
+            check_dithering: true,
+            check_resampling: true,
             min_confidence: 0.5,
         }
     }
@@ -55,6 +61,20 @@ pub enum DefectType {
     Clipping { percentage: f32 },
     InterSampleOvers { count: u32, max_level_db: f32 },
     LowQuality { description: String },
+    
+    // New enhanced defect types
+    DitheringDetected {
+        algorithm: String,
+        scale: String,
+        effective_bits: u8,
+        container_bits: u8,
+    },
+    ResamplingDetected {
+        original_rate: u32,
+        current_rate: u32,
+        engine: String,
+        quality: String,
+    },
 }
 
 /// A detected quality defect with confidence score
@@ -101,6 +121,10 @@ pub struct QualityReport {
     pub bit_depth_analysis: BitDepthAnalysis,
     pub upsampling_analysis: UpsamplingAnalysis,
     pub pre_echo_analysis: PreEchoAnalysis,
+    
+    // New enhanced analysis results
+    pub dither_analysis: Option<DitherDetectionResult>,
+    pub resample_analysis: Option<ResampleDetectionResult>,
 }
 
 /// Run quality detection on decoded audio
@@ -120,7 +144,7 @@ pub fn detect_quality_issues(audio: &AudioData, config: &DetectionConfig) -> Qua
     let bit_depth_analysis = analyze_bit_depth(audio);
     
     // =========================================================================
-    // UPSAMPLING ANALYSIS
+    // UPSAMPLING ANALYSIS (basic)
     // =========================================================================
     let upsampling_analysis = if config.check_upsampling {
         analyze_upsampling(&mono, audio.sample_rate)
@@ -151,15 +175,34 @@ pub fn detect_quality_issues(audio: &AudioData, config: &DetectionConfig) -> Qua
     };
     
     // =========================================================================
+    // ENHANCED DITHERING DETECTION
+    // =========================================================================
+    let dither_analysis = if config.check_dithering {
+        let detector = DitherDetector::new(audio.sample_rate);
+        Some(detector.analyze(&mono, audio.claimed_bit_depth as u8))
+    } else {
+        None
+    };
+    
+    // =========================================================================
+    // ENHANCED RESAMPLING DETECTION
+    // =========================================================================
+    let resample_analysis = if config.check_resampling {
+        let detector = ResampleDetector::new();
+        Some(detector.analyze(&mono, audio.sample_rate))
+    } else {
+        None
+    };
+    
+    // =========================================================================
     // COLLECT DEFECTS
     // =========================================================================
     let mut defects = Vec::new();
     
-    // ----- Check for lossy transcode (CRITICAL: This was missing!) -----
+    // ----- Check for lossy transcode -----
     if transcode_result.is_transcode && transcode_result.confidence > config.min_confidence {
         let mut evidence = vec![transcode_result.reason.clone()];
         
-        // Add codec-specific evidence
         if let Some(ref codec_sig) = transcode_result.likely_codec {
             evidence.push(format!(
                 "Matches {:?} signature at {}kbps (confidence: {:.0}%)",
@@ -169,7 +212,6 @@ pub fn detect_quality_issues(audio: &AudioData, config: &DetectionConfig) -> Qua
             ));
         }
         
-        // Determine the specific codec type
         let defect_type = match transcode_result.likely_codec {
             Some(ref sig) => match sig.codec {
                 Codec::MP3 => DefectType::Mp3Transcode {
@@ -186,20 +228,17 @@ pub fn detect_quality_issues(audio: &AudioData, config: &DetectionConfig) -> Qua
                 },
                 Codec::Vorbis => DefectType::OggVorbisTranscode {
                     cutoff_hz: transcode_result.cutoff_hz as u32,
-                    estimated_quality: sig.bitrate.map(|b| b as f32 / 32.0), // Rough Q estimate
+                    estimated_quality: sig.bitrate.map(|b| b as f32 / 32.0),
                 },
                 Codec::Unknown => DefectType::Mp3Transcode {
                     cutoff_hz: transcode_result.cutoff_hz as u32,
                     estimated_bitrate: estimate_bitrate_from_cutoff(transcode_result.cutoff_hz),
                 },
             },
-            None => {
-                // No specific codec matched, but transcode detected
-                DefectType::Mp3Transcode {
-                    cutoff_hz: transcode_result.cutoff_hz as u32,
-                    estimated_bitrate: estimate_bitrate_from_cutoff(transcode_result.cutoff_hz),
-                }
-            }
+            None => DefectType::Mp3Transcode {
+                cutoff_hz: transcode_result.cutoff_hz as u32,
+                estimated_bitrate: estimate_bitrate_from_cutoff(transcode_result.cutoff_hz),
+            },
         };
         
         defects.push(DetectedDefect {
@@ -222,7 +261,26 @@ pub fn detect_quality_issues(audio: &AudioData, config: &DetectionConfig) -> Qua
         });
     }
     
-    // ----- Check upsampling -----
+    // ----- Check dithering (new) -----
+    if let Some(ref dither) = dither_analysis {
+        if dither.is_bit_reduced && dither.algorithm_confidence > config.min_confidence {
+            // Only report as defect if it indicates quality loss
+            if dither.effective_bit_depth < dither.container_bit_depth {
+                defects.push(DetectedDefect {
+                    defect_type: DefectType::DitheringDetected {
+                        algorithm: format!("{}", dither.algorithm),
+                        scale: format!("{}", dither.scale),
+                        effective_bits: dither.effective_bit_depth,
+                        container_bits: dither.container_bit_depth,
+                    },
+                    confidence: dither.algorithm_confidence,
+                    evidence: dither.evidence.clone(),
+                });
+            }
+        }
+    }
+    
+    // ----- Check upsampling (basic) -----
     if upsampling_analysis.is_upsampled && upsampling_analysis.confidence > config.min_confidence {
         if let Some(orig_rate) = upsampling_analysis.original_sample_rate {
             defects.push(DetectedDefect {
@@ -234,6 +292,29 @@ pub fn detect_quality_issues(audio: &AudioData, config: &DetectionConfig) -> Qua
                 confidence: upsampling_analysis.confidence,
                 evidence: upsampling_analysis.evidence.clone(),
             });
+        }
+    }
+    
+    // ----- Check resampling (enhanced) -----
+    if let Some(ref resample) = resample_analysis {
+        if resample.is_resampled && resample.confidence > config.min_confidence {
+            // Only report if not already caught by basic upsampling
+            let already_reported = defects.iter().any(|d| matches!(d.defect_type, DefectType::Upsampled { .. }));
+            
+            if !already_reported {
+                if let Some(orig_rate) = resample.original_sample_rate {
+                    defects.push(DetectedDefect {
+                        defect_type: DefectType::ResamplingDetected {
+                            original_rate: orig_rate,
+                            current_rate: resample.current_sample_rate,
+                            engine: format!("{}", resample.engine),
+                            quality: format!("{}", resample.quality),
+                        },
+                        confidence: resample.confidence,
+                        evidence: resample.evidence.clone(),
+                    });
+                }
+            }
         }
     }
     
@@ -266,7 +347,6 @@ pub fn detect_quality_issues(audio: &AudioData, config: &DetectionConfig) -> Qua
     let peak_db = if peak > 1e-10 { 20.0 * peak.log10() } else { -100.0 };
     let crest_factor = if rms > 1e-10 { 20.0 * (peak / rms).log10() } else { 0.0 };
     
-    // Determine if there's a brick-wall cutoff
     let has_brick_wall = spectral_analysis.rolloff_steepness > 60.0;
     
     QualityReport {
@@ -276,16 +356,15 @@ pub fn detect_quality_issues(audio: &AudioData, config: &DetectionConfig) -> Qua
         actual_bit_depth: bit_depth_analysis.actual_bit_depth,
         duration_secs: audio.duration_secs,
         
-        // Use actual spectral analysis results!
         frequency_cutoff: spectral_analysis.cutoff_hz,
-        spectral_rolloff: spectral_analysis.cutoff_hz * 0.85, // 85% rolloff point
+        spectral_rolloff: spectral_analysis.cutoff_hz * 0.85,
         rolloff_steepness: spectral_analysis.rolloff_steepness,
         has_brick_wall,
-        spectral_flatness: 0.5, // TODO: implement
+        spectral_flatness: 0.5,
         
         dynamic_range,
         peak_amplitude: peak_db,
-        true_peak: peak_db, // Simplified
+        true_peak: peak_db,
         crest_factor,
         
         stereo_width: stereo_analysis.as_ref().map(|s| s.stereo_width),
@@ -298,12 +377,14 @@ pub fn detect_quality_issues(audio: &AudioData, config: &DetectionConfig) -> Qua
         bit_depth_analysis,
         upsampling_analysis,
         pre_echo_analysis,
+        
+        dither_analysis,
+        resample_analysis,
     }
 }
 
 /// Estimate MP3 bitrate from cutoff frequency
 fn estimate_bitrate_from_cutoff(cutoff_hz: f32) -> Option<u32> {
-    // Common MP3 cutoff frequencies
     if cutoff_hz < 12000.0 {
         Some(64)
     } else if cutoff_hz < 14000.0 {
@@ -317,7 +398,7 @@ fn estimate_bitrate_from_cutoff(cutoff_hz: f32) -> Option<u32> {
     } else if cutoff_hz < 20500.0 {
         Some(320)
     } else {
-        None // No clear cutoff, likely genuine lossless
+        None
     }
 }
 
@@ -333,7 +414,6 @@ fn calculate_quality_score(
 ) -> f32 {
     let mut score = 1.0f32;
     
-    // Penalize for defects
     for defect in defects {
         let penalty = match &defect.defect_type {
             DefectType::Mp3Transcode { .. } => 0.4,
@@ -349,11 +429,12 @@ fn calculate_quality_score(
             DefectType::Clipping { .. } => 0.1,
             DefectType::InterSampleOvers { .. } => 0.05,
             DefectType::LowQuality { .. } => 0.15,
+            DefectType::DitheringDetected { .. } => 0.15, // Informational, lower penalty
+            DefectType::ResamplingDetected { .. } => 0.2,
         };
         score -= penalty * defect.confidence;
     }
     
-    // Boost for genuine high-res
     if !bit_depth.is_mismatch && bit_depth.actual_bit_depth >= 24 {
         score += 0.05;
     }
