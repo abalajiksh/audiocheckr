@@ -18,6 +18,9 @@
 //     - Expected DEFECTIVE + got correct defect type(s) → PASS
 //     - Expected DEFECTIVE + got correct + extra defects → PASS (with warning)
 //     - Expected DEFECTIVE + got ONLY wrong defect types → FAIL (wrong detection)
+// v5: STRICTER validation logic
+//     - Extra/wrong defects detected → FAIL (not pass), reported as warning
+//     - Multiple expected defects with partial match → PASS with warning (acceptable)
 
 mod test_utils;
 
@@ -47,9 +50,10 @@ struct GenreTestCase {
 /// Result of validating a test
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum ValidationResult {
-    /// Test passed - correct detection
+    /// Test passed - correct detection (clean==clean, or all expected defects found with no extras)
     Pass,
-    /// Test passed but extra defects were detected beyond expected
+    /// Test passed with warning - expected defects found but some expected defects missing 
+    /// (partial match is OK, can fine-tune later)
     PassWithWarning,
     /// Test failed - false positive (clean file flagged as defective)
     FalsePositive,
@@ -57,6 +61,8 @@ enum ValidationResult {
     FalseNegative,
     /// Test failed - wrong defect type detected (none of the expected defects found)
     WrongDefectType,
+    /// Test failed - extra defects detected beyond expected (wrong additional detection)
+    ExtraDefects,
 }
 
 #[derive(Debug)]
@@ -64,10 +70,10 @@ struct TestResult {
     passed: bool,                    // Whether file was detected as clean
     expected: bool,                  // Whether file should be clean
     defects_found: Vec<String>,
-    expected_defects: Vec<String>,   // NEW: Store expected defects for validation
-    validation_result: ValidationResult,  // NEW: Detailed validation result
-    extra_defects: Vec<String>,      // NEW: Defects detected beyond expected
-    missing_defects: Vec<String>,    // NEW: Expected defects not detected
+    expected_defects: Vec<String>,   // Store expected defects for validation
+    validation_result: ValidationResult,  // Detailed validation result
+    extra_defects: Vec<String>,      // Defects detected beyond expected
+    missing_defects: Vec<String>,    // Expected defects not detected
     description: String,
     category: String,
     file: String,
@@ -119,6 +125,7 @@ fn test_regression_genre_suite() {
     let mut false_positives = 0;
     let mut false_negatives = 0;
     let mut wrong_defect_type = 0;
+    let mut extra_defects_count = 0;
     let mut results_by_category: HashMap<String, Vec<&TestResult>> = HashMap::new();
     
     for (idx, result) in results.iter().enumerate() {
@@ -173,7 +180,7 @@ fn test_regression_genre_suite() {
             result.file,
             result.genre,
             result.category,
-            if result.expected { "CLEAN (should pass)" } else { format!("DEFECTIVE with {:?}", result.expected_defects) },
+            if result.expected { "CLEAN (should pass)".to_string() } else { format!("DEFECTIVE with {:?}", result.expected_defects) },
             if result.passed { "CLEAN" } else { "DEFECTIVE" },
             result.defects_found,
             result.expected_defects,
@@ -193,17 +200,14 @@ fn test_regression_genre_suite() {
                 allure_builder = allure_builder.passed();
             }
             ValidationResult::PassWithWarning => {
+                // Partial match - some expected defects found but some missing
+                // This is acceptable (can fine-tune later), counts as pass
                 passed_with_warning += 1;
-                passed += 1;  // Still counts as pass
-                let message = format!(
-                    "PASSED with extra defects detected: {:?} (expected only {:?})",
-                    result.extra_defects, result.expected_defects
-                );
+                passed += 1;
                 println!(
-                    "⚠ WARNING [{}]: {} - Extra defects: {:?}", 
-                    result.category, result.description, result.extra_defects
+                    "⚠ PASS (partial match) [{}]: {} - Found {:?}, Missing {:?}", 
+                    result.category, result.description, result.defects_found, result.missing_defects
                 );
-                // Still mark as passed in Allure but with a note
                 allure_builder = allure_builder.passed();
             }
             ValidationResult::FalsePositive => {
@@ -241,6 +245,20 @@ fn test_regression_genre_suite() {
                 );
                 allure_builder = allure_builder.failed(&message, Some(&result.stdout));
             }
+            ValidationResult::ExtraDefects => {
+                // Extra/wrong defects detected - this is a FAILURE, not a pass
+                failed += 1;
+                extra_defects_count += 1;
+                let message = format!(
+                    "EXTRA DEFECTS: Expected {:?} but also detected extra: {:?}",
+                    result.expected_defects, result.extra_defects
+                );
+                println!(
+                    "✗ EXTRA DEFECTS [{}]: {} - Expected {:?}, Extra {:?}", 
+                    result.category, result.description, result.expected_defects, result.extra_defects
+                );
+                allure_builder = allure_builder.failed(&message, Some(&result.stdout));
+            }
         }
         
         allure_suite.add_result(allure_builder.build());
@@ -257,11 +275,12 @@ fn test_regression_genre_suite() {
     println!("Total Tests: {}", total_tests);
     println!("Passed: {} ({:.1}%)", passed, (passed as f32 / total_tests as f32) * 100.0);
     println!("  - Clean passes: {}", passed - passed_with_warning);
-    println!("  - Passed with warnings (extra defects): {}", passed_with_warning);
+    println!("  - Passed with warnings (partial match, missing some expected): {}", passed_with_warning);
     println!("Failed: {}", failed);
     println!("  - False Positives: {}", false_positives);
     println!("  - False Negatives: {}", false_negatives);
     println!("  - Wrong Defect Type: {}", wrong_defect_type);
+    println!("  - Extra Defects Detected: {}", extra_defects_count);
     
     // Category breakdown
     println!("\n{}", "-".repeat(80));
@@ -279,12 +298,17 @@ fn test_regression_genre_suite() {
         let cat_wrong = cat_results.iter()
             .filter(|r| matches!(r.validation_result, ValidationResult::WrongDefectType))
             .count();
+        let cat_extra = cat_results.iter()
+            .filter(|r| matches!(r.validation_result, ValidationResult::ExtraDefects))
+            .count();
         
-        let status = if cat_wrong > 0 {
-            format!(" [⚠ {} wrong type]", cat_wrong)
-        } else {
-            String::new()
-        };
+        let mut status = String::new();
+        if cat_wrong > 0 {
+            status.push_str(&format!(" [⚠ {} wrong type]", cat_wrong));
+        }
+        if cat_extra > 0 {
+            status.push_str(&format!(" [⚠ {} extra defects]", cat_extra));
+        }
         
         println!("{:30} {:3}/{:3} ({:.0}%){}", 
             category, cat_passed, cat_total, 
@@ -299,27 +323,32 @@ fn test_regression_genre_suite() {
     println!("Results by Genre:");
     println!("{}", "-".repeat(80));
     
-    let mut results_by_genre: HashMap<String, (usize, usize, usize)> = HashMap::new();
+    let mut results_by_genre: HashMap<String, (usize, usize, usize, usize)> = HashMap::new();
     for result in &results {
-        let entry = results_by_genre.entry(result.genre.clone()).or_insert((0, 0, 0));
-        entry.2 += 1; // total
+        let entry = results_by_genre.entry(result.genre.clone()).or_insert((0, 0, 0, 0));
+        entry.3 += 1; // total
         if matches!(result.validation_result, ValidationResult::Pass | ValidationResult::PassWithWarning) {
             entry.0 += 1; // pass
         }
         if matches!(result.validation_result, ValidationResult::WrongDefectType) {
             entry.1 += 1; // wrong type
         }
+        if matches!(result.validation_result, ValidationResult::ExtraDefects) {
+            entry.2 += 1; // extra defects
+        }
     }
     
     let mut genres: Vec<_> = results_by_genre.iter().collect();
     genres.sort_by_key(|(k, _)| k.as_str());
     
-    for (genre, (pass, wrong, total)) in genres {
-        let status = if *wrong > 0 {
-            format!(" [⚠ {} wrong type]", wrong)
-        } else {
-            String::new()
-        };
+    for (genre, (pass, wrong, extra, total)) in genres {
+        let mut status = String::new();
+        if *wrong > 0 {
+            status.push_str(&format!(" [⚠ {} wrong type]", wrong));
+        }
+        if *extra > 0 {
+            status.push_str(&format!(" [⚠ {} extra]", extra));
+        }
         println!("{:25} {:3}/{:3} ({:.0}%){}", 
             genre, pass, total, 
             (*pass as f32 / *total as f32) * 100.0,
@@ -609,14 +638,15 @@ fn parse_defects_from_output(stdout: &str) -> Vec<String> {
     defects_found
 }
 
-/// Validate test results with proper defect type matching
+/// Validate test results with STRICT defect type matching
 /// 
 /// Returns:
-/// - Pass: Correct detection (clean==clean, or expected defects found)
-/// - PassWithWarning: Expected defects found + extra defects
+/// - Pass: Correct detection (clean==clean, or all expected defects found with no extras)
+/// - PassWithWarning: Some expected defects found but some missing (partial match OK for fine-tuning)
 /// - FalsePositive: Expected clean but got defective
 /// - FalseNegative: Expected defective but got clean
 /// - WrongDefectType: Expected specific defects but none of them were found
+/// - ExtraDefects: Expected defects found but ALSO extra wrong defects detected (FAIL)
 fn validate_test_result(
     is_clean: bool,
     should_pass: bool,
@@ -658,11 +688,8 @@ fn validate_test_result(
     
     // If no specific defects expected (just "should be defective"), any defect is OK
     if expected_defects.is_empty() {
-        if extra.is_empty() {
-            return (ValidationResult::Pass, missing, extra);
-        } else {
-            return (ValidationResult::PassWithWarning, missing, extra);
-        }
+        // No specific defects expected, any detection is fine
+        return (ValidationResult::Pass, missing, extra);
     }
     
     // Check if ANY expected defect was found
@@ -674,11 +701,19 @@ fn validate_test_result(
     }
     
     // At least one expected defect was found
-    if extra.is_empty() {
-        // All detected defects were expected
+    // Now check for extra defects (wrong additional detections)
+    if !extra.is_empty() {
+        // Expected defects found BUT also extra wrong defects -> FAIL (ExtraDefects)
+        return (ValidationResult::ExtraDefects, missing, extra);
+    }
+    
+    // No extra defects, check if all expected were found
+    if missing.is_empty() {
+        // All expected defects found, no extras -> PASS
         return (ValidationResult::Pass, missing, extra);
     } else {
-        // Expected defects found but also extra ones
+        // Some expected defects found, some missing, no extras -> PASS WITH WARNING
+        // This is acceptable for fine-tuning later
         return (ValidationResult::PassWithWarning, missing, extra);
     }
 }

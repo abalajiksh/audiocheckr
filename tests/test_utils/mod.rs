@@ -4,6 +4,7 @@
 // 
 // v2: Added "Wrong Defect Type" category for detecting incorrect defect classification
 // v3: Added AllureStatus enum for compatibility with qualification_test.rs
+// v4: Added "Extra Defects" category for detecting additional wrong defects beyond expected
 
 use std::collections::HashMap;
 use std::fs::{self, File};
@@ -372,8 +373,15 @@ pub fn write_categories(categories: &[AllureCategory], results_dir: &Path) -> Re
 
 /// Default categories for AudioCheckr tests
 /// v2: Added "Wrong Defect Type" category
+/// v4: Added "Extra Defects" category for wrong additional detections
 pub fn default_audiocheckr_categories() -> Vec<AllureCategory> {
     vec![
+        AllureCategory {
+            name: "Extra Defects Detected".to_string(),
+            description: Some("Expected defects were found but additional wrong defects were also detected".to_string()),
+            matched_statuses: vec!["failed".to_string()],
+            message_regex: Some(".*EXTRA DEFECTS.*".to_string()),
+        },
         AllureCategory {
             name: "Wrong Defect Type".to_string(),
             description: Some("Detected a defect but not the expected type (e.g., Mp3Transcode when Upsampled expected)".to_string()),
