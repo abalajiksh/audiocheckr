@@ -3,24 +3,9 @@ pipeline {
     
     parameters {
         choice(
-            name: 'TEST_TYPE_OVERRIDE',
-            choices: ['AUTO', 'QUALIFICATION', 'REGRESSION', 'REGRESSION_GENRE', 'DIAGNOSTIC'],
-            description: 'Force a specific test type. AUTO uses smart detection.'
-        )
-        booleanParam(
-            name: 'SKIP_ARM_BUILD',
-            defaultValue: false,
-            description: 'Skip ARM build and tests (for quick x86-64 only builds)'
-        )
-        booleanParam(
-            name: 'RUN_GENRE_REGRESSION',
-            defaultValue: false,
-            description: 'Run regression genre tests (manual trigger only)'
-        )
-        booleanParam(
-            name: 'RUN_DIAGNOSTIC_TEST',
-            defaultValue: false,
-            description: 'Run diagnostic test only (downloads TestSuite.zip, requires manual trigger)'
+            name: 'TEST_TYPE',
+            choices: ['QUALIFICATION_GENRE', 'REGRESSION_GENRE', 'DIAGNOSTIC'],
+            description: 'Test type to run. QUALIFICATION_GENRE runs on every build, others are manual-only.'
         )
         booleanParam(
             name: 'SKIP_SONARQUBE',
@@ -37,8 +22,6 @@ pipeline {
     environment {
         // MinIO configuration
         MINIO_BUCKET = 'audiocheckr'
-        MINIO_FILE_COMPACT = 'CompactTestFiles.zip'
-        MINIO_FILE_FULL = 'TestFiles.zip'
         MINIO_FILE_GENRE_LITE = 'GenreTestSuiteLite.zip'
         MINIO_FILE_GENRE_FULL = 'TestSuite.zip'
         
@@ -53,9 +36,6 @@ pipeline {
         
         // Path setup
         PATH = "$HOME/bin:$HOME/.cargo/bin:/usr/bin:$PATH"
-        
-        // PODMAN_LXC_HOST and PODMAN_LXC_USER are set globally in Jenkins
-        // Configure in: Manage Jenkins → System → Global properties → Environment variables
     }
     
     triggers {
@@ -64,8 +44,8 @@ pipeline {
     }
     
     options {
-        // Build timeout (increased for ARM builds via QEMU)
-        timeout(time: 90, unit: 'MINUTES')
+        // Build timeout
+        timeout(time: 45, unit: 'MINUTES')
         
         // Keep last 10 builds
         buildDiscarder(logRotator(numToKeepStr: '10', artifactNumToKeepStr: '5'))
@@ -87,25 +67,19 @@ pipeline {
                         checkout scm
                     }
                     
-                    // Handle diagnostic test override
-                    if (params.RUN_DIAGNOSTIC_TEST) {
-                        env.TEST_TYPE = 'DIAGNOSTIC'
-                        echo "🔍 Diagnostic test mode activated"
-                    } else if (params.TEST_TYPE_OVERRIDE && params.TEST_TYPE_OVERRIDE != 'AUTO') {
-                        env.TEST_TYPE = params.TEST_TYPE_OVERRIDE
-                        echo "🔧 Test type forced via parameter: ${env.TEST_TYPE}"
-                    } else if (currentBuild.getBuildCauses('hudson.triggers.TimerTrigger$TimerTriggerCause')) {
-                        // Scheduled build (cron) = REGRESSION
-                        env.TEST_TYPE = 'REGRESSION'
-                        echo "⏰ Scheduled build detected - running REGRESSION tests"
+                    // Determine test type based on trigger
+                    if (currentBuild.getBuildCauses('hudson.triggers.TimerTrigger$TimerTriggerCause')) {
+                        // Scheduled build (cron) = REGRESSION_GENRE
+                        env.TEST_TYPE = 'REGRESSION_GENRE'
+                        echo "⏰ Scheduled build detected - running REGRESSION_GENRE tests"
                     } else if (currentBuild.getBuildCauses('hudson.model.Cause$UserIdCause')) {
-                        // Manual build = QUALIFICATION by default
-                        env.TEST_TYPE = 'QUALIFICATION'
-                        echo "👤 Manual build - running QUALIFICATION tests (use parameter to override)"
+                        // Manual build = use parameter (defaults to QUALIFICATION_GENRE)
+                        env.TEST_TYPE = params.TEST_TYPE
+                        echo "👤 Manual build - running ${env.TEST_TYPE} tests"
                     } else {
-                        // GitHub push = QUALIFICATION
-                        env.TEST_TYPE = 'QUALIFICATION'
-                        echo "🔄 Push detected - running QUALIFICATION tests"
+                        // GitHub push = QUALIFICATION_GENRE
+                        env.TEST_TYPE = 'QUALIFICATION_GENRE'
+                        echo "🔄 Push detected - running QUALIFICATION_GENRE tests"
                     }
                     
                     // Display build info
@@ -114,7 +88,6 @@ pipeline {
                   AUDIOCHECKR CI/CD                     
 ========================================================
   Test Type:     ${env.TEST_TYPE}
-  ARM Build:     ${params.SKIP_ARM_BUILD ? 'DISABLED ⏭️' : 'ENABLED ✓'}
   Allure:        ENABLED ✓
   Build #:       ${currentBuild.number}
   Triggered by:  ${currentBuild.getBuildCauses()[0].shortDescription}
@@ -186,9 +159,6 @@ pipeline {
         stage('Build & Prepare') {
             parallel {
                 stage('Build x86_64') {
-                    when {
-                        expression { return env.TEST_TYPE != 'DIAGNOSTIC' }
-                    }
                     steps {
                         sh '''
                             echo "=========================================="
@@ -218,40 +188,15 @@ pipeline {
                                     variable: 'MINIO_ENDPOINT'
                                 )
                             ]) {
-                                if (env.TEST_TYPE == 'DIAGNOSTIC') {
+                                if (env.TEST_TYPE == 'DIAGNOSTIC' || env.TEST_TYPE == 'REGRESSION_GENRE') {
                                     sh '''
                                         set -e
                                         echo "Setting up MinIO alias..."
                                         mc alias set myminio "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
                                         
                                         echo "=========================================="
-                                        echo "Downloading DIAGNOSTIC test files"
+                                        echo "Downloading FULL test suite (TestSuite.zip)"
                                         echo "=========================================="
-                                        
-                                        # Download and extract TestSuite only
-                                        echo "Downloading ${MINIO_FILE_GENRE_FULL}"
-                                        mc cp myminio/${MINIO_BUCKET}/${MINIO_FILE_GENRE_FULL} .
-                                        unzip -q -o ${MINIO_FILE_GENRE_FULL}
-                                        rm -f ${MINIO_FILE_GENRE_FULL}
-                                        
-                                        echo "✓ Test files ready for diagnostic"
-                                        ls -lh TestSuite/ | head -n 20
-                                    '''
-                                } else if (env.TEST_TYPE == 'REGRESSION') {
-                                    sh '''
-                                        set -e
-                                        echo "Setting up MinIO alias..."
-                                        mc alias set myminio "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
-                                        
-                                        echo "=========================================="
-                                        echo "Downloading REGRESSION test files"
-                                        echo "=========================================="
-                                        
-                                        # Download and extract TestFiles
-                                        echo "Downloading ${MINIO_FILE_FULL}"
-                                        mc cp myminio/${MINIO_BUCKET}/${MINIO_FILE_FULL} .
-                                        unzip -q -o ${MINIO_FILE_FULL}
-                                        rm -f ${MINIO_FILE_FULL}
                                         
                                         # Download and extract TestSuite
                                         echo "Downloading ${MINIO_FILE_GENRE_FULL}"
@@ -260,47 +205,18 @@ pipeline {
                                         rm -f ${MINIO_FILE_GENRE_FULL}
                                         
                                         echo "✓ Test files ready"
-                                        ls -lh TestFiles/ | head -n 10
-                                        ls -lh TestSuite/ | head -n 10
-                                    '''
-                                } else if (env.TEST_TYPE == 'REGRESSION_GENRE') {
-                                    sh '''
-                                        set -e
-                                        echo "Setting up MinIO alias..."
-                                        mc alias set myminio "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
-                                        
-                                        echo "=========================================="
-                                        echo "Downloading REGRESSION GENRE test files"
-                                        echo "=========================================="
-                                        
-                                        # Download and extract TestSuite only
-                                        echo "Downloading ${MINIO_FILE_GENRE_FULL}"
-                                        mc cp myminio/${MINIO_BUCKET}/${MINIO_FILE_GENRE_FULL} .
-                                        unzip -q -o ${MINIO_FILE_GENRE_FULL}
-                                        rm -f ${MINIO_FILE_GENRE_FULL}
-                                        
-                                        echo "✓ Test files ready"
-                                        ls -lh TestSuite/ | head -n 10
+                                        ls -lh TestSuite/ | head -n 20
                                     '''
                                 } else {
-                                    // QUALIFICATION (default)
+                                    // QUALIFICATION_GENRE (default)
                                     sh '''
                                         set -e
                                         echo "Setting up MinIO alias..."
                                         mc alias set myminio "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
                                         
                                         echo "=========================================="
-                                        echo "Downloading QUALIFICATION test files"
+                                        echo "Downloading LITE test suite (GenreTestSuiteLite.zip)"
                                         echo "=========================================="
-                                        
-                                        # Download and extract CompactTestFiles
-                                        echo "Downloading ${MINIO_FILE_COMPACT}"
-                                        mc cp myminio/${MINIO_BUCKET}/${MINIO_FILE_COMPACT} .
-                                        unzip -q -o ${MINIO_FILE_COMPACT}
-                                        if [ -d "CompactTestFiles" ]; then
-                                            mv CompactTestFiles TestFiles
-                                        fi
-                                        rm -f ${MINIO_FILE_COMPACT}
                                         
                                         # Download and extract GenreTestSuiteLite
                                         echo "Downloading ${MINIO_FILE_GENRE_LITE}"
@@ -309,10 +225,7 @@ pipeline {
                                         rm -f ${MINIO_FILE_GENRE_LITE}
                                         
                                         echo "✓ Test files ready"
-                                        ls -lh TestFiles/ | head -n 10
                                         if [ -d "GenreTestSuiteLite" ]; then
-                                            echo ""
-                                            echo "GenreTestSuiteLite directory:"
                                             ls -lh GenreTestSuiteLite/ | head -n 10
                                         fi
                                     '''
@@ -321,57 +234,10 @@ pipeline {
                         }
                     }
                 }
-                
-                stage('Build ARM64') {
-                    when {
-                        allOf {
-                            expression { return !params.SKIP_ARM_BUILD }
-                            expression { return env.TEST_TYPE != 'DIAGNOSTIC' }
-                        }
-                    }
-                    steps {
-                        sh '''
-                            # Install ARM target if not present
-                            if ! rustup target list --installed | grep -q aarch64-unknown-linux-gnu; then
-                                echo "Installing aarch64 target..."
-                                rustup target add aarch64-unknown-linux-gnu
-                            fi
-                            
-                            # Check for ARM cross-compiler
-                            if ! command -v aarch64-linux-gnu-gcc >/dev/null 2>&1; then
-                                echo "⚠ ARM64 cross-compiler not installed"
-                                echo "Install with: sudo apt-get install gcc-aarch64-linux-gnu"
-                                echo "Skipping ARM64 build..."
-                                exit 0
-                            fi
-                            
-                            echo ""
-                            echo "=========================================="
-                            echo "Building ARM64 binary"
-                            echo "=========================================="
-                            
-                            export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
-                            export CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc
-                            
-                            cargo build --release --target aarch64-unknown-linux-gnu 2>&1 | tee build_arm64.txt
-                            
-                            echo ""
-                            echo "=== ARM64 Build Artifact ==="
-                            mkdir -p target/arm64
-                            cp target/aarch64-unknown-linux-gnu/release/audiocheckr target/arm64/audiocheckr-arm64
-                            ls -lh target/arm64/audiocheckr-arm64
-                            file target/arm64/audiocheckr-arm64
-                            echo "============================="
-                        '''
-                    }
-                }
             }
         }
         
         stage('Prepare Allure') {
-            when {
-                expression { return env.TEST_TYPE != 'DIAGNOSTIC' }
-            }
             steps {
                 sh '''
                     echo "=========================================="
@@ -399,21 +265,18 @@ EOF
             }
         }
         
-        stage('x86_64 Tests') {
-            when {
-                expression { return env.TEST_TYPE != 'DIAGNOSTIC' }
-            }
+        stage('Tests') {
             stages {
                 stage('Integration Tests') {
                     steps {
                         sh '''
                             echo "=========================================="
-                            echo "x86_64: Integration Tests"
+                            echo "Running Integration Tests"
                             echo "=========================================="
                             
                             set +e
                             mkdir -p target/test-results
-                            cargo test --test integration_test -- --nocapture 2>&1 | tee target/test-results/integration_x86_64.txt
+                            cargo test --test integration_test -- --nocapture 2>&1 | tee target/test-results/integration.txt
                             TEST_EXIT=$?
                             
                             if [ $TEST_EXIT -ne 0 ]; then
@@ -425,74 +288,25 @@ EOF
                     }
                 }
                 
-                stage('Qualification Tests') {
+                stage('Qualification Genre Tests') {
                     when {
-                        expression { return env.TEST_TYPE == 'QUALIFICATION' }
-                    }
-                    parallel {
-                        stage('Qualification Test') {
-                            steps {
-                                sh '''
-                                    echo "=========================================="
-                                    echo "x86_64: Running QUALIFICATION tests"
-                                    echo "=========================================="
-                                    
-                                    set +e
-                                    mkdir -p target/test-results
-                                    cargo test --test qualification_test -- --nocapture 2>&1 | tee target/test-results/qualification_x86_64.txt
-                                    TEST_EXIT=$?
-                                    
-                                    if [ $TEST_EXIT -ne 0 ]; then
-                                        echo "⚠ Qualification tests completed with failures"
-                                    else
-                                        echo "✓ Qualification tests passed!"
-                                    fi
-                                '''
-                            }
-                        }
-                        
-                        stage('Qualification Genre Test') {
-                            steps {
-                                sh '''
-                                    echo "=========================================="
-                                    echo "x86_64: Running QUALIFICATION GENRE tests"
-                                    echo "=========================================="
-                                    
-                                    set +e
-                                    mkdir -p target/test-results
-                                    cargo test --test qualification_genre_test -- --nocapture 2>&1 | tee target/test-results/qualification_genre_x86_64.txt
-                                    TEST_EXIT=$?
-                                    
-                                    if [ $TEST_EXIT -ne 0 ]; then
-                                        echo "⚠ Qualification genre tests completed with failures"
-                                    else
-                                        echo "✓ Qualification genre tests passed!"
-                                    fi
-                                '''
-                            }
-                        }
-                    }
-                }
-                
-                stage('Regression Tests') {
-                    when {
-                        expression { return env.TEST_TYPE == 'REGRESSION' }
+                        expression { return env.TEST_TYPE == 'QUALIFICATION_GENRE' }
                     }
                     steps {
                         sh '''
                             echo "=========================================="
-                            echo "x86_64: Running REGRESSION tests"
+                            echo "Running QUALIFICATION GENRE tests"
                             echo "=========================================="
                             
                             set +e
                             mkdir -p target/test-results
-                            cargo test --test regression_test -- --nocapture 2>&1 | tee target/test-results/regression_x86_64.txt
+                            cargo test --test qualification_genre_test -- --nocapture 2>&1 | tee target/test-results/qualification_genre.txt
                             TEST_EXIT=$?
                             
                             if [ $TEST_EXIT -ne 0 ]; then
-                                echo "⚠ Regression tests completed with failures"
+                                echo "⚠ Qualification genre tests completed with failures"
                             else
-                                echo "✓ Regression tests passed!"
+                                echo "✓ Qualification genre tests passed!"
                             fi
                         '''
                     }
@@ -505,12 +319,12 @@ EOF
                     steps {
                         sh '''
                             echo "=========================================="
-                            echo "x86_64: Running REGRESSION GENRE tests"
+                            echo "Running REGRESSION GENRE tests"
                             echo "=========================================="
                             
                             set +e
                             mkdir -p target/test-results
-                            cargo test --test regression_genre_test -- --nocapture 2>&1 | tee target/test-results/regression_genre_x86_64.txt
+                            cargo test --test regression_genre_test -- --nocapture 2>&1 | tee target/test-results/regression_genre.txt
                             TEST_EXIT=$?
                             
                             if [ $TEST_EXIT -ne 0 ]; then
@@ -521,37 +335,34 @@ EOF
                         '''
                     }
                 }
-            }
-        }
-        
-        stage('Diagnostic Tests') {
-            when {
-                expression { return env.TEST_TYPE == 'DIAGNOSTIC' }
-            }
-            steps {
-                sh '''
-                    echo "=========================================="
-                    echo "x86_64: Running DIAGNOSTIC tests"
-                    echo "=========================================="
-                    
-                    set +e
-                    mkdir -p target/test-results
-                    cargo test --test diagnostic_test -- --nocapture 2>&1 | tee target/test-results/diagnostic_x86_64.txt
-                    TEST_EXIT=$?
-                    
-                    if [ $TEST_EXIT -ne 0 ]; then
-                        echo "⚠ Diagnostic tests completed with failures"
-                    else
-                        echo "✓ Diagnostic tests passed!"
-                    fi
-                '''
+                
+                stage('Diagnostic Tests') {
+                    when {
+                        expression { return env.TEST_TYPE == 'DIAGNOSTIC' }
+                    }
+                    steps {
+                        sh '''
+                            echo "=========================================="
+                            echo "Running DIAGNOSTIC tests"
+                            echo "=========================================="
+                            
+                            set +e
+                            mkdir -p target/test-results
+                            cargo test --test diagnostic_test -- --nocapture 2>&1 | tee target/test-results/diagnostic.txt
+                            TEST_EXIT=$?
+                            
+                            if [ $TEST_EXIT -ne 0 ]; then
+                                echo "⚠ Diagnostic tests completed with failures"
+                            else
+                                echo "✓ Diagnostic tests passed!"
+                            fi
+                        '''
+                    }
+                }
             }
         }
         
         stage('Generate Allure Report') {
-            when {
-                expression { return env.TEST_TYPE != 'DIAGNOSTIC' }
-            }
             steps {
                 script {
                     sh '''
@@ -621,107 +432,11 @@ EOF
                 }
             }
         }
-        
-        stage('ARM64 Tests') {
-            when {
-                allOf {
-                    expression { return !params.SKIP_ARM_BUILD }
-                    expression { return env.TEST_TYPE != 'DIAGNOSTIC' }
-                }
-            }
-            stages {
-                stage('ARM64 Integration Tests') {
-                    steps {
-                        sh '''
-                            if ! command -v qemu-aarch64-static >/dev/null 2>&1; then
-                                echo "⚠ QEMU user-mode not available, skipping ARM64 tests"
-                                echo "Install with: sudo apt-get install qemu-user-static"
-                                exit 0
-                            fi
-                            
-                            echo "=========================================="
-                            echo "ARM64: Integration Tests"
-                            echo "=========================================="
-                            
-                            set +e
-                            mkdir -p target/test-results
-                            cargo test --target aarch64-unknown-linux-gnu --test integration_test -- --nocapture 2>&1 | tee target/test-results/integration_arm64.txt
-                            TEST_EXIT=$?
-                            
-                            if [ $TEST_EXIT -ne 0 ]; then
-                                echo "⚠ ARM64 integration tests had failures"
-                            else
-                                echo "✓ ARM64 integration tests passed!"
-                            fi
-                        '''
-                    }
-                }
-                
-                stage('ARM64 Qualification Tests') {
-                    when {
-                        expression { return env.TEST_TYPE == 'QUALIFICATION' }
-                    }
-                    parallel {
-                        stage('ARM64 Qualification Test') {
-                            steps {
-                                sh '''
-                                    if ! command -v qemu-aarch64-static >/dev/null 2>&1; then
-                                        echo "⚠ QEMU user-mode not available, skipping ARM64 qualification tests"
-                                        exit 0
-                                    fi
-                                    
-                                    echo "=========================================="
-                                    echo "ARM64: Running QUALIFICATION tests"
-                                    echo "=========================================="
-                                    
-                                    set +e
-                                    mkdir -p target/test-results
-                                    cargo test --target aarch64-unknown-linux-gnu --test qualification_test -- --nocapture 2>&1 | tee target/test-results/qualification_arm64.txt
-                                    TEST_EXIT=$?
-                                    
-                                    if [ $TEST_EXIT -ne 0 ]; then
-                                        echo "⚠ ARM64 qualification tests completed with failures"
-                                    else
-                                        echo "✓ ARM64 qualification tests passed!"
-                                    fi
-                                '''
-                            }
-                        }
-                        
-                        stage('ARM64 Qualification Genre Test') {
-                            steps {
-                                sh '''
-                                    if ! command -v qemu-aarch64-static >/dev/null 2>&1; then
-                                        echo "⚠ QEMU user-mode not available, skipping ARM64 qualification genre tests"
-                                        exit 0
-                                    fi
-                                    
-                                    echo "=========================================="
-                                    echo "ARM64: Running QUALIFICATION GENRE tests"
-                                    echo "=========================================="
-                                    
-                                    set +e
-                                    mkdir -p target/test-results
-                                    cargo test --target aarch64-unknown-linux-gnu --test qualification_genre_test -- --nocapture 2>&1 | tee target/test-results/qualification_genre_arm64.txt
-                                    TEST_EXIT=$?
-                                    
-                                    if [ $TEST_EXIT -ne 0 ]; then
-                                        echo "⚠ ARM64 qualification genre tests completed with failures"
-                                    else
-                                        echo "✓ ARM64 qualification genre tests passed!"
-                                    fi
-                                '''
-                            }
-                        }
-                    }
-                }
-            }
-        }
     }
     
     post {
         success {
-            echo '✓ Multi-arch build and tests completed successfully!'
+            echo '✓ Build and tests completed successfully!'
         }
         unstable {
             echo '⚠ Build completed but some tests failed. Check test results.'
@@ -732,17 +447,10 @@ EOF
         always {
             script {
                 // Archive x86_64 binary (on success or unstable)
-                if (currentBuild.result != 'FAILURE' && env.TEST_TYPE != 'DIAGNOSTIC') {
+                if (currentBuild.result != 'FAILURE') {
                     archiveArtifacts artifacts: 'target/release/audiocheckr', 
                                    fingerprint: true, 
                                    allowEmptyArchive: true
-                    
-                    // Archive ARM64 binary if built
-                    if (!params.SKIP_ARM_BUILD && fileExists('target/arm64/audiocheckr-arm64')) {
-                        archiveArtifacts artifacts: 'target/arm64/audiocheckr-arm64', 
-                                       fingerprint: true, 
-                                       allowEmptyArchive: true
-                    }
                 }
             }
             
@@ -775,22 +483,18 @@ EOF
                 }
             }
             
-            // Clean up everything to save disk space
+            // Clean up to save disk space
             script {
                 echo "🧹 Cleaning workspace to save disk space..."
                 
                 sh '''
                     # Delete test files and ZIPs
-                    rm -f CompactTestFiles.zip TestFiles.zip GenreTestSuiteLite.zip TestSuite.zip
-                    rm -rf CompactTestFiles TestFiles GenreTestSuiteLite TestSuite
+                    rm -f GenreTestSuiteLite.zip TestSuite.zip
+                    rm -rf GenreTestSuiteLite TestSuite
                     
-                    # Keep the release binaries, clean build cache
+                    # Keep the release binary, clean build cache
                     if [ -f target/release/audiocheckr ]; then
-                        cp target/release/audiocheckr /tmp/audiocheckr_backup_x86_$BUILD_NUMBER 2>/dev/null || true
-                    fi
-                    
-                    if [ -f target/arm64/audiocheckr-arm64 ]; then
-                        cp target/arm64/audiocheckr-arm64 /tmp/audiocheckr_backup_arm64_$BUILD_NUMBER 2>/dev/null || true
+                        cp target/release/audiocheckr /tmp/audiocheckr_backup_$BUILD_NUMBER 2>/dev/null || true
                     fi
                     
                     # Clean target directory (saves ~2GB+)
@@ -799,20 +503,11 @@ EOF
                     rm -rf target/release/build
                     rm -rf target/release/.fingerprint
                     rm -rf target/release/incremental
-                    rm -rf target/aarch64-unknown-linux-gnu/release/deps
-                    rm -rf target/aarch64-unknown-linux-gnu/release/build
-                    rm -rf target/aarch64-unknown-linux-gnu/release/.fingerprint
-                    rm -rf target/aarch64-unknown-linux-gnu/release/incremental
                     
-                    # Restore binaries
-                    if [ -f /tmp/audiocheckr_backup_x86_$BUILD_NUMBER ]; then
+                    # Restore binary
+                    if [ -f /tmp/audiocheckr_backup_$BUILD_NUMBER ]; then
                         mkdir -p target/release
-                        mv /tmp/audiocheckr_backup_x86_$BUILD_NUMBER target/release/audiocheckr
-                    fi
-                    
-                    if [ -f /tmp/audiocheckr_backup_arm64_$BUILD_NUMBER ]; then
-                        mkdir -p target/arm64
-                        mv /tmp/audiocheckr_backup_arm64_$BUILD_NUMBER target/arm64/audiocheckr-arm64
+                        mv /tmp/audiocheckr_backup_$BUILD_NUMBER target/release/audiocheckr
                     fi
                     
                     echo "✓ Cleanup complete"
