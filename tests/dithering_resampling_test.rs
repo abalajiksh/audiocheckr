@@ -21,12 +21,15 @@
 // Jenkins Integration:
 //   - Test files downloaded from MinIO as zip archives
 //   - Manual trigger pipeline for comprehensive DSP validation
+//
+// v2: Fixed for Jenkins CI - reduced parallelism, added heartbeat output
 
 mod test_utils;
 
 use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
@@ -129,7 +132,32 @@ fn get_resampler_info(engine: &str, params: &str) -> (&'static str, &'static str
 }
 
 // ============================================================================
-// Main Test Entry Point
+// CI Environment Detection
+// ============================================================================
+
+/// Detect if running in CI environment (Jenkins, GitHub Actions, etc.)
+fn is_ci_environment() -> bool {
+    std::env::var("JENKINS_HOME").is_ok() 
+        || std::env::var("CI").is_ok()
+        || std::env::var("BUILD_NUMBER").is_ok()
+        || std::env::var("GITHUB_ACTIONS").is_ok()
+}
+
+/// Get appropriate number of parallel threads for the environment
+fn get_parallel_threads(requested: usize) -> usize {
+    if is_ci_environment() {
+        // CI environments often have memory constraints
+        // Large audio files (150-300MB each) can exhaust memory with too many threads
+        println!("CI environment detected - reducing parallelism for stability");
+        let _ = std::io::stdout().flush();
+        requested.min(2)
+    } else {
+        requested
+    }
+}
+
+// ============================================================================
+// Main Test Entry Points
 // ============================================================================
 
 #[test]
@@ -176,6 +204,7 @@ fn test_dsp_full_suite() {
     println!("DSP FULL TEST SUITE");
     println!("Total test cases: {}", all_cases.len());
     println!("{}\n", "=".repeat(80));
+    let _ = std::io::stdout().flush();
 
     let results = run_tests_parallel(&binary_path, all_cases.clone(), 4);
     let mut allure_suite = AllureTestSuite::new("DSP Full Tests", &allure_results_dir);
@@ -225,6 +254,7 @@ fn run_dsp_test_suite(test_dir_name: &str, _primary_type: DspTestType) {
     println!("Using: {}", test_base.display());
     println!("Allure results: {}", allure_results_dir.display());
     println!("{}\n", "=".repeat(80));
+    let _ = std::io::stdout().flush();
 
     setup_allure_environment(&allure_results_dir, suite_name);
     let _ = write_categories(&default_audiocheckr_categories(), &allure_results_dir);
@@ -241,6 +271,7 @@ fn run_dsp_test_suite(test_dir_name: &str, _primary_type: DspTestType) {
     }
 
     println!("Found {} test files\n", test_cases.len());
+    let _ = std::io::stdout().flush();
 
     let results = run_tests_parallel(&binary_path, test_cases.clone(), 4);
     let mut allure_suite = AllureTestSuite::new(&format!("{} Tests", suite_name), &allure_results_dir);
@@ -456,7 +487,7 @@ fn parse_resample_filename(filename: &str) -> Option<(u32, String, String)> {
 }
 
 // ============================================================================
-// Parallel Test Executor
+// Parallel Test Executor (CI-aware)
 // ============================================================================
 
 fn run_tests_parallel(binary: &Path, test_cases: Vec<DspTestCase>, num_threads: usize) -> Vec<TestResult> {
@@ -464,11 +495,16 @@ fn run_tests_parallel(binary: &Path, test_cases: Vec<DspTestCase>, num_threads: 
     let test_cases = Arc::new(test_cases);
     let results = Arc::new(Mutex::new(Vec::new()));
     let index = Arc::new(Mutex::new(0usize));
+    let total = test_cases.len();
     let mut handles = Vec::new();
 
-    println!("Running tests with {} parallel threads...\n", num_threads);
+    // Reduce parallelism for CI environments to avoid memory/I/O issues
+    let effective_threads = get_parallel_threads(num_threads);
 
-    for _ in 0..num_threads {
+    println!("Running tests with {} parallel threads...\n", effective_threads);
+    let _ = std::io::stdout().flush();
+
+    for _ in 0..effective_threads {
         let binary = binary.clone();
         let test_cases = Arc::clone(&test_cases);
         let results = Arc::clone(&results);
@@ -487,11 +523,26 @@ fn run_tests_parallel(binary: &Path, test_cases: Vec<DspTestCase>, num_threads: 
                 };
 
                 let test_case = &test_cases[current_idx];
+                
+                // Print progress for EVERY test to keep Jenkins heartbeat alive
+                // Large audio files (150-300MB) can take 30+ seconds each
+                println!("[{}/{}] Testing: {}", current_idx + 1, total, test_case.filename);
+                let _ = std::io::stdout().flush();
+                
                 let result = run_single_test(&binary, test_case);
 
-                if current_idx > 0 && current_idx % 10 == 0 {
-                    println!("Progress: {}/{} tests completed", current_idx, test_cases.len());
-                }
+                // Print completion status immediately
+                let status = match result.validation_result {
+                    ValidationResult::Pass => "✓ PASS",
+                    ValidationResult::PassWithWarning => "⚠ PASS (partial)",
+                    ValidationResult::FalsePositive => "✗ FALSE POSITIVE",
+                    ValidationResult::FalseNegative => "✗ FALSE NEGATIVE", 
+                    ValidationResult::WrongDefectType => "✗ WRONG DEFECT",
+                    ValidationResult::ExtraDefects => "✗ EXTRA DEFECTS",
+                };
+                println!("[{}/{}] {} - {} ({}ms)", 
+                    current_idx + 1, total, status, test_case.filename, result.duration_ms);
+                let _ = std::io::stdout().flush();
 
                 let mut results_guard = results.lock().unwrap();
                 results_guard.push((current_idx, result));
@@ -701,6 +752,11 @@ fn analyze_and_report_results(
 
     let mut results_by_type: HashMap<DspTestType, Vec<&TestResult>> = HashMap::new();
 
+    println!("\n{}", "=".repeat(80));
+    println!("TEST RESULTS SUMMARY");
+    println!("{}", "=".repeat(80));
+    let _ = std::io::stdout().flush();
+
     for (idx, result) in results.iter().enumerate() {
         let test_case = &test_cases[idx];
 
@@ -793,16 +849,11 @@ fn analyze_and_report_results(
         match result.validation_result {
             ValidationResult::Pass => {
                 stats.passed += 1;
-                println!("[{:3}/{}] ✓ PASS: {}", idx + 1, stats.total, test_case.description);
                 builder = builder.passed();
             }
             ValidationResult::PassWithWarning => {
                 stats.passed_with_warning += 1;
                 stats.passed += 1;
-                println!(
-                    "[{:3}/{}] ⚠ PASS (partial): {} - Missing {:?}",
-                    idx + 1, stats.total, test_case.description, result.missing_defects
-                );
                 builder = builder.passed();
             }
             ValidationResult::FalsePositive => {
@@ -811,10 +862,6 @@ fn analyze_and_report_results(
                 let message = format!(
                     "FALSE POSITIVE: Expected CLEAN but detected defects: {:?}",
                     result.defects_found
-                );
-                println!(
-                    "[{:3}/{}] ✗ FALSE POSITIVE: {}",
-                    idx + 1, stats.total, test_case.description
                 );
                 builder = builder.failed(&message, Some(&result.stdout));
             }
@@ -825,10 +872,6 @@ fn analyze_and_report_results(
                     "FALSE NEGATIVE: Expected defects {:?} but got CLEAN",
                     test_case.expected_defects
                 );
-                println!(
-                    "[{:3}/{}] ✗ FALSE NEGATIVE: {}",
-                    idx + 1, stats.total, test_case.description
-                );
                 builder = builder.failed(&message, Some(&result.stdout));
             }
             ValidationResult::WrongDefectType => {
@@ -837,10 +880,6 @@ fn analyze_and_report_results(
                 let message = format!(
                     "WRONG DEFECT TYPE: Expected {:?} but detected {:?}",
                     test_case.expected_defects, result.defects_found
-                );
-                println!(
-                    "[{:3}/{}] ✗ WRONG DEFECT: {} - Got {:?}",
-                    idx + 1, stats.total, test_case.description, result.defects_found
                 );
                 builder = builder.failed(&message, Some(&result.stdout));
             }
@@ -851,10 +890,6 @@ fn analyze_and_report_results(
                     "EXTRA DEFECTS: Expected {:?} but also detected extra: {:?}",
                     test_case.expected_defects, result.extra_defects
                 );
-                println!(
-                    "[{:3}/{}] ✗ EXTRA DEFECTS: {} - Extra {:?}",
-                    idx + 1, stats.total, test_case.description, result.extra_defects
-                );
                 builder = builder.failed(&message, Some(&result.stdout));
             }
         }
@@ -863,10 +898,7 @@ fn analyze_and_report_results(
     }
 
     // Print summary
-    println!("\n{}", "=".repeat(80));
-    println!("DSP TEST RESULTS");
-    println!("{}", "=".repeat(80));
-    println!("Total Tests:     {}", stats.total);
+    println!("\nTotal Tests:     {}", stats.total);
     println!(
         "Passed:          {} ({:.1}%)",
         stats.passed,
@@ -902,6 +934,7 @@ fn analyze_and_report_results(
         }
     }
     println!("{}", "=".repeat(80));
+    let _ = std::io::stdout().flush();
 
     stats
 }
@@ -917,6 +950,7 @@ fn setup_allure_environment(results_dir: &Path, suite_name: &str) {
     env.add("Architecture", std::env::consts::ARCH);
     env.add("Rust Version", env!("CARGO_PKG_VERSION"));
     env.add("Test Suite", suite_name);
+    env.add("CI Environment", if is_ci_environment() { "Yes" } else { "No" });
 
     if let Ok(hostname) = std::env::var("HOSTNAME") {
         env.add("Host", &hostname);
@@ -944,6 +978,7 @@ fn get_binary_path() -> PathBuf {
     let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     path.push("target");
 
+    // Prefer release build (much faster for audio processing)
     let release_path = path.join("release").join("audiocheckr");
     let debug_path = path.join("debug").join("audiocheckr");
 

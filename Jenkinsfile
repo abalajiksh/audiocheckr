@@ -38,6 +38,9 @@ pipeline {
         
         // Path setup
         PATH = "$HOME/bin:$HOME/.cargo/bin:/usr/bin:$PATH"
+        
+        // CI marker for test awareness
+        CI = 'true'
     }
     
     triggers {
@@ -46,8 +49,8 @@ pipeline {
     }
     
     options {
-        // Build timeout
-        timeout(time: 45, unit: 'MINUTES')
+        // Build timeout - increased for DSP tests with large files
+        timeout(time: 90, unit: 'MINUTES')
         
         // Keep last 10 builds
         buildDiscarder(logRotator(numToKeepStr: '10', artifactNumToKeepStr: '5'))
@@ -164,8 +167,9 @@ pipeline {
                     steps {
                         sh '''
                             echo "=========================================="
-                            echo "Building x86_64 binary"
+                            echo "Building x86_64 binary (RELEASE mode)"
                             echo "=========================================="
+                            # Always build release for faster audio processing
                             cargo build --release 2>&1 | tee build_x86_64.txt
                             echo ""
                             echo "=== x86_64 Build Artifact ==="
@@ -287,6 +291,7 @@ Test.Type=${TEST_TYPE}
 Build.Number=${BUILD_NUMBER}
 Git.Commit=${GIT_COMMIT_SHORT:-unknown}
 Git.Branch=${GIT_BRANCH:-unknown}
+CI.Environment=Jenkins
 EOF
                     
                     echo "✓ Allure environment configured"
@@ -306,7 +311,7 @@ EOF
                             
                             set +e
                             mkdir -p target/test-results
-                            cargo test --test integration_test -- --nocapture 2>&1 | tee target/test-results/integration.txt
+                            cargo test --test integration_test --release -- --nocapture 2>&1 | tee target/test-results/integration.txt
                             TEST_EXIT=$?
                             
                             if [ $TEST_EXIT -ne 0 ]; then
@@ -330,7 +335,7 @@ EOF
                             
                             set +e
                             mkdir -p target/test-results
-                            cargo test --test qualification_genre_test -- --nocapture 2>&1 | tee target/test-results/qualification_genre.txt
+                            cargo test --test qualification_genre_test --release -- --nocapture 2>&1 | tee target/test-results/qualification_genre.txt
                             TEST_EXIT=$?
                             
                             if [ $TEST_EXIT -ne 0 ]; then
@@ -354,7 +359,7 @@ EOF
                             
                             set +e
                             mkdir -p target/test-results
-                            cargo test --test regression_genre_test -- --nocapture 2>&1 | tee target/test-results/regression_genre.txt
+                            cargo test --test regression_genre_test --release -- --nocapture 2>&1 | tee target/test-results/regression_genre.txt
                             TEST_EXIT=$?
                             
                             if [ $TEST_EXIT -ne 0 ]; then
@@ -378,7 +383,7 @@ EOF
                             
                             set +e
                             mkdir -p target/test-results
-                            cargo test --test diagnostic_test -- --nocapture 2>&1 | tee target/test-results/diagnostic.txt
+                            cargo test --test diagnostic_test --release -- --nocapture 2>&1 | tee target/test-results/diagnostic.txt
                             TEST_EXIT=$?
                             
                             if [ $TEST_EXIT -ne 0 ]; then
@@ -399,10 +404,16 @@ EOF
                             echo "=========================================="
                             echo "Running DSP TESTS (Dithering & Resampling)"
                             echo "=========================================="
+                            echo "NOTE: Using RELEASE build for faster audio processing"
+                            echo "NOTE: Reduced parallelism (2 threads) for CI stability"
+                            echo "=========================================="
                             
                             set +e
                             mkdir -p target/test-results
-                            cargo test --test dithering_resampling_test -- --nocapture 2>&1 | tee target/test-results/dsp_test.txt
+                            
+                            # Use --release for MUCH faster audio processing
+                            # The test itself will detect CI and reduce parallelism
+                            cargo test --test dithering_resampling_test --release -- --nocapture --test-threads=1 2>&1 | tee target/test-results/dsp_test.txt
                             TEST_EXIT=$?
                             
                             if [ $TEST_EXIT -ne 0 ]; then
