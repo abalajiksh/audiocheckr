@@ -574,8 +574,8 @@ impl DitherDetector {
         PdfAnalysis {
             flatness,
             triangularity,
-            histogram,
             peak_count: histogram.iter().filter(|&&c| c > total / num_bins as u64).count(),
+            histogram,
         }
     }
     

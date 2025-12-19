@@ -23,7 +23,7 @@ use rustfft::{FftPlanner, num_complex::Complex};
 use std::f64::consts::PI;
 
 /// Resampling engine type
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ResamplerEngine {
     /// FFmpeg's built-in libswresample
     SwrDefault,
