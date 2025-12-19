@@ -2,6 +2,8 @@
 TestFiles/
 GenreTestSuiteLite/
 TestSuite/
+dithering_tests/
+resampling_tests/
 
 # Build artifacts
 /target/

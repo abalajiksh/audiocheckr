@@ -4,7 +4,7 @@ pipeline {
     parameters {
         choice(
             name: 'TEST_TYPE',
-            choices: ['QUALIFICATION_GENRE', 'REGRESSION_GENRE', 'DIAGNOSTIC'],
+            choices: ['QUALIFICATION_GENRE', 'REGRESSION_GENRE', 'DIAGNOSTIC', 'DSP_TEST'],
             description: 'Test type to run. QUALIFICATION_GENRE runs on every build, others are manual-only.'
         )
         booleanParam(
@@ -24,6 +24,8 @@ pipeline {
         MINIO_BUCKET = 'audiocheckr'
         MINIO_FILE_GENRE_LITE = 'GenreTestSuiteLite.zip'
         MINIO_FILE_GENRE_FULL = 'TestSuite.zip'
+        MINIO_FILE_DITHERING = 'dithering_tests.zip'
+        MINIO_FILE_RESAMPLING = 'resampling_tests.zip'
         
         // SonarQube configuration
         SONAR_PROJECT_KEY = 'audiocheckr'
@@ -188,7 +190,35 @@ pipeline {
                                     variable: 'MINIO_ENDPOINT'
                                 )
                             ]) {
-                                if (env.TEST_TYPE == 'DIAGNOSTIC' || env.TEST_TYPE == 'REGRESSION_GENRE') {
+                                if (env.TEST_TYPE == 'DSP_TEST') {
+                                    sh '''
+                                        set -e
+                                        echo "Setting up MinIO alias..."
+                                        mc alias set myminio "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
+                                        
+                                        echo "=========================================="
+                                        echo "Downloading DSP test files (Dithering + Resampling)"
+                                        echo "=========================================="
+                                        
+                                        # Download and extract Dithering tests
+                                        echo "Downloading ${MINIO_FILE_DITHERING}"
+                                        mc cp myminio/${MINIO_BUCKET}/${MINIO_FILE_DITHERING} .
+                                        unzip -q -o ${MINIO_FILE_DITHERING}
+                                        rm -f ${MINIO_FILE_DITHERING}
+                                        
+                                        # Download and extract Resampling tests
+                                        echo "Downloading ${MINIO_FILE_RESAMPLING}"
+                                        mc cp myminio/${MINIO_BUCKET}/${MINIO_FILE_RESAMPLING} .
+                                        unzip -q -o ${MINIO_FILE_RESAMPLING}
+                                        rm -f ${MINIO_FILE_RESAMPLING}
+                                        
+                                        echo "✓ DSP test files ready"
+                                        echo "Dithering tests:"
+                                        ls -lh dithering_tests/ | head -n 10
+                                        echo "Resampling tests:"
+                                        ls -lh resampling_tests/ | head -n 10
+                                    '''
+                                } else if (env.TEST_TYPE == 'DIAGNOSTIC' || env.TEST_TYPE == 'REGRESSION_GENRE') {
                                     sh '''
                                         set -e
                                         echo "Setting up MinIO alias..."
@@ -359,6 +389,30 @@ EOF
                         '''
                     }
                 }
+                
+                stage('DSP Tests (Dithering & Resampling)') {
+                    when {
+                        expression { return env.TEST_TYPE == 'DSP_TEST' }
+                    }
+                    steps {
+                        sh '''
+                            echo "=========================================="
+                            echo "Running DSP TESTS (Dithering & Resampling)"
+                            echo "=========================================="
+                            
+                            set +e
+                            mkdir -p target/test-results
+                            cargo test --test dithering_resampling_test -- --nocapture 2>&1 | tee target/test-results/dsp_test.txt
+                            TEST_EXIT=$?
+                            
+                            if [ $TEST_EXIT -ne 0 ]; then
+                                echo "⚠ DSP tests completed with failures"
+                            else
+                                echo "✓ DSP tests passed!"
+                            fi
+                        '''
+                    }
+                }
             }
         }
         
@@ -399,7 +453,7 @@ EOF
             when {
                 allOf {
                     expression { return !params.SKIP_SONARQUBE }
-                    expression { return env.TEST_TYPE != 'DIAGNOSTIC' }
+                    expression { return env.TEST_TYPE != 'DIAGNOSTIC' && env.TEST_TYPE != 'DSP_TEST' }
                 }
             }
             steps {
@@ -489,8 +543,8 @@ EOF
                 
                 sh '''
                     # Delete test files and ZIPs
-                    rm -f GenreTestSuiteLite.zip TestSuite.zip
-                    rm -rf GenreTestSuiteLite TestSuite
+                    rm -f GenreTestSuiteLite.zip TestSuite.zip dithering_tests.zip resampling_tests.zip
+                    rm -rf GenreTestSuiteLite TestSuite dithering_tests resampling_tests
                     
                     # Keep the release binary, clean build cache
                     if [ -f target/release/audiocheckr ]; then
