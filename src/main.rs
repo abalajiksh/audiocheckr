@@ -176,6 +176,7 @@ fn process_file(file_path: &Path, args: &Args) -> Result<(String, QualityReport)
     }
 
     // Build detection configuration
+    // FIX: Added missing check_dithering and check_resampling fields
     let config = DetectionConfig {
         expected_bit_depth: args.bit_depth,
         check_upsampling: args.check_upsampling,
@@ -183,6 +184,8 @@ fn process_file(file_path: &Path, args: &Args) -> Result<(String, QualityReport)
         check_transients: args.transients || !args.quick,
         check_phase: args.phase,
         check_mfcc: false,
+        check_dithering: false,
+        check_resampling: false,
         min_confidence: args.min_confidence,
     };
 
@@ -367,6 +370,17 @@ fn format_defect(defect: &DetectedDefect) -> String {
         DefectType::LowQuality { description } => {
             format!("Low quality: {}{}", description, conf_str)
         },
+        // FIX: Added missing DitheringDetected variant
+        DefectType::DitheringDetected { algorithm, scale, confidence: _ } => {
+            format!("Dithering detected: {:?} at {:?} scale{}", algorithm, scale, conf_str)
+        },
+        // FIX: Added missing ResamplingDetected variant
+        DefectType::ResamplingDetected { engine, quality, direction, original_rate } => {
+            let rate_str = original_rate
+                .map(|r| format!(" (original: {} Hz)", r))
+                .unwrap_or_default();
+            format!("Resampling detected: {:?} {:?} {:?}{}{}", engine, quality, direction, rate_str, conf_str)
+        },
     }
 }
 
@@ -385,5 +399,9 @@ fn format_defect_type(defect: &DefectType) -> String {
         DefectType::Clipping { .. } => "Clipping".to_string(),
         DefectType::InterSampleOvers { .. } => "Inter-Sample Overs".to_string(),
         DefectType::LowQuality { .. } => "Low Quality".to_string(),
+        // FIX: Added missing DitheringDetected variant
+        DefectType::DitheringDetected { .. } => "Dithering Detected".to_string(),
+        // FIX: Added missing ResamplingDetected variant
+        DefectType::ResamplingDetected { .. } => "Resampling Detected".to_string(),
     }
 }
