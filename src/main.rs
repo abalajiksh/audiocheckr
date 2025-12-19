@@ -379,9 +379,11 @@ fn format_defect(defect: &DetectedDefect) -> String {
                     algorithm, scale, effective_bits, container_bits, conf_str)
         },
         // FIX: Updated ResamplingDetected - original_rate is now u32 (not Option), added current_rate
-        DefectType::ResamplingDetected { engine, quality, direction, original_rate, current_rate } => {
-            format!("Resampling detected: {:?} {:?} {:?} ({}→{} Hz){}", 
-                    engine, quality, direction, original_rate, current_rate, conf_str)
+        DefectType::ResamplingDetected { engine, quality, original_rate, current_rate } => {
+            format!(
+                "Resampling detected: {} Hz → {} Hz using {} ({} quality){}",
+                original_rate, current_rate, engine, quality, conf_str
+            )
         },
     }
 }
