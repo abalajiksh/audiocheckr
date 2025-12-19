@@ -318,6 +318,9 @@ fn print_report(report: &QualityReport, verbose: bool) {
     }
 }
 
+// FIXED version of format_defect function for src/main.rs
+// Replace the existing format_defect function (starting around line 260) with this:
+
 fn format_defect(defect: &DetectedDefect) -> String {
     let conf_str = format!(" ({:.0}% confidence)", defect.confidence * 100.0);
     
@@ -370,16 +373,15 @@ fn format_defect(defect: &DetectedDefect) -> String {
         DefectType::LowQuality { description } => {
             format!("Low quality: {}{}", description, conf_str)
         },
-        // FIX: Added missing DitheringDetected variant
-        DefectType::DitheringDetected { algorithm, scale, confidence: _ } => {
-            format!("Dithering detected: {:?} at {:?} scale{}", algorithm, scale, conf_str)
+        // FIX: Updated DitheringDetected - now uses effective_bits and container_bits instead of confidence
+        DefectType::DitheringDetected { algorithm, scale, effective_bits, container_bits } => {
+            format!("Dithering detected: {:?} at {:?} scale ({}→{} bit){}", 
+                    algorithm, scale, effective_bits, container_bits, conf_str)
         },
-        // FIX: Added missing ResamplingDetected variant
-        DefectType::ResamplingDetected { engine, quality, direction, original_rate } => {
-            let rate_str = original_rate
-                .map(|r| format!(" (original: {} Hz)", r))
-                .unwrap_or_default();
-            format!("Resampling detected: {:?} {:?} {:?}{}{}", engine, quality, direction, rate_str, conf_str)
+        // FIX: Updated ResamplingDetected - original_rate is now u32 (not Option), added current_rate
+        DefectType::ResamplingDetected { engine, quality, direction, original_rate, current_rate } => {
+            format!("Resampling detected: {:?} {:?} {:?} ({}→{} Hz){}", 
+                    engine, quality, direction, original_rate, current_rate, conf_str)
         },
     }
 }
@@ -399,9 +401,7 @@ fn format_defect_type(defect: &DefectType) -> String {
         DefectType::Clipping { .. } => "Clipping".to_string(),
         DefectType::InterSampleOvers { .. } => "Inter-Sample Overs".to_string(),
         DefectType::LowQuality { .. } => "Low Quality".to_string(),
-        // FIX: Added missing DitheringDetected variant
         DefectType::DitheringDetected { .. } => "Dithering Detected".to_string(),
-        // FIX: Added missing ResamplingDetected variant
         DefectType::ResamplingDetected { .. } => "Resampling Detected".to_string(),
     }
 }
