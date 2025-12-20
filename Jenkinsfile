@@ -4,8 +4,8 @@ pipeline {
     parameters {
         choice(
             name: 'TEST_TYPE',
-            choices: ['QUALIFICATION_GENRE', 'REGRESSION_GENRE', 'DIAGNOSTIC', 'DSP_TEST', 'DSP_DIAGNOSTIC'],
-            description: 'Test type to run. QUALIFICATION_GENRE runs on every build, others are manual-only. DSP_DIAGNOSTIC runs detailed diagnostic tests on dithering/resampling files.'
+            choices: ['QUALIFICATION_GENRE', 'REGRESSION_GENRE', 'DIAGNOSTIC', 'DSP_TEST', 'DSP_DIAGNOSTIC', 'MQA_TEST'],
+            description: 'Test type to run. QUALIFICATION_GENRE runs on every build, others are manual-only. DSP_DIAGNOSTIC runs detailed diagnostic tests on dithering/resampling files. MQA_TEST runs MQA detection tests on Tidal MQA files.'
         )
         booleanParam(
             name: 'SKIP_SONARQUBE',
@@ -26,6 +26,7 @@ pipeline {
         MINIO_FILE_GENRE_FULL = 'TestSuite.zip'
         MINIO_FILE_DITHERING = 'dithering_tests.zip'
         MINIO_FILE_RESAMPLING = 'resampling_tests.zip'
+        MINIO_FILE_MQA = 'MQA.zip'
         
         // SonarQube configuration
         SONAR_PROJECT_KEY = 'audiocheckr'
@@ -221,6 +222,28 @@ pipeline {
                                         ls -lh dithering_tests/ | head -n 10
                                         echo "Resampling tests:"
                                         ls -lh resampling_tests/ | head -n 10
+                                    '''
+                                } else if (env.TEST_TYPE == 'MQA_TEST') {
+                                    sh '''
+                                        set -e
+                                        echo "Setting up MinIO alias..."
+                                        mc alias set myminio "$MINIO_ENDPOINT" "$MINIO_ACCESS_KEY" "$MINIO_SECRET_KEY"
+                                        
+                                        echo "=========================================="
+                                        echo "Downloading MQA test files"
+                                        echo "=========================================="
+                                        
+                                        # Download and extract MQA tests
+                                        echo "Downloading ${MINIO_FILE_MQA}"
+                                        mc cp myminio/${MINIO_BUCKET}/${MINIO_FILE_MQA} .
+                                        unzip -q -o ${MINIO_FILE_MQA}
+                                        rm -f ${MINIO_FILE_MQA}
+                                        
+                                        echo "✓ MQA test files ready"
+                                        echo "MQA test files:"
+                                        ls -lh MQA/ | head -n 20
+                                        echo "Total files:"
+                                        find MQA -name "*.flac" | wc -l
                                     '''
                                 } else if (env.TEST_TYPE == 'DIAGNOSTIC' || env.TEST_TYPE == 'REGRESSION_GENRE') {
                                     sh '''
@@ -465,6 +488,52 @@ EOF
                         '''
                     }
                 }
+                
+                stage('MQA Detection Tests') {
+                    when {
+                        expression { return env.TEST_TYPE == 'MQA_TEST' }
+                    }
+                    steps {
+                        sh '''
+                            echo "=========================================="
+                            echo "Running MQA DETECTION tests"
+                            echo "=========================================="
+                            echo "Testing MQA detection on Tidal MQA files"
+                            echo "=========================================="
+                            
+                            set +e
+                            mkdir -p target/test-results
+                            
+                            # Verify MQA folder exists
+                            if [ ! -d "MQA" ]; then
+                                echo "ERROR: MQA folder not found!"
+                                exit 1
+                            fi
+                            
+                            echo "MQA folder contents:"
+                            ls -la MQA/
+                            echo ""
+                            echo "FLAC file count: $(find MQA -name '*.flac' | wc -l)"
+                            echo ""
+                            
+                            # Run the MQA tests (--ignored to run the ignored tests)
+                            cargo test --test mqa_test --release -- --ignored --nocapture --test-threads=1 2>&1 | tee target/test-results/mqa_test.txt
+                            TEST_EXIT=$?
+                            
+                            echo ""
+                            echo "=========================================="
+                            echo "MQA Detection Summary"
+                            echo "=========================================="
+                            
+                            if [ $TEST_EXIT -ne 0 ]; then
+                                echo "⚠ MQA tests completed with some failures"
+                                echo "Check output above for detection accuracy"
+                            else
+                                echo "✓ MQA tests passed!"
+                            fi
+                        '''
+                    }
+                }
             }
         }
         
@@ -505,7 +574,7 @@ EOF
             when {
                 allOf {
                     expression { return !params.SKIP_SONARQUBE }
-                    expression { return env.TEST_TYPE != 'DIAGNOSTIC' && env.TEST_TYPE != 'DSP_TEST' && env.TEST_TYPE != 'DSP_DIAGNOSTIC' }
+                    expression { return env.TEST_TYPE != 'DIAGNOSTIC' && env.TEST_TYPE != 'DSP_TEST' && env.TEST_TYPE != 'DSP_DIAGNOSTIC' && env.TEST_TYPE != 'MQA_TEST' }
                 }
             }
             steps {
@@ -566,6 +635,12 @@ EOF
                     archiveArtifacts artifacts: 'target/test-results/dsp_diagnostic.txt', 
                                    allowEmptyArchive: true
                 }
+                
+                // Archive MQA test results
+                if (env.TEST_TYPE == 'MQA_TEST') {
+                    archiveArtifacts artifacts: 'target/test-results/mqa_test.txt', 
+                                   allowEmptyArchive: true
+                }
             }
             
             // Publish JUnit test results (shows in Jenkins UI)
@@ -603,8 +678,8 @@ EOF
                 
                 sh '''
                     # Delete test files and ZIPs
-                    rm -f GenreTestSuiteLite.zip TestSuite.zip dithering_tests.zip resampling_tests.zip
-                    rm -rf GenreTestSuiteLite TestSuite dithering_tests resampling_tests
+                    rm -f GenreTestSuiteLite.zip TestSuite.zip dithering_tests.zip resampling_tests.zip MQA.zip
+                    rm -rf GenreTestSuiteLite TestSuite dithering_tests resampling_tests MQA
                     
                     # Keep the release binary, clean build cache
                     if [ -f target/release/audiocheckr ]; then
