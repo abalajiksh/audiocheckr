@@ -393,6 +393,13 @@ fn format_defect(defect: &DetectedDefect) -> String {
                 original_rate, current_rate, engine, quality, conf_str
             )
         },
+        DefectType::MqaEncoded { original_rate, mqa_type, lsb_entropy } => {
+            let orig_str = original_rate
+                .map(|r| format!(" (original: {} Hz)", r))
+                .unwrap_or_default();
+            format!("MQA encoded: {}{} - LSB entropy: {:.2}{}", 
+                    mqa_type, orig_str, lsb_entropy, conf_str)
+        },
     }
 }
 
@@ -413,5 +420,6 @@ fn format_defect_type(defect: &DefectType) -> String {
         DefectType::LowQuality { .. } => "Low Quality".to_string(),
         DefectType::DitheringDetected { .. } => "Dithering Detected".to_string(),
         DefectType::ResamplingDetected { .. } => "Resampling Detected".to_string(),
+        DefectType::MqaEncoded { .. } => "MQA Encoded".to_string(),
     }
 }

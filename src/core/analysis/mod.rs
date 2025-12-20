@@ -25,6 +25,13 @@ pub mod dither_detection;
 pub mod resample_detection;
 pub mod detection_pipeline;
 pub use detection_pipeline::{DetectionContext, CodecConstraints, ArtifactDiscrimination};
+// Add to the module declarations:
+mod mqa_detection;
+
+// Add to the exports:
+pub use mqa_detection::{
+    MqaDetector, MqaDetectionResult, MqaType,
+};
 
 // Re-export all analysis modules
 pub use bit_depth::{analyze_bit_depth, BitDepthAnalysis, BitDepthMethodResults};

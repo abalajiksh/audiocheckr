@@ -11,6 +11,7 @@ use super::analysis::{
     analyze_pre_echo, PreEchoAnalysis,
     analyze_stereo,
     SpectralAnalyzer, detect_transcode, Codec,
+    MqaDetector,
 };
 
 /// Detection configuration
@@ -55,6 +56,11 @@ pub enum DefectType {
     Clipping { percentage: f32 },
     InterSampleOvers { count: u32, max_level_db: f32 },
     LowQuality { description: String },
+    MqaEncoded { 
+        original_rate: Option<u32>,
+        mqa_type: String,
+        lsb_entropy: f32,
+    },
 }
 
 /// A detected quality defect with confidence score
@@ -113,6 +119,24 @@ pub fn detect_quality_issues(audio: &AudioData, config: &DetectionConfig) -> Qua
     let spectral_analyzer = SpectralAnalyzer::default();
     let spectral_analysis = spectral_analyzer.analyze(&mono, audio.sample_rate);
     let transcode_result = detect_transcode(&mono, audio.sample_rate);
+
+    // =========================================================================
+    // MQA DETECTION
+    // =========================================================================
+    let mqa_detector = MqaDetector::default();
+    let mqa_result = mqa_detector.detect(&mono, audio.sample_rate, audio.claimed_bit_depth);
+
+    if mqa_result.is_mqa_encoded && mqa_result.confidence > config.min_confidence {
+        defects.push(DetectedDefect {
+            defect_type: DefectType::MqaEncoded {
+                original_rate: mqa_result.original_sample_rate,
+                mqa_type: format!("{:?}", mqa_result.mqa_type.unwrap_or(MqaType::Unknown)),
+                lsb_entropy: mqa_result.lsb_entropy,
+            },
+            confidence: mqa_result.confidence,
+            evidence: mqa_result.evidence,
+        });
+    }
     
     // =========================================================================
     // BIT DEPTH ANALYSIS
