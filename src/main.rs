@@ -61,6 +61,14 @@ struct Args {
     #[arg(long)]
     phase: bool,
 
+    /// Enable dithering detection (24→16 bit reduction)
+    #[arg(long)]
+    pub dithering: bool,
+
+    /// Enable resampling detection
+    #[arg(long)]
+    pub resampling: bool,
+
     /// Verbose output with detailed analysis
     #[arg(short, long)]
     verbose: bool,
