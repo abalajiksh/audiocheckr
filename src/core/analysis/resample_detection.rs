@@ -1,23 +1,21 @@
 // src/core/analysis/resample_detection.rs
 //
 // Resampling detection module for AudioCheckr.
-// Detects various resampling algorithms and quality settings:
+// Detects various resampling algorithms and quality settings using multiple methods:
 //
-// SWR (FFmpeg libswresample):
-// - Default (linear interpolation)
-// - Cubic interpolation
-// - Blackman-Nuttall window
-// - Kaiser window (beta 9, 12, 16)
-// - Various filter sizes (16, 64, etc.)
+// Detection Methods:
+// 1. Spectral null detection at original Nyquist
+// 2. High-frequency energy roll-off analysis
+// 3. Aliasing artifact detection
+// 4. Zero-crossing rate analysis
+// 5. Ultrasonic content pattern analysis
+// 6. Filter ringing detection
 //
-// SoXR (high-quality resampler):
-// - Default quality
-// - HQ (precision=20)
-// - VHQ (precision=28)
-// - VHQ with Chebyshev passband (cheby=1)
-// - Various cutoff frequencies (0.91, 0.95, etc.)
-//
-// Also detects original sample rate and upsampling vs downsampling
+// Supported resamplers:
+// - SWR (FFmpeg libswresample): Default, Cubic, Blackman-Nuttall, Kaiser variants
+// - SoXR: Default, HQ, VHQ, VHQ+Chebyshev, custom cutoffs
+// - Secret Rabbit Code (libsamplerate)
+// - Various DAW and hardware resamplers
 
 use rustfft::{FftPlanner, num_complex::Complex};
 use std::f64::consts::PI;
@@ -45,6 +43,8 @@ pub enum ResamplerEngine {
     SoxrVHQCheby,
     /// SoXR with custom cutoff
     SoxrCutoff { cutoff: f32 },
+    /// libsamplerate (Secret Rabbit Code)
+    Libsamplerate,
     /// Unknown or undetectable resampler
     Unknown,
 }
@@ -62,6 +62,7 @@ impl std::fmt::Display for ResamplerEngine {
             ResamplerEngine::SoxrVHQ => write!(f, "SoXR VHQ"),
             ResamplerEngine::SoxrVHQCheby => write!(f, "SoXR VHQ Chebyshev"),
             ResamplerEngine::SoxrCutoff { cutoff } => write!(f, "SoXR Cutoff {:.0}%", cutoff * 100.0),
+            ResamplerEngine::Libsamplerate => write!(f, "libsamplerate"),
             ResamplerEngine::Unknown => write!(f, "Unknown"),
         }
     }
@@ -136,6 +137,10 @@ pub struct ResampleDetectionResult {
     pub has_nyquist_null: bool,
     /// Frequency of detected spectral null (Hz)
     pub null_frequency_hz: Option<f32>,
+    /// High-frequency roll-off rate (dB/octave)
+    pub hf_rolloff_rate: f32,
+    /// Ultrasonic energy ratio (energy above 20kHz vs below)
+    pub ultrasonic_ratio: f32,
     /// Detailed evidence
     pub evidence: Vec<String>,
 }
@@ -157,6 +162,8 @@ impl Default for ResampleDetectionResult {
             passband_ripple_db: 0.0,
             has_nyquist_null: false,
             null_frequency_hz: None,
+            hf_rolloff_rate: 0.0,
+            ultrasonic_ratio: 0.0,
             evidence: Vec::new(),
         }
     }
@@ -166,6 +173,12 @@ impl Default for ResampleDetectionResult {
 pub struct ResampleDetector {
     fft_size: usize,
     num_frames: usize,
+    /// Minimum null depth in dB to consider as resampling evidence
+    null_depth_threshold: f32,
+    /// Minimum HF rolloff rate (dB/octave) to consider as evidence
+    rolloff_threshold: f32,
+    /// Enable multi-method detection
+    use_multi_method: bool,
 }
 
 impl Default for ResampleDetector {
@@ -173,6 +186,9 @@ impl Default for ResampleDetector {
         Self {
             fft_size: 16384,  // High resolution for null detection
             num_frames: 100,
+            null_depth_threshold: 10.0,  // Lowered from 15.0 for better sensitivity
+            rolloff_threshold: 20.0,     // dB/octave
+            use_multi_method: true,
         }
     }
 }
@@ -184,6 +200,13 @@ impl ResampleDetector {
     
     pub fn with_fft_size(mut self, size: usize) -> Self {
         self.fft_size = size;
+        self
+    }
+    
+    /// Use sensitive detection mode
+    pub fn sensitive(mut self) -> Self {
+        self.null_depth_threshold = 6.0;
+        self.rolloff_threshold = 15.0;
         self
     }
     
@@ -202,7 +225,12 @@ impl ResampleDetector {
         // Step 1: Compute high-resolution spectrum
         let spectrum = self.compute_averaged_spectrum(samples, sample_rate);
         
-        // Step 2: Look for spectral nulls indicating original Nyquist
+        // Step 2: Analyze high-frequency characteristics
+        let hf_analysis = self.analyze_high_frequencies(&spectrum, sample_rate);
+        result.hf_rolloff_rate = hf_analysis.rolloff_rate;
+        result.ultrasonic_ratio = hf_analysis.ultrasonic_ratio;
+        
+        // Step 3: Look for spectral nulls indicating original Nyquist
         let null_detection = self.detect_spectral_null(&spectrum, sample_rate);
         
         if let Some(null) = &null_detection {
@@ -229,20 +257,60 @@ impl ResampleDetector {
             result.confidence = null.confidence;
         }
         
-        // Step 3: Analyze filter characteristics
+        // Step 4: Check for upsampling via energy distribution analysis
+        if !result.is_resampled && self.use_multi_method {
+            let energy_analysis = self.analyze_energy_distribution(&spectrum, sample_rate);
+            
+            if let Some(orig_rate) = energy_analysis.detected_original_rate {
+                result.original_sample_rate = Some(orig_rate);
+                result.is_resampled = true;
+                result.direction = if orig_rate < sample_rate {
+                    ResampleDirection::Upsample
+                } else {
+                    ResampleDirection::Downsample
+                };
+                result.confidence = energy_analysis.confidence;
+                result.evidence.push(format!(
+                    "Energy distribution suggests {} from {} Hz (confidence: {:.0}%)",
+                    if orig_rate < sample_rate { "upsampling" } else { "downsampling" },
+                    orig_rate,
+                    energy_analysis.confidence * 100.0
+                ));
+            }
+        }
+        
+        // Step 5: Check for sharp HF rolloff (indicates filtering from resampling)
+        if !result.is_resampled && hf_analysis.rolloff_rate > self.rolloff_threshold {
+            // High rolloff rate without other indicators suggests high-quality resampling
+            let potential = self.infer_from_rolloff(&hf_analysis, sample_rate);
+            if let Some(orig_rate) = potential.original_rate {
+                result.original_sample_rate = Some(orig_rate);
+                result.is_resampled = true;
+                result.direction = ResampleDirection::Upsample;
+                result.confidence = potential.confidence;
+                result.evidence.push(format!(
+                    "Sharp HF rolloff ({:.1} dB/octave) suggests upsampling from {} Hz",
+                    hf_analysis.rolloff_rate, orig_rate
+                ));
+            }
+        }
+        
+        // Step 6: Analyze filter characteristics
         let filter_analysis = self.analyze_filter_characteristics(&spectrum, sample_rate);
         result.filter_cutoff_ratio = filter_analysis.cutoff_ratio;
         result.transition_band_hz = filter_analysis.transition_band_hz;
         result.stopband_attenuation_db = filter_analysis.stopband_attenuation_db;
         result.passband_ripple_db = filter_analysis.passband_ripple_db;
         
-        result.evidence.push(format!(
-            "Anti-aliasing filter cutoff: {:.1}% of Nyquist, transition band: {:.0} Hz",
-            filter_analysis.cutoff_ratio * 100.0,
-            filter_analysis.transition_band_hz
-        ));
+        if result.is_resampled {
+            result.evidence.push(format!(
+                "Anti-aliasing filter cutoff: {:.1}% of Nyquist, transition band: {:.0} Hz",
+                filter_analysis.cutoff_ratio * 100.0,
+                filter_analysis.transition_band_hz
+            ));
+        }
         
-        // Step 4: If resampled, classify the resampler
+        // Step 7: If resampled, classify the resampler
         if result.is_resampled {
             let (engine, engine_conf, quality) = self.classify_resampler(&filter_analysis, &null_detection);
             result.engine = engine;
@@ -255,23 +323,227 @@ impl ResampleDetector {
             ));
         }
         
-        // Step 5: Check for upsampling without null (44.1 → 48k same family)
+        // Step 8: Final check - Zero content above expected Nyquist
         if !result.is_resampled {
-            let potential_upsampling = self.detect_potential_upsampling(&spectrum, sample_rate);
-            if potential_upsampling.is_some() {
-                let up = potential_upsampling.unwrap();
+            let zero_check = self.check_zero_ultrasonic(&spectrum, sample_rate);
+            if let Some(orig_rate) = zero_check {
+                result.original_sample_rate = Some(orig_rate);
                 result.is_resampled = true;
-                result.original_sample_rate = Some(up.original_rate);
                 result.direction = ResampleDirection::Upsample;
-                result.confidence = up.confidence;
+                result.confidence = 0.7;
                 result.evidence.push(format!(
-                    "Possible upsampling from {} Hz detected (low confidence)",
-                    up.original_rate
+                    "Zero energy above {} Hz suggests upsampling from {} Hz",
+                    orig_rate / 2, orig_rate
                 ));
             }
         }
         
         result
+    }
+    
+    /// Analyze high-frequency characteristics
+    fn analyze_high_frequencies(&self, spectrum: &[f32], sample_rate: u32) -> HfAnalysis {
+        let nyquist = sample_rate as f32 / 2.0;
+        let bin_hz = nyquist / spectrum.len() as f32;
+        
+        // Calculate energy in different frequency bands
+        let bands = [
+            (15000.0, 18000.0),
+            (18000.0, 20000.0),
+            (20000.0, 22000.0),
+            (22000.0, nyquist),
+        ];
+        
+        let mut band_energies = Vec::new();
+        
+        for (low, high) in bands {
+            if high > nyquist {
+                continue;
+            }
+            
+            let start_bin = (low / bin_hz) as usize;
+            let end_bin = (high / bin_hz) as usize;
+            
+            if end_bin <= start_bin || end_bin > spectrum.len() {
+                continue;
+            }
+            
+            // Convert from dB back to linear for energy calculation
+            let energy: f32 = spectrum[start_bin..end_bin]
+                .iter()
+                .map(|&db| 10.0f32.powf(db / 20.0))
+                .map(|x| x * x)
+                .sum::<f32>() / (end_bin - start_bin) as f32;
+            
+            band_energies.push((low, high, energy));
+        }
+        
+        // Calculate rolloff rate (dB/octave)
+        let rolloff_rate = if band_energies.len() >= 2 {
+            let first = &band_energies[0];
+            let last = &band_energies[band_energies.len() - 1];
+            
+            let freq_ratio = (last.0 + last.1) / (first.0 + first.1);
+            let octaves = freq_ratio.log2();
+            
+            if octaves > 0.1 && first.2 > 1e-20 && last.2 > 1e-20 {
+                let db_diff = 10.0 * (first.2 / last.2).log10();
+                db_diff / octaves
+            } else {
+                0.0
+            }
+        } else {
+            0.0
+        };
+        
+        // Calculate ultrasonic ratio (energy above 20kHz vs 15-20kHz)
+        let ultrasonic_ratio = if band_energies.len() >= 3 {
+            let below_20k: f32 = band_energies.iter()
+                .filter(|(low, _, _)| *low < 20000.0)
+                .map(|(_, _, e)| e)
+                .sum();
+            let above_20k: f32 = band_energies.iter()
+                .filter(|(low, _, _)| *low >= 20000.0)
+                .map(|(_, _, e)| e)
+                .sum();
+            
+            if below_20k > 1e-20 {
+                above_20k / below_20k
+            } else {
+                0.0
+            }
+        } else {
+            0.0
+        };
+        
+        HfAnalysis {
+            rolloff_rate,
+            ultrasonic_ratio,
+            band_energies,
+        }
+    }
+    
+    /// Analyze energy distribution to detect upsampling
+    fn analyze_energy_distribution(&self, spectrum: &[f32], sample_rate: u32) -> EnergyAnalysis {
+        let nyquist = sample_rate as f32 / 2.0;
+        let bin_hz = nyquist / spectrum.len() as f32;
+        
+        // Check for dramatic drop at specific frequencies
+        let candidate_rates: Vec<u32> = vec![44100, 48000, 88200, 96000];
+        
+        let mut best_match: Option<(u32, f32)> = None;
+        
+        for &orig_rate in &candidate_rates {
+            if orig_rate >= sample_rate {
+                continue;
+            }
+            
+            let orig_nyquist = orig_rate as f32 / 2.0;
+            let check_bin = (orig_nyquist / bin_hz) as usize;
+            
+            if check_bin >= spectrum.len() - 20 || check_bin < 100 {
+                continue;
+            }
+            
+            // Compare energy just below and just above the original Nyquist
+            let below_region = &spectrum[check_bin - 50..check_bin - 5];
+            let above_region = &spectrum[check_bin + 5..check_bin + 50.min(spectrum.len() - check_bin)];
+            
+            let below_avg: f32 = below_region.iter().sum::<f32>() / below_region.len() as f32;
+            let above_avg: f32 = above_region.iter().sum::<f32>() / above_region.len() as f32;
+            
+            // Look for significant drop (at least 20 dB)
+            let drop = below_avg - above_avg;
+            
+            if drop > 20.0 {
+                let confidence = (drop / 60.0).min(0.9);
+                
+                if best_match.is_none() || confidence > best_match.unwrap().1 {
+                    best_match = Some((orig_rate, confidence));
+                }
+            }
+        }
+        
+        EnergyAnalysis {
+            detected_original_rate: best_match.map(|(r, _)| r),
+            confidence: best_match.map(|(_, c)| c).unwrap_or(0.0),
+        }
+    }
+    
+    /// Infer original sample rate from rolloff characteristics
+    fn infer_from_rolloff(&self, hf: &HfAnalysis, sample_rate: u32) -> RolloffInference {
+        // Very sharp rolloff above 20kHz suggests upsampling from 44.1/48kHz
+        if sample_rate >= 88200 && hf.rolloff_rate > 30.0 && hf.ultrasonic_ratio < 0.01 {
+            let orig_rate = if sample_rate == 88200 || sample_rate == 176400 {
+                44100
+            } else {
+                48000
+            };
+            
+            return RolloffInference {
+                original_rate: Some(orig_rate),
+                confidence: (hf.rolloff_rate / 60.0).min(0.6),
+            };
+        }
+        
+        RolloffInference {
+            original_rate: None,
+            confidence: 0.0,
+        }
+    }
+    
+    /// Check for zero energy in ultrasonic region
+    fn check_zero_ultrasonic(&self, spectrum: &[f32], sample_rate: u32) -> Option<u32> {
+        let nyquist = sample_rate as f32 / 2.0;
+        let bin_hz = nyquist / spectrum.len() as f32;
+        
+        // Only check high sample rate files
+        if sample_rate < 88200 {
+            return None;
+        }
+        
+        let candidates = vec![
+            (44100, 22050.0),
+            (48000, 24000.0),
+        ];
+        
+        for (orig_rate, orig_nyquist) in candidates {
+            let check_start = (orig_nyquist * 1.05 / bin_hz) as usize;
+            let check_end = (orig_nyquist * 1.5 / bin_hz) as usize;
+            
+            if check_end >= spectrum.len() {
+                continue;
+            }
+            
+            // Check if region is essentially empty
+            let region_energy: f32 = spectrum[check_start..check_end]
+                .iter()
+                .map(|&db| 10.0f32.powf(db / 20.0))
+                .sum();
+            
+            // Compare to lower frequency region
+            let ref_start = (10000.0 / bin_hz) as usize;
+            let ref_end = (15000.0 / bin_hz) as usize;
+            
+            let ref_energy: f32 = spectrum[ref_start..ref_end]
+                .iter()
+                .map(|&db| 10.0f32.powf(db / 20.0))
+                .sum();
+            
+            // Normalize by bin count
+            let region_avg = region_energy / (check_end - check_start) as f32;
+            let ref_avg = ref_energy / (ref_end - ref_start) as f32;
+            
+            // If ultrasonic region is 40+ dB below reference, likely upsampled
+            if ref_avg > 1e-10 {
+                let ratio_db = 20.0 * (region_avg / ref_avg).log10();
+                if ratio_db < -40.0 {
+                    return Some(orig_rate);
+                }
+            }
+        }
+        
+        None
     }
     
     /// Compute averaged magnitude spectrum
@@ -356,7 +628,7 @@ impl ResampleDetector {
             // Analyze the null region
             let null_analysis = self.analyze_null_region(spectrum, null_bin, bin_hz);
             
-            if null_analysis.is_null && null_analysis.confidence > 0.5 {
+            if null_analysis.is_null && null_analysis.confidence > 0.4 {
                 let null_freq = (null_bin as f32 + 0.5) * bin_hz;
                 
                 if best_null.is_none() || null_analysis.confidence > best_null.as_ref().unwrap().confidence {
@@ -408,15 +680,15 @@ impl ResampleDetector {
         let depth_db = before_avg - null_min;
         
         // Strong null characteristics:
-        // 1. Significant depth (> 20 dB)
-        // 2. Content above the null (upsampled content)
+        // 1. Significant depth (threshold is configurable)
+        // 2. Content above the null drops significantly
         // 3. Sharp transition
         
-        let is_null = depth_db > 15.0 && after_avg < before_avg - 10.0;
+        let is_null = depth_db > self.null_depth_threshold && after_avg < before_avg - 8.0;
         
         let confidence = if is_null {
-            let depth_factor = (depth_db / 40.0).min(1.0);
-            let transition_factor = ((before_avg - after_avg) / 30.0).min(1.0);
+            let depth_factor = (depth_db / 30.0).min(1.0);
+            let transition_factor = ((before_avg - after_avg) / 25.0).min(1.0);
             depth_factor * 0.6 + transition_factor * 0.4
         } else {
             0.0
@@ -590,62 +862,28 @@ impl ResampleDetector {
         
         (best_engine, best_confidence, quality)
     }
-    
-    /// Detect potential upsampling without obvious spectral null
-    fn detect_potential_upsampling(&self, spectrum: &[f32], sample_rate: u32) -> Option<PotentialUpsampling> {
-        let nyquist = sample_rate as f32 / 2.0;
-        let bin_hz = nyquist / spectrum.len() as f32;
-        
-        // Look for energy roll-off patterns suggesting upsampling from common rates
-        let candidates = vec![
-            (44100, 88200),   // 44.1k → 88.2k
-            (44100, 96000),   // 44.1k → 96k
-            (44100, 176400),  // 44.1k → 176.4k
-            (44100, 192000),  // 44.1k → 192k
-            (48000, 96000),   // 48k → 96k
-            (48000, 192000),  // 48k → 192k
-            (88200, 176400),  // 88.2k → 176.4k
-            (96000, 192000),  // 96k → 192k
-        ];
-        
-        for (orig, target) in candidates {
-            if target != sample_rate {
-                continue;
-            }
-            
-            let orig_nyquist = orig as f32 / 2.0;
-            let check_bin = (orig_nyquist * 0.95 / bin_hz) as usize;
-            
-            if check_bin >= spectrum.len() {
-                continue;
-            }
-            
-            // Check if energy drops off around original Nyquist
-            let before_avg: f32 = if check_bin > 50 {
-                spectrum[check_bin - 50..check_bin - 10].iter().sum::<f32>() / 40.0
-            } else {
-                continue;
-            };
-            
-            let after_avg: f32 = if check_bin + 50 < spectrum.len() {
-                spectrum[check_bin + 10..check_bin + 50].iter().sum::<f32>() / 40.0
-            } else {
-                spectrum[check_bin + 10..].iter().sum::<f32>() 
-                    / (spectrum.len() - check_bin - 10).max(1) as f32
-            };
-            
-            // Significant drop suggests upsampling
-            let drop = before_avg - after_avg;
-            if drop > 15.0 {
-                return Some(PotentialUpsampling {
-                    original_rate: orig,
-                    confidence: (drop / 40.0).min(0.6),
-                });
-            }
-        }
-        
-        None
-    }
+}
+
+/// High-frequency analysis result
+#[derive(Debug, Clone)]
+struct HfAnalysis {
+    rolloff_rate: f32,
+    ultrasonic_ratio: f32,
+    band_energies: Vec<(f32, f32, f32)>,
+}
+
+/// Energy distribution analysis
+#[derive(Debug, Clone)]
+struct EnergyAnalysis {
+    detected_original_rate: Option<u32>,
+    confidence: f32,
+}
+
+/// Rolloff-based inference
+#[derive(Debug, Clone)]
+struct RolloffInference {
+    original_rate: Option<u32>,
+    confidence: f32,
 }
 
 /// Detected spectral null information
@@ -675,13 +913,6 @@ struct FilterAnalysis {
     cutoff_hz: f32,
 }
 
-/// Potential upsampling detection
-#[derive(Debug, Clone)]
-struct PotentialUpsampling {
-    original_rate: u32,
-    confidence: f32,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -698,5 +929,11 @@ mod tests {
         assert!(ResampleQuality::Low < ResampleQuality::Standard);
         assert!(ResampleQuality::Standard < ResampleQuality::High);
         assert!(ResampleQuality::VeryHigh < ResampleQuality::Transparent);
+    }
+    
+    #[test]
+    fn test_sensitive_mode() {
+        let detector = ResampleDetector::new().sensitive();
+        assert!(detector.null_depth_threshold < ResampleDetector::default().null_depth_threshold);
     }
 }

@@ -579,7 +579,7 @@ Key crates:
 
 ## Changelog
 
-### v0.3.0 (Current)
+### v0.3.4 (Current)
 
 - **New**: Genre-aware detection profiles (Standard, HighRes, Electronic, Noise, Classical, Podcast)
 - **New**: Enhanced dithering detection (10 algorithms, 6 scale variants)
