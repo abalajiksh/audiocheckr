@@ -4,8 +4,8 @@ pipeline {
     parameters {
         choice(
             name: 'TEST_TYPE',
-            choices: ['QUALIFICATION_GENRE', 'REGRESSION_GENRE', 'DIAGNOSTIC', 'DSP_TEST'],
-            description: 'Test type to run. QUALIFICATION_GENRE runs on every build, others are manual-only.'
+            choices: ['QUALIFICATION_GENRE', 'REGRESSION_GENRE', 'DIAGNOSTIC', 'DSP_TEST', 'DSP_DIAGNOSTIC'],
+            description: 'Test type to run. QUALIFICATION_GENRE runs on every build, others are manual-only. DSP_DIAGNOSTIC runs detailed diagnostic tests on dithering/resampling files.'
         )
         booleanParam(
             name: 'SKIP_SONARQUBE',
@@ -194,7 +194,7 @@ pipeline {
                                     variable: 'MINIO_ENDPOINT'
                                 )
                             ]) {
-                                if (env.TEST_TYPE == 'DSP_TEST') {
+                                if (env.TEST_TYPE == 'DSP_TEST' || env.TEST_TYPE == 'DSP_DIAGNOSTIC') {
                                     sh '''
                                         set -e
                                         echo "Setting up MinIO alias..."
@@ -405,14 +405,13 @@ EOF
                             echo "Running DSP TESTS (Dithering & Resampling)"
                             echo "=========================================="
                             echo "NOTE: Using RELEASE build for faster audio processing"
-                            echo "NOTE: Reduced parallelism (2 threads) for CI stability"
+                            echo "NOTE: Reduced parallelism (1 thread) for CI stability"
                             echo "=========================================="
                             
                             set +e
                             mkdir -p target/test-results
                             
                             # Use --release for MUCH faster audio processing
-                            # The test itself will detect CI and reduce parallelism
                             cargo test --test dithering_resampling_test --release -- --nocapture --test-threads=1 2>&1 | tee target/test-results/dsp_test.txt
                             TEST_EXIT=$?
                             
@@ -420,6 +419,48 @@ EOF
                                 echo "⚠ DSP tests completed with failures"
                             else
                                 echo "✓ DSP tests passed!"
+                            fi
+                        '''
+                    }
+                }
+                
+                stage('DSP Diagnostic Tests') {
+                    when {
+                        expression { return env.TEST_TYPE == 'DSP_DIAGNOSTIC' }
+                    }
+                    steps {
+                        sh '''
+                            echo "=========================================="
+                            echo "Running DSP DIAGNOSTIC tests"
+                            echo "=========================================="
+                            echo "This provides detailed diagnostic output"
+                            echo "showing what each detector sees on DSP files"
+                            echo "=========================================="
+                            
+                            set +e
+                            mkdir -p target/test-results
+                            mkdir -p target/dsp-diagnostics
+                            
+                            # Run the diagnostic tests with verbose output
+                            cargo test --test dsp_diagnostic_test --release -- --nocapture 2>&1 | tee target/test-results/dsp_diagnostic.txt
+                            TEST_EXIT=$?
+                            
+                            echo ""
+                            echo "=========================================="
+                            echo "DSP Diagnostic Summary"
+                            echo "=========================================="
+                            
+                            if [ $TEST_EXIT -ne 0 ]; then
+                                echo "⚠ DSP diagnostic tests completed with some failures"
+                                echo "Check output above for false positive analysis"
+                            else
+                                echo "✓ DSP diagnostic tests passed!"
+                            fi
+                            
+                            # Archive diagnostic reports if generated
+                            if [ -d "target/dsp-diagnostics" ] && [ "$(ls -A target/dsp-diagnostics 2>/dev/null)" ]; then
+                                echo "Diagnostic reports available in target/dsp-diagnostics/"
+                                ls -la target/dsp-diagnostics/
                             fi
                         '''
                     }
@@ -464,7 +505,7 @@ EOF
             when {
                 allOf {
                     expression { return !params.SKIP_SONARQUBE }
-                    expression { return env.TEST_TYPE != 'DIAGNOSTIC' && env.TEST_TYPE != 'DSP_TEST' }
+                    expression { return env.TEST_TYPE != 'DIAGNOSTIC' && env.TEST_TYPE != 'DSP_TEST' && env.TEST_TYPE != 'DSP_DIAGNOSTIC' }
                 }
             }
             steps {
@@ -515,6 +556,14 @@ EOF
                 if (currentBuild.result != 'FAILURE') {
                     archiveArtifacts artifacts: 'target/release/audiocheckr', 
                                    fingerprint: true, 
+                                   allowEmptyArchive: true
+                }
+                
+                // Archive DSP diagnostic reports
+                if (env.TEST_TYPE == 'DSP_DIAGNOSTIC') {
+                    archiveArtifacts artifacts: 'target/dsp-diagnostics/**/*', 
+                                   allowEmptyArchive: true
+                    archiveArtifacts artifacts: 'target/test-results/dsp_diagnostic.txt', 
                                    allowEmptyArchive: true
                 }
             }
