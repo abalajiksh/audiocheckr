@@ -4,6 +4,7 @@ GenreTestSuiteLite/
 TestSuite/
 dithering_tests/
 resampling_tests/
+MQA/
 
 # Build artifacts
 /target/
