@@ -13,6 +13,7 @@ use super::analysis::{
     SpectralAnalyzer, detect_transcode, Codec,
     DitherDetector, DitherDetectionResult, DitherAlgorithm, DitherScale,
     ResampleDetector, ResampleDetectionResult, ResamplerEngine, ResampleQuality,
+    MqaDetector, MqaType,
 };
 
 /// Detection configuration
@@ -74,6 +75,11 @@ pub enum DefectType {
         current_rate: u32,
         engine: String,
         quality: String,
+    },
+    MqaEncoded {
+        original_rate: Option<u32>,
+        mqa_type: String,
+        lsb_entropy: f32,
     },
 }
 
@@ -193,6 +199,13 @@ pub fn detect_quality_issues(audio: &AudioData, config: &DetectionConfig) -> Qua
     } else {
         None
     };
+
+    // =========================================================================
+    // MQA DETECTION
+    // =========================================================================
+    let mqa_detector = MqaDetector::default();
+    let mqa_result = mqa_detector.detect(&mono, audio.sample_rate, audio.claimed_bit_depth);
+
     
     // =========================================================================
     // COLLECT DEFECTS
@@ -317,6 +330,19 @@ pub fn detect_quality_issues(audio: &AudioData, config: &DetectionConfig) -> Qua
             }
         }
     }
+
+    // ----- Check MQA encoding -----
+    if mqa_result.is_mqa_encoded && mqa_result.confidence > config.min_confidence {
+        defects.push(DetectedDefect {
+            defect_type: DefectType::MqaEncoded {
+                original_rate: mqa_result.original_sample_rate,
+                mqa_type: format!("{:?}", mqa_result.mqa_type.unwrap_or(MqaType::Unknown)),
+                lsb_entropy: mqa_result.lsb_entropy,
+            },
+            confidence: mqa_result.confidence,
+            evidence: mqa_result.evidence,
+        });
+    }
     
     // ----- Check pre-echo -----
     if pre_echo_analysis.pre_echo_score > 0.5 {
@@ -431,6 +457,7 @@ fn calculate_quality_score(
             DefectType::LowQuality { .. } => 0.15,
             DefectType::DitheringDetected { .. } => 0.15, // Informational, lower penalty
             DefectType::ResamplingDetected { .. } => 0.2,
+            DefectType::MqaEncoded { .. } => 0.35,
         };
         score -= penalty * defect.confidence;
     }
