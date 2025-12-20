@@ -521,6 +521,20 @@ pub fn detect_transcode(samples: &[f32], sample_rate: u32) -> TranscodeResult {
     let analysis = analyzer.analyze(samples, sample_rate);
     
     let nyquist = sample_rate as f32 / 2.0;
+
+    // QUICK FIX: Skip MP3/AAC detection for high sample rate files
+    // MP3 max is 48kHz, AAC typically 48kHz (max 96kHz)
+    if sample_rate > 48000 {
+        return TranscodeResult {
+            is_transcode: false,
+            confidence: 0.0,
+            cutoff_hz: sample_rate as f32 / 2.0,
+            cutoff_ratio: 1.0,
+            rolloff_steepness: 0.0,
+            likely_codec: None,
+            reason: format!("Sample rate {} Hz exceeds MP3/AAC maximum - skipping lossy detection", sample_rate),
+        };
+    }
     
     // Determine if it's likely a transcode
     // Key criteria:

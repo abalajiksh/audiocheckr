@@ -23,6 +23,8 @@ mod mfcc;
 pub mod dither;
 pub mod dither_detection;
 pub mod resample_detection;
+pub mod detection_pipeline;
+pub use detection_pipeline::{DetectionContext, CodecConstraints, ArtifactDiscrimination};
 
 // Re-export all analysis modules
 pub use bit_depth::{analyze_bit_depth, BitDepthAnalysis, BitDepthMethodResults};

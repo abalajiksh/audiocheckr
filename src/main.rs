@@ -184,8 +184,8 @@ fn process_file(file_path: &Path, args: &Args) -> Result<(String, QualityReport)
         check_transients: args.transients || !args.quick,
         check_phase: args.phase,
         check_mfcc: false,
-        check_dithering: false,
-        check_resampling: false,
+        check_dithering: args.dithering || !args.quick,
+        check_resampling: args.resampling || !args.quick,
         min_confidence: args.min_confidence,
     };
 

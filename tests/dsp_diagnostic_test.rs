@@ -207,17 +207,30 @@ fn get_binary_path() -> PathBuf {
     let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     path.push("target");
     
-    // Prefer release build
     let release_path = path.join("release").join("audiocheckr");
     let debug_path = path.join("debug").join("audiocheckr");
     
-    if release_path.exists() {
-        release_path
-    } else if debug_path.exists() {
-        debug_path
-    } else {
-        panic!("Binary not found. Run: cargo build --release");
+    #[cfg(windows)]
+    {
+        let release_path_exe = release_path.with_extension("exe");
+        let debug_path_exe = debug_path.with_extension("exe");
+        if release_path_exe.exists() {
+            return release_path_exe;
+        } else if debug_path_exe.exists() {
+            return debug_path_exe;
+        }
     }
+    
+    #[cfg(unix)]
+    {
+        if release_path.exists() {
+            return release_path;
+        } else if debug_path.exists() {
+            return debug_path;
+        }
+    }
+    
+    panic!("Binary not found. Run: cargo build --release");
 }
 
 fn run_verbose_analysis(file_path: &Path) {

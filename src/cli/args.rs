@@ -58,6 +58,14 @@ pub struct Args {
     #[arg(long)]
     pub json: bool,
 
+     /// Enable dithering detection (24→16 bit reduction)
+    #[arg(long)]
+    pub dithering: bool,
+
+    /// Enable resampling detection
+    #[arg(long)]
+    pub resampling: bool,
+
     /// Minimum confidence threshold (0.0 - 1.0)
     #[arg(long, default_value = "0.5")]
     pub min_confidence: f32,
