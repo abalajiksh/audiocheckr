@@ -1,54 +1,45 @@
-# AudioCheckr v0.3.0
+# AudioCheckr v0.3.4
 
-Advanced audio analysis tool for detecting fake lossless files, transcodes, upsampled audio, and various audio quality issues. Uses pure DSP algorithms - no machine learning.
+Advanced audio analysis tool for detecting fake lossless files, transcodes, upsampled audio, and various audio quality issues. Uses pure DSP algorithms—no machine learning.
 
 ## Features
 
 ### Core Detection Capabilities
-- **Lossy Transcode Detection**: Identifies MP3, AAC, Vorbis, and Opus transcodes via spectral analysis
-- **Bit Depth Analysis**: Detects 16-bit audio masquerading as 24-bit using 4 independent methods
-- **Upsampling Detection**: Identifies audio upsampled from lower sample rates
-- **Stereo Analysis**: Detects joint stereo encoding artifacts
-- **Pre-Echo Detection**: Identifies transform codec artifacts before transients
-- **Phase Analysis**: Detects phase discontinuities at codec frame boundaries
-- **True Peak Analysis**: ITU-R BS.1770 compliant true peak measurement
-- **Spectral Artifacts**: Detects unusual spectral patterns and notches
 
-### v0.3.0 - Major Restructure
+| Feature | Description |
+|---------|-------------|
+| **Lossy Transcode Detection** | Identifies MP3, AAC, Vorbis, and Opus transcodes via spectral analysis |
+| **Bit Depth Analysis** | Detects 16-bit audio masquerading as 24-bit using 4 independent methods |
+| **Upsampling Detection** | Identifies audio upsampled from lower sample rates |
+| **Dithering Detection** | Recognizes RPDF, TPDF, Shibata, noise-shaping algorithms and scale variants |
+| **Resampling Detection** | Identifies SWR/SoXR resamplers with quality tier estimation |
+| **MQA Detection** | Detects MQA-encoded files via LSB entropy and spectral analysis |
+| **Stereo Analysis** | Detects joint stereo encoding artifacts |
+| **Pre-Echo Detection** | Identifies transform codec artifacts before transients |
+| **Phase Analysis** | Detects phase discontinuities at codec frame boundaries |
+| **True Peak Analysis** | ITU-R BS.1770 compliant true peak measurement |
 
-This release introduces a **modular architecture** to support future features like web UI, continuous monitoring, and API integrations.
+---
 
-**New Features:**
-- **Genre-Aware Detection Profiles**: Reduce false positives with presets for Electronic, Classical, Ambient, Podcast, etc.
+## What's New in v0.3.4
+
+### Major Restructure & New Features
+
+- **Genre-Aware Detection Profiles**: Reduce false positives with presets for Electronic, Classical, Ambient, Podcast, and more
 - **Modular Codebase**: Clean separation of core analysis, CLI, configuration, and detection result handling
+- **Enhanced Dithering Detection**: Identifies 10+ dithering algorithms (Rectangular, Triangular, Shibata variants, F-weighted, E-weighted) with scale estimation (0.5x–2.0x)
+- **Enhanced Resampling Detection**: Detects SWR (Kaiser, Blackman-Nuttall) and SoXR (HQ, VHQ, Chebyshev) with quality tier classification
+- **MQA Detection**: New detector for Master Quality Authenticated files using LSB entropy analysis and high-frequency noise patterns
 - **Profile Builder API**: Create custom detection profiles programmatically
 - **Confidence Modifiers**: Per-detector sensitivity adjustment with suppression options
 
-**Architecture Changes:**
+### Architecture Changes
+
 - Reorganized into `core/`, `cli/`, `config/`, and `detection/` modules
-- Analysis algorithms split into dedicated files (spectral, bit_depth, upsampling, etc.)
+- Analysis algorithms split into dedicated files (spectral, bit_depth, upsampling, dithering, resampling, MQA)
 - DSP utilities consolidated in `core/dsp/`
 - Visualization tools in `core/visualization/`
-
-### Previous Versions
-
-<details>
-<summary>v0.2.x Changelog</summary>
-
-#### v0.2.4
-Better detector, results on the way.
-
-#### v0.2.3
-Minor parameter adjustments to `detector.rs` to not flag clean source files. Jenkins fixes.
-
-#### v0.2.2
-Fixed test case logic with `is_clean || is_lossless` to just `is_clean` for better reporting.
-
-#### v0.2.1
-**Fixed false positives on high sample rate files (88.2kHz+)**
-
-The previous version used ratio-based detection which caused false positives on high-res files. The new algorithm uses **absolute frequency thresholds** for high sample rate files and requires **positive codec identification** before flagging.
-</details>
+- Test generation utilities in `testgen/`
 
 ---
 
@@ -67,6 +58,10 @@ src/
 │   │   ├── bit_depth.rs      # Fake 24-bit detection (4 methods)
 │   │   ├── spectral.rs       # Frequency cutoff & codec signatures
 │   │   ├── upsampling.rs     # Upsampling detection
+│   │   ├── dither_detection.rs   # Advanced dithering detection
+│   │   ├── resample_detection.rs # Resampling engine identification
+│   │   ├── mqa_detection.rs  # MQA encoding detection
+│   │   ├── detection_pipeline.rs # Sample-rate-aware detection orchestration
 │   │   ├── stereo.rs         # Stereo field analysis
 │   │   ├── transients.rs     # Pre-echo detection
 │   │   ├── phase.rs          # Phase discontinuity analysis
@@ -84,8 +79,10 @@ src/
 │   └── output.rs             # Report formatting
 ├── config/                   # Configuration
 │   └── profiles.rs           # Genre-aware detection profiles
-└── detection/                # Detection results
-    └── result.rs             # Profile-aware result types
+├── detection/                # Detection results
+│   └── result.rs             # Profile-aware result types
+└── testgen/                  # Test file generation
+    └── mod.rs                # FFmpeg-based test file generator
 ```
 
 ---
@@ -106,6 +103,7 @@ cargo build --release
 ## Usage
 
 ### Basic Usage
+
 ```bash
 # Analyze a single file
 audiocheckr -i audio.flac
@@ -117,10 +115,10 @@ audiocheckr -i /path/to/music/
 audiocheckr -i audio.flac -s
 
 # Full analysis with all checks
-audiocheckr -i audio.flac -u --stereo --transients --phase -v
+audiocheckr -i audio.flac -u --stereo --transients --phase --dithering --resampling -v
 ```
 
-### Genre-Aware Profiles (New in v0.3.0)
+### Genre-Aware Profiles
 
 ```bash
 # Use electronic profile (tolerates sharp cutoffs, disables pre-echo)
@@ -164,11 +162,13 @@ OPTIONS:
         --stereo              Enable stereo analysis
         --transients          Enable transient/pre-echo analysis
         --phase               Enable phase analysis (slower)
+        --dithering           Enable dithering detection (24→16 bit)
+        --resampling          Enable resampling detection
     -v, --verbose             Detailed output
         --json                Output as JSON
     -q, --quick               Skip slower analyses
         --min-confidence <N>  Minimum confidence threshold [default: 0.5]
-        --profile <NAME>      Detection profile (standard, highres, electronic, noise, classical, podcast)
+        --profile <NAME>      Detection profile
         --disable <LIST>      Disable specific detectors (comma-separated)
         --show-suppressed     Show findings suppressed by profile
 ```
@@ -206,11 +206,44 @@ let analyzer = AnalyzerBuilder::new()
     .check_upsampling(true)
     .check_stereo(true)
     .check_transients(true)
-    .check_phase(false)  // Skip slower analysis
+    .check_phase(false)
     .min_confidence(0.6)
     .build(Path::new("audio.flac"))?;
 
 let report = analyzer.analyze()?;
+```
+
+### Dithering Detection
+
+```rust
+use audiocheckr::core::{DitherDetector, DitherAlgorithm, DitherScale};
+
+let detector = DitherDetector::new(44100);
+let result = detector.analyze(&samples, 24);
+
+if result.is_bit_reduced {
+    println!("Bit-reduced: {} → {} bit", 
+        result.container_bit_depth, result.effective_bit_depth);
+    println!("Algorithm: {} (confidence: {:.0}%)", 
+        result.algorithm, result.algorithm_confidence * 100.0);
+    println!("Scale: {}", result.scale);
+}
+```
+
+### Resampling Detection
+
+```rust
+use audiocheckr::core::{ResampleDetector, ResampleDirection};
+
+let detector = ResampleDetector::new();
+let result = detector.analyze(&samples, 96000);
+
+if result.is_resampled {
+    println!("Resampled: {} Hz → {} Hz", 
+        result.original_sample_rate.unwrap_or(0), result.current_sample_rate);
+    println!("Engine: {} ({} quality)", result.engine, result.quality);
+    println!("Direction: {:?}", result.direction);
+}
 ```
 
 ### Genre-Aware Profiles
@@ -229,7 +262,7 @@ let custom_profile = ProfileBuilder::new()
     .min_confidence(0.6)
     .disable_detector(DetectorType::PreEcho)
     .detector_multiplier(DetectorType::SpectralCutoff, 0.7)
-    .suppress_detector(DetectorType::StereoField)  // Show but don't affect verdict
+    .suppress_detector(DetectorType::StereoField)
     .build();
 
 // Check adjusted confidence
@@ -237,44 +270,98 @@ let raw_confidence = 0.8;
 let adjusted = custom_profile.adjust_confidence(DetectorType::SpectralCutoff, raw_confidence);
 ```
 
-### Profile-Aware Results
+---
 
-```rust
-use audiocheckr::detection::{AnalysisResult, RawDetection, Severity};
-use audiocheckr::config::{ProfileConfig, ProfilePreset, DetectorType};
+## Detection Algorithms
 
-// Raw detections from analysis
-let raw_detections = vec![
-    RawDetection {
-        detector: DetectorType::SpectralCutoff,
-        raw_confidence: 0.75,
-        severity: Severity::Warning,
-        summary: "Frequency cutoff at 16kHz".to_string(),
-        evidence: vec!["Sharp rolloff detected".to_string()],
-        data: serde_json::Value::Null,
-    },
-];
+### Dithering Detection
 
-// Apply profile to get final result
-let profile = ProfileConfig::from_preset(ProfilePreset::Electronic);
-let result = AnalysisResult::from_detections(raw_detections, &profile);
+Detects various dithering algorithms used in bit depth conversion:
 
-println!("Verdict: {:?}", result.verdict);
-println!("Active findings: {}", result.active_findings.len());
-println!("Suppressed findings: {}", result.suppressed_findings.len());
-```
+| Algorithm | Description | Detectability |
+|-----------|-------------|---------------|
+| Rectangular (RPDF) | Flat noise distribution ±0.5 LSB | High |
+| Triangular (TPDF) | Triangular noise ±1 LSB (most common) | High |
+| Triangular HP | High-pass filtered triangular | High |
+| Lipshitz | Moderate noise shaping | Medium |
+| Shibata | Sony's standard noise shaping | High |
+| Low Shibata | Low-frequency optimized | Medium |
+| High Shibata | High-frequency optimized | High |
+| F-weighted | Psychoacoustic shaping | Medium |
+| Modified E-weighted | Enhanced psychoacoustic | Medium |
+| Improved E-weighted | Best psychoacoustic shaping | Medium |
+
+**Scale detection**: 0.5x, 0.75x, 1.0x, 1.25x, 1.5x, 2.0x
+
+### Resampling Detection
+
+Detects various resampling engines and quality settings:
+
+| Engine | Variants | Quality Tier |
+|--------|----------|--------------|
+| SWR Default | Linear interpolation | Standard |
+| SWR Cubic | Cubic interpolation | Standard |
+| SWR Blackman-Nuttall | High stopband attenuation | High |
+| SWR Kaiser | β=9, 12, 16 | High–Very High |
+| SoXR Default | Standard precision | High |
+| SoXR HQ | precision=20 | Very High |
+| SoXR VHQ | precision=28 | Transparent |
+| SoXR VHQ Cheby | Chebyshev passband | Transparent |
+
+### MQA Detection
+
+Detects MQA (Master Quality Authenticated) encoding by analyzing:
+
+- **LSB entropy**: MQA stores encoded data in lower 8 bits, creating high entropy (>0.85)
+- **High-frequency noise**: Elevated noise floor above 18kHz
+- **Spectral artifacts**: Characteristic patterns from MQA's folding process
+
+**Detection criteria**:
+- 24-bit files at 44.1/48kHz only (MQA requirement)
+- LSB entropy threshold: 0.85
+- Noise floor elevation: +15dB above 18kHz
+
+### Spectral Analysis
+
+Multi-method frequency cutoff detection:
+
+| Method | Description |
+|--------|-------------|
+| Energy Drop | Finds where energy drops 25dB below reference |
+| Derivative | Edge detection via spectral derivative |
+| Noise Floor | Compares signal to noise floor near Nyquist |
+
+**Codec signatures matched**:
+- MP3: 64, 96, 128, 160, 192, 224, 256, 320 kbps
+- AAC: 96, 128, 160, 192, 256, 320 kbps
+- Opus: 48, 64, 96, 128, 192 kbps
+- Vorbis: Q3–Q9
+
+### Bit Depth Analysis
+
+Four independent detection methods with weighted voting:
+
+1. **LSB Precision**: Examines trailing zeros in 24-bit scaled samples
+2. **Histogram Analysis**: Counts unique values at 16-bit vs 24-bit quantization
+3. **Quantization Noise**: Measures noise floor in quiet sections
+4. **Value Clustering**: Checks if values cluster on 256-multiples
+
+**Conservative thresholds**: Requires 3+ high-confidence (≥85%) methods to agree before flagging.
 
 ---
 
 ## Output Interpretation
 
 ### Quality Score
-- **90-100%**: Likely true lossless
-- **70-90%**: Possibly lossless but has some issues
-- **50-70%**: Suspicious - likely transcoded
-- **0-50%**: Almost certainly transcoded
 
-### Verdict (New in v0.3.0)
+| Score | Interpretation |
+|-------|----------------|
+| 90–100% | Likely true lossless |
+| 70–90% | Possibly lossless with minor issues |
+| 50–70% | Suspicious—likely transcoded |
+| 0–50% | Almost certainly transcoded |
+
+### Verdict
 
 | Verdict | Meaning |
 |---------|---------|
@@ -288,115 +375,17 @@ println!("Suppressed findings: {}", result.suppressed_findings.len());
 
 | Defect | Meaning |
 |--------|---------|
-| MP3 Transcode | File was encoded from MP3 source |
-| AAC Transcode | File was encoded from AAC source |
-| Vorbis Transcode | File was encoded from Ogg Vorbis source |
-| Opus Transcode | File was encoded from Opus source |
-| Bit Depth Mismatch | 16-bit audio padded to appear as 24-bit |
+| MP3/AAC/Vorbis/Opus Transcode | File encoded from lossy source |
+| Bit Depth Mismatch | 16-bit audio padded to 24-bit |
 | Upsampled | Audio upsampled from lower sample rate |
-| Joint Stereo | Lossy joint stereo encoding detected |
-| Pre-Echo | Transform codec artifacts before transients |
+| Dithering Detected | Bit depth reduction with dithering applied |
+| Resampling Detected | Sample rate conversion detected |
+| MQA Encoded | MQA encoding detected in LSBs |
+| Joint Stereo | Lossy joint stereo encoding |
+| Pre-Echo | Transform codec artifacts |
 | Phase Discontinuities | Codec frame boundary artifacts |
-| Spectral Artifacts | Unusual spectral patterns |
 | Clipping | Samples at/above full scale |
 | Inter-Sample Overs | True peak exceeds 0 dBFS |
-
----
-
-## Algorithm Details
-
-### Analysis Methods
-
-Each detection uses multiple algorithms with confidence scoring:
-
-#### Spectral Analysis (`core/analysis/spectral.rs`)
-- **Multi-frame FFT**: Analyzes 30 frames spread across the track
-- **Derivative-based cutoff detection**: Finds where spectrum "falls off a cliff"
-- **Rolloff steepness measurement**: dB/octave calculation
-- **Brick-wall detection**: Sharp cutoffs characteristic of MP3
-- **Shelf pattern detection**: Characteristic of AAC encoding
-- **Encoder signature matching**: Compares against known codec signatures
-
-#### Bit Depth Analysis (`core/analysis/bit_depth.rs`)
-Four independent detection methods with weighted voting:
-1. **LSB Precision Analysis**: Examines trailing zeros in 24-bit scaled samples
-2. **Histogram Analysis**: Counts unique values at 16-bit vs 24-bit quantization
-3. **Quantization Noise Analysis**: Measures noise floor in quiet sections
-4. **Value Clustering Analysis**: Checks if values cluster on 256-multiples
-
-#### Upsampling Detection (`core/analysis/upsampling.rs`)
-- **Spectral Method**: Compares frequency cutoff to original Nyquist frequencies
-- **Null Test**: Downsample → upsample and compare spectra
-- **Inter-sample Peak Analysis**: True high-res has inter-sample peaks
-
-#### Stereo Analysis (`core/analysis/stereo.rs`)
-- Stereo width measurement (M/S energy ratio)
-- Channel correlation calculation
-- Joint stereo detection via HF stereo reduction
-
-#### Pre-Echo Analysis (`core/analysis/transients.rs`)
-- Transient detection using envelope following
-- Pre-transient energy measurement
-- MDCT window size pattern detection
-
-#### Phase Analysis (`core/analysis/phase.rs`)
-- Phase coherence between consecutive frames
-- Phase discontinuity scoring
-
-#### True Peak Analysis (`core/analysis/true_peak.rs`)
-- 4x oversampling via sinc interpolation
-- Inter-sample over detection
-- ITU-R BS.1770 compliant measurement
-
-### Transcode Detection Logic
-
-**For high sample rate files (88.2kHz+):**
-
-| Cutoff Frequency | Evidence Required | Rationale |
-|------------------|-------------------|-----------|
-| > 22 kHz | None - pass | Normal high-res content |
-| 20-22 kHz | Brick-wall AND >80 dB/oct | Could be MP3 320k or natural |
-| 18-20 kHz | Brick-wall OR >60 dB/oct | Suspicious but needs evidence |
-| 15-18 kHz | 2+ signals | More suspicious |
-| < 15 kHz | Codec-specific signature | Check for codec patterns |
-
-**For standard sample rates (44.1/48kHz):**
-
-| Cutoff Ratio | Evidence Required |
-|--------------|-------------------|
-| ≥ 80% | None - pass |
-| 70-80% | Brick-wall OR >40 dB/oct |
-| < 70% | Flag with ratio-based confidence |
-
----
-
-## DSP Utilities (`core/dsp/`)
-
-The DSP module provides reusable signal processing functions:
-
-### FFT Processing (`fft.rs`)
-```rust
-use audiocheckr::core::dsp::{FftProcessor, WindowType};
-
-let mut fft = FftProcessor::new(4096, WindowType::Hann);
-let magnitudes = fft.magnitude_spectrum(&samples);
-let power_db = fft.power_spectrum_db(&samples);
-```
-
-### Window Functions (`windows.rs`)
-- Hann, Hamming, Blackman, Blackman-Harris, FlatTop
-- Kaiser with configurable beta parameter
-
-### Filters (`filters.rs`)
-- Pre-emphasis / de-emphasis
-- Sinc interpolation upsampling
-- Simple downsampling with anti-aliasing
-
-### Statistical Functions (`stats.rs`)
-- RMS, peak amplitude, dB conversion
-- Envelope computation, transient detection
-- Spectral centroid, spread, flatness, rolloff, flux, contrast
-- Zero-crossing rate, autocorrelation
 
 ---
 
@@ -404,28 +393,83 @@ let power_db = fft.power_spectrum_db(&samples);
 
 AudioCheckr uses Jenkins for continuous integration with multiple test types:
 
+### Test Types
+
 | Test Type | Trigger | Files | Purpose |
 |-----------|---------|-------|---------|
-| **Qualification** | Every push | ~20 files | Quick validation |
-| **Qualification Genre** | Every push | ~50 files | Genre-specific quick tests |
-| **Regression** | Weekly | ~80 files | Comprehensive ground truth |
-| **Regression Genre** | Manual | ~289 files | Full genre coverage |
-| **Diagnostic** | Manual | Full suite | Debug false positives |
+| `QUALIFICATION_GENRE` | Every push | ~50 files | Quick genre-specific validation |
+| `REGRESSION_GENRE` | Weekly (Sat 10AM) / Manual | ~289 files | Comprehensive regression |
+| `DIAGNOSTIC` | Manual | Full suite | Debug false positives |
+| `DSP_TEST` | Manual | Dithering + Resampling | DSP artifact detection |
+| `DSP_DIAGNOSTIC` | Manual | Dithering + Resampling | Detailed DSP diagnostics |
+| `MQA_TEST` | Manual | MQA folder | MQA detection validation |
+
+### Jenkins Pipeline Features
+
+- **MinIO Integration**: Test files stored in MinIO bucket (`audiocheckr`)
+- **Allure Reporting**: Beautiful test reports with environment info
+- **SonarQube Analysis**: Code quality metrics (optional)
+- **Automatic Cleanup**: Workspace cleaned after each build
+- **Artifact Archiving**: Release binary and test results preserved
 
 ### Running Tests Locally
 
 ```bash
-# Build first
+# Build release binary
 cargo build --release
 
-# Run qualification tests (requires TestFiles/)
-cargo test --test qualification_test -- --nocapture
+# Run qualification tests (requires GenreTestSuiteLite/)
+cargo test --test qualification_genre_test --release -- --nocapture
 
-# Run genre tests (requires GenreTestSuiteLite/)
-cargo test --test qualification_genre_test -- --nocapture
+# Run DSP tests (requires dithering_tests/ and resampling_tests/)
+cargo test --test dithering_resampling_test --release -- --nocapture --test-threads=1
+
+# Run MQA tests (requires MQA/ folder)
+cargo test --test mqa_test --release -- --ignored --nocapture --test-threads=1
 
 # Run all tests
-cargo test -- --nocapture
+cargo test --release -- --nocapture
+```
+
+### Manual Jenkins Trigger
+
+1. Navigate to AudioCheckr job in Jenkins
+2. Click "Build with Parameters"
+3. Select test type from dropdown:
+   - `MQA_TEST` for MQA detection tests
+   - `DSP_TEST` for dithering/resampling tests
+   - `DSP_DIAGNOSTIC` for detailed DSP analysis
+4. Click "Build"
+
+---
+
+## Test File Generation
+
+AudioCheckr includes utilities for generating test files with known characteristics:
+
+```rust
+use audiocheckr::testgen::{TestFileGenerator, DitherConfig, DitherMethod, ResampleConfig, ResamplerConfig};
+
+let generator = TestFileGenerator::new("./test_output")?;
+
+// Generate dithered file
+let config = DitherConfig {
+    method: DitherMethod::Shibata,
+    scale: 1.0,
+    output_bits: 16,
+};
+generator.generate_dithered("source.flac", &config)?;
+
+// Generate resampled file
+let config = ResampleConfig {
+    target_rate: 96000,
+    engine: ResamplerConfig::SoxrVHQ,
+};
+generator.generate_resampled("source.flac", &config)?;
+
+// Generate complete test suite
+generator.generate_all_dithered("source.flac")?;
+generator.generate_all_resampled("source.flac", &[44100, 48000, 96000])?;
 ```
 
 ---
@@ -434,59 +478,141 @@ cargo test -- --nocapture
 
 ### DSP Concepts Used
 
-1. **Short-Time Fourier Transform (STFT)**: Time-frequency analysis
-2. **Mel Filterbank**: Perceptually-motivated frequency scale
-3. **Windowing**: Hann, Blackman-Harris for spectral leakage reduction
-4. **Pre-emphasis**: High-frequency boost for visualization
-5. **Sinc Interpolation**: Band-limited upsampling
-6. **Hilbert Transform Approximation**: Envelope extraction
-7. **ITU-R BS.1770**: True peak measurement standard
+- **Short-Time Fourier Transform (STFT)**: Time-frequency analysis
+- **Mel Filterbank**: Perceptually-motivated frequency scale
+- **Windowing**: Hann, Blackman-Harris for spectral leakage reduction
+- **Sinc Interpolation**: Band-limited upsampling for true peak
+- **Shannon Entropy**: LSB randomness measurement for MQA detection
+- **ITU-R BS.1770**: True peak measurement standard
+
+### Sample Rate Awareness
+
+The detection pipeline is sample-rate-aware:
+
+- **>48kHz files**: MP3/AAC detection automatically skipped (codecs don't support these rates)
+- **High-res files**: Reduced spectral cutoff sensitivity to avoid false positives
+- **Anti-aliasing detection**: Distinguishes resampler rolloff from lossy codec cutoff
+
+### Performance
+
+| Operation | Typical Time |
+|-----------|--------------|
+| Basic analysis | 2–5 seconds/file |
+| With phase analysis | +1–2 seconds |
+| Spectrogram generation | +1–3 seconds |
+| Dithering detection | +0.5 seconds |
+| Resampling detection | +1 second |
+| Memory usage | ~100MB for 5-minute track |
 
 ### Limitations
 
-- **High-quality transcodes**: Very high bitrate lossy (320kbps MP3) may not be detectable
+- **High-quality transcodes**: 320kbps MP3 may not be detectable
 - **Sophisticated upsampling**: Modern resamplers may fool the detector
 - **Short files**: Less reliable on clips under 5 seconds
 - **Synthesized audio**: Electronic music may show unusual but legitimate characteristics
 - **Naturally band-limited**: Some recordings legitimately have limited HF content
 
-### Performance
-
-- Typical analysis: 2-5 seconds per file
-- Phase analysis adds ~1-2 seconds
-- Spectrogram generation adds ~1-3 seconds
-- Memory usage: ~100MB for typical 5-minute track
-
 ---
 
 ## Migration from v0.2.x
 
-If upgrading from v0.2.x, note these breaking changes:
+### Breaking Changes
 
-1. **Import paths changed**: 
-   - Old: `use audiocheckr::bit_depth::*`
-   - New: `use audiocheckr::core::analysis::bit_depth::*`
-
-2. **Library re-exports**: Common types are now available at crate root:
+1. **Import paths changed**:
    ```rust
-   use audiocheckr::{AudioAnalyzer, ProfileConfig, ProfilePreset};
+   // Old
+   use audiocheckr::bit_depth::*;
+   // New
+   use audiocheckr::core::analysis::bit_depth::*;
    ```
 
-3. **New dependencies**: The profile system uses `serde_json` for machine-readable data
+2. **New library re-exports**:
+   ```rust
+   use audiocheckr::{AudioAnalyzer, ProfileConfig, ProfilePreset};
+   use audiocheckr::{DitherDetector, ResampleDetector};
+   ```
+
+3. **DetectionConfig expanded**:
+   ```rust
+   DetectionConfig {
+       // Existing fields...
+       check_dithering: true,   // NEW
+       check_resampling: true,  // NEW
+   }
+   ```
+
+4. **New DefectTypes**:
+   - `DitheringDetected { algorithm, scale, effective_bits, container_bits }`
+   - `ResamplingDetected { original_rate, current_rate, engine, quality }`
+   - `MqaEncoded { original_rate, mqa_type, lsb_entropy }`
 
 ---
 
 ## Building from Source
 
-Requirements:
+### Requirements
+
 - Rust 1.70+ (edition 2021)
 - ~300MB disk space for dependencies
+
+### Build
 
 ```bash
 git clone https://github.com/abalajiksh/audiocheckr
 cd audiocheckr
 cargo build --release
 ```
+
+### Dependencies
+
+Key crates:
+- `symphonia` - Audio decoding
+- `rustfft` - FFT processing
+- `clap` - CLI argument parsing
+- `image` - Spectrogram generation
+- `serde` / `serde_json` - Serialization
+- `colorful` - Terminal colors
+- `walkdir` - Directory traversal
+- `anyhow` - Error handling
+
+---
+
+## Changelog
+
+### v0.3.0 (Current)
+
+- **New**: Genre-aware detection profiles (Standard, HighRes, Electronic, Noise, Classical, Podcast)
+- **New**: Enhanced dithering detection (10 algorithms, 6 scale variants)
+- **New**: Enhanced resampling detection (SWR/SoXR engines, quality tiers)
+- **New**: MQA encoding detection via LSB entropy
+- **New**: Detection pipeline with sample-rate awareness
+- **New**: Profile Builder API for custom configurations
+- **New**: Test file generation utilities
+- **Changed**: Modular architecture with clean separation of concerns
+- **Changed**: Conservative bit depth thresholds to reduce false positives
+- **Changed**: Improved spectral analysis with multi-method detection
+- **Fixed**: False positives on high-sample-rate files
+- **Fixed**: Better handling of dithered and noise-shaped audio
+
+### v0.2.x
+
+See collapsed section for historical changes.
+
+<details>
+<summary>v0.2.x Changelog</summary>
+
+#### v0.2.4
+Better detector, results on the way.
+
+#### v0.2.3
+Minor parameter adjustments to `detector.rs` to not flag clean source files. Jenkins fixes.
+
+#### v0.2.2
+Fixed test case logic with `is_clean || is_lossless` to just `is_clean` for better reporting.
+
+#### v0.2.1
+Fixed false positives on high sample rate files (88.2kHz+). New algorithm uses absolute frequency thresholds for high-res files and requires positive codec identification before flagging.
+</details>
 
 ---
 
@@ -503,3 +629,4 @@ GNU Affero General Public License v3.0 (AGPL-3.0)
 - Hydrogenaudio Wiki: Lossy codec detection techniques
 - Julius O. Smith: Digital Audio Signal Processing
 - Udo Zölzer: DAFX - Digital Audio Effects
+- MQA Ltd: Technical papers on MQA encoding
