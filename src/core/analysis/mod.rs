@@ -30,6 +30,7 @@ pub mod detection_pipeline;
 pub mod mqa_detection;
 pub mod enf_detection;
 pub mod clipping_detection;
+pub mod detection_pipeline_enf_clipping;
 
 pub use detection_pipeline::{DetectionContext, DetectionPipeline, DetectionResult};
 
@@ -43,12 +44,49 @@ pub use resample_detection::{
 pub use mqa_detection::{
     MqaDetector, MqaDetectionResult, MqaAuthenticationStatus, MqaStudioProvenance,
 };
+// Re-export ENF detection types
 pub use enf_detection::{
-    EnfDetector, EnfDetectionResult, EnfBaseFrequency, EnfRegion, EnfAnomaly, EnfAnomalyType,
+    EnfDetector,
+    EnfDetectionResult,
+    EnfBaseFrequency,
+    EnfRegion,
+    EnfAnomaly,
+    EnfAnomalyType,
+    EnfHarmonic,
+    EnfMeasurement,
 };
+// Re-export Clipping detection types
+// NOTE: ClippingSeverity does NOT exist - use ClippingCause instead
 pub use clipping_detection::{
-    ClippingDetector, ClippingAnalysisResult, ClippingType, ClippingSeverity,
-    LoudnessAnalysis, RestorationAssessment, InterSampleAnalysis,
+    ClippingDetector,
+    ClippingAnalysisResult,
+    ClippingType,
+    ClippingCause,           // NOT ClippingSeverity
+    TemporalDistribution,
+    LikelyCause,
+    RestorationAssessment,
+    LoudnessAnalysis,
+    InterSampleAnalysis,
+    ClippingStatistics,
+    ClippingEvent,
+};
+
+// Re-export Extended Detection Pipeline types
+pub use detection_pipeline_enf_clipping::{
+    ExtendedDetectionPipeline,
+    ExtendedDetectionOptions,
+    ExtendedAnalysisResult,
+    QualityAssessment,
+    QualityGrade,
+    QualityIssue,
+    QualityIssueType,
+    AuthenticityAssessment,
+    AuthenticityResult,
+    AuthenticityAnomaly,
+    // Convenience functions
+    analyze_audio_quality,
+    analyze_stereo_quality,
+    analyze_authenticity,
 };
 
 // Re-export internal analysis utilities
