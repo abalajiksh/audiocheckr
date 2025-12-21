@@ -1,4 +1,4 @@
-# AudioCheckr v0.3.4
+# AudioCheckr v0.3.5
 
 Advanced audio analysis tool for detecting fake lossless files, transcodes, upsampled audio, and various audio quality issues. Uses pure DSP algorithms—no machine learning.
 
@@ -14,6 +14,8 @@ Advanced audio analysis tool for detecting fake lossless files, transcodes, upsa
 | **Dithering Detection** | Recognizes RPDF, TPDF, Shibata, noise-shaping algorithms and scale variants |
 | **Resampling Detection** | Identifies SWR/SoXR resamplers with quality tier estimation |
 | **MQA Detection** | Detects MQA-encoded files via LSB entropy and spectral analysis |
+| **ENF Analysis** | Electrical Network Frequency analysis for authenticity verification and edit detection |
+| **Clipping Detection** | Comprehensive clipping analysis with true peak, inter-sample overs, and loudness war detection |
 | **Stereo Analysis** | Detects joint stereo encoding artifacts |
 | **Pre-Echo Detection** | Identifies transform codec artifacts before transients |
 | **Phase Analysis** | Detects phase discontinuities at codec frame boundaries |
@@ -21,7 +23,7 @@ Advanced audio analysis tool for detecting fake lossless files, transcodes, upsa
 
 ---
 
-## What's New in v0.3.4
+## What's New in v0.3.5
 
 ### Major Restructure & New Features
 
@@ -30,6 +32,8 @@ Advanced audio analysis tool for detecting fake lossless files, transcodes, upsa
 - **Enhanced Dithering Detection**: Identifies 10+ dithering algorithms (Rectangular, Triangular, Shibata variants, F-weighted, E-weighted) with scale estimation (0.5x–2.0x)
 - **Enhanced Resampling Detection**: Detects SWR (Kaiser, Blackman-Nuttall) and SoXR (HQ, VHQ, Chebyshev) with quality tier classification
 - **MQA Detection**: New detector for Master Quality Authenticated files using LSB entropy analysis and high-frequency noise patterns
+- **ENF Analysis (NEW)**: Electrical Network Frequency detection for recording authenticity verification, edit/splice detection, and geographic region estimation (50Hz vs 60Hz power grids)
+- **Clipping Detection (NEW)**: Comprehensive digital clipping analysis including true peak measurement, inter-sample over detection, loudness war victim identification, dynamic range analysis, and restoration assessment
 - **Profile Builder API**: Create custom detection profiles programmatically
 - **Confidence Modifiers**: Per-detector sensitivity adjustment with suppression options
 
@@ -61,6 +65,8 @@ src/
 │   │   ├── dither_detection.rs   # Advanced dithering detection
 │   │   ├── resample_detection.rs # Resampling engine identification
 │   │   ├── mqa_detection.rs  # MQA encoding detection
+│   │   ├── enf_detection.rs  # ENF authenticity analysis (NEW)
+│   │   ├── clipping_detection.rs # Comprehensive clipping analysis (NEW)
 │   │   ├── detection_pipeline.rs # Sample-rate-aware detection orchestration
 │   │   ├── stereo.rs         # Stereo field analysis
 │   │   ├── transients.rs     # Pre-echo detection
@@ -118,6 +124,34 @@ audiocheckr -i audio.flac -s
 audiocheckr -i audio.flac -u --stereo --transients --phase --dithering --resampling -v
 ```
 
+### ENF and Clipping Analysis
+
+```bash
+# Enable ENF (Electrical Network Frequency) analysis for authenticity
+audiocheckr -i recording.wav --enf
+
+# Use sensitive ENF mode for noisy recordings
+audiocheckr -i noisy_recording.wav --enf --enf-sensitive
+
+# Specify expected ENF frequency (50Hz or 60Hz)
+audiocheckr -i audio.wav --enf --enf-frequency 50
+
+# Enable clipping detection (enabled by default)
+audiocheckr -i master.flac
+
+# Use strict clipping detection for broadcast compliance
+audiocheckr -i broadcast.wav --clipping-strict
+
+# Disable inter-sample peak analysis (faster)
+audiocheckr -i audio.flac --no-inter-sample
+
+# Disable loudness war detection
+audiocheckr -i audio.flac --no-loudness
+
+# Full extended analysis
+audiocheckr -i audio.flac --enf --enf-sensitive --clipping-strict -v
+```
+
 ### Genre-Aware Profiles
 
 ```bash
@@ -164,6 +198,13 @@ OPTIONS:
         --phase               Enable phase analysis (slower)
         --dithering           Enable dithering detection (24→16 bit)
         --resampling          Enable resampling detection
+        --enf                 Enable ENF analysis for authenticity verification
+        --enf-sensitive       Use sensitive ENF detection for noisy recordings
+        --enf-frequency <HZ>  Expected ENF frequency (50 or 60)
+        --no-clipping         Disable clipping detection
+        --clipping-strict     Use strict clipping thresholds (broadcast)
+        --no-inter-sample     Disable inter-sample peak analysis
+        --no-loudness         Disable loudness war detection
     -v, --verbose             Detailed output
         --json                Output as JSON
     -q, --quick               Skip slower analyses
@@ -320,6 +361,77 @@ Detects MQA (Master Quality Authenticated) encoding by analyzing:
 - 24-bit files at 44.1/48kHz only (MQA requirement)
 - LSB entropy threshold: 0.85
 - Noise floor elevation: +15dB above 18kHz
+
+### ENF (Electrical Network Frequency) Analysis
+
+Detects power grid frequency signatures embedded in audio recordings for authenticity verification:
+
+**Capabilities**:
+- **Base frequency detection**: 50 Hz (Europe, Asia, Africa, Australia) vs 60 Hz (North America)
+- **Harmonic analysis**: Up to 8 harmonics tracked
+- **Frequency tracking**: 1-second windows with temporal analysis
+- **Anomaly detection**: Identifies edits, splices, and synthetic audio
+
+**Anomaly Types Detected**:
+| Type | Indication |
+|------|------------|
+| FrequencyJump | Sudden frequency change (potential splice point) |
+| PhaseDiscontinuity | Phase break suggesting edit |
+| SignalDropout | ENF disappears (processed/synthetic section) |
+| DriftRateChange | Frequency drift pattern change |
+| HarmonicAnomaly | Unusual harmonic ratios |
+
+**Geographic Region Estimation**:
+- 50 Hz regions: Europe, UK, Asia, Africa, Australia, Japan (east)
+- 60 Hz regions: North America, Central America, Japan (west), parts of South America
+
+**Detection Modes**:
+- **Default**: 32768 FFT, 3.0 dB min SNR, ±0.5 Hz tolerance
+- **Sensitive**: 65536 FFT, 1.5 dB min SNR (for noisy recordings)
+- **Fast**: 16384 FFT, reduced accuracy for quick screening
+
+### Clipping Detection
+
+Comprehensive digital clipping analysis with multiple detection methods:
+
+**Analysis Features**:
+| Feature | Description |
+|---------|-------------|
+| Sample Clipping | Samples at digital maximum (±1.0) |
+| True Peak (ITU-R BS.1770) | 4x oversampled peak detection |
+| Inter-Sample Overs | Peaks between samples exceeding 0 dBFS |
+| Soft Clipping | Analog-style saturation detection |
+| Limiter Artifacts | Heavy limiting pattern detection |
+
+**Clipping Types**:
+| Type | Characteristics |
+|------|-----------------|
+| HardDigital | Flat-top clipping at digital max |
+| SoftAnalog | Rounded saturation (tube/tape-style) |
+| Limiter | Short, controlled peaks |
+| IntentionalDistortion | Effect processing artifacts |
+
+**Loudness Analysis**:
+- Integrated loudness (LUFS approximation)
+- Loudness range (LU)
+- Dynamic range (DR)
+- Crest factor
+- Peak-to-loudness ratio (PLR)
+- **Loudness war victim detection**: Identifies over-compressed masters
+
+**Restoration Assessment**:
+| Clipping Severity | Recommended Method | Expected Recovery |
+|-------------------|-------------------|-------------------|
+| Minor (<5 samples) | CubicSpline | ~95% |
+| Moderate (<20 samples) | SpectralReconstruction | ~80% |
+| Significant (<50 samples) | NeuralNetwork | ~60% |
+| Severe (>50 samples) | NotRestorable | ~20% |
+| Inter-sample only | GainReduction | 100% |
+
+**Detection Modes**:
+- **Default**: 0.9999 threshold, 1 sample minimum
+- **Strict**: 0.999 threshold (broadcast standards)
+- **Lenient**: 1.0 threshold, 3 sample minimum (music production)
 
 ### Spectral Analysis
 
@@ -579,12 +691,14 @@ Key crates:
 
 ## Changelog
 
-### v0.3.4 (Current)
+### v0.3.5 (Current)
 
 - **New**: Genre-aware detection profiles (Standard, HighRes, Electronic, Noise, Classical, Podcast)
 - **New**: Enhanced dithering detection (10 algorithms, 6 scale variants)
 - **New**: Enhanced resampling detection (SWR/SoXR engines, quality tiers)
 - **New**: MQA encoding detection via LSB entropy
+- **New**: ENF (Electrical Network Frequency) analysis for authenticity verification
+- **New**: Comprehensive clipping detection with true peak, loudness war detection
 - **New**: Detection pipeline with sample-rate awareness
 - **New**: Profile Builder API for custom configurations
 - **New**: Test file generation utilities
@@ -630,3 +744,5 @@ GNU Affero General Public License v3.0 (AGPL-3.0)
 - Julius O. Smith: Digital Audio Signal Processing
 - Udo Zölzer: DAFX - Digital Audio Effects
 - MQA Ltd: Technical papers on MQA encoding
+- Grigoras, C.: Digital audio recording analysis - the ENF criterion
+- IEEE: Applications of Electrical Network Frequency for audio forensics

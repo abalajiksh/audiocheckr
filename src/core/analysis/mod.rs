@@ -11,6 +11,9 @@
 //! - MFCC (codec fingerprinting)
 //! - Dithering detection (rectangular, triangular, Shibata, etc.)
 //! - Resampling detection (SWR, SoXR, quality levels)
+//! - MQA detection (Master Quality Authenticated)
+//! - ENF detection (Electrical Network Frequency analysis)
+//! - Clipping detection (digital overs, inter-sample peaks, loudness war)
 
 mod bit_depth;
 mod spectral;
@@ -24,49 +27,36 @@ pub mod dither;
 pub mod dither_detection;
 pub mod resample_detection;
 pub mod detection_pipeline;
-pub use detection_pipeline::{DetectionContext, CodecConstraints, ArtifactDiscrimination};
-// Add to the module declarations:
-mod mqa_detection;
+pub mod mqa_detection;
+pub mod enf_detection;
+pub mod clipping_detection;
 
-// Add to the exports:
-pub use mqa_detection::{
-    MqaDetector, MqaDetectionResult, MqaType,
-};
+pub use detection_pipeline::{DetectionContext, DetectionPipeline, DetectionResult};
 
-// Re-export all analysis modules
-pub use bit_depth::{analyze_bit_depth, BitDepthAnalysis, BitDepthMethodResults};
-pub use spectral::{
-    SpectralAnalyzer, SpectralAnalysis, CodecSignature, Codec,
-    detect_transcode, TranscodeResult,
-};
-pub use upsampling::{
-    analyze_upsampling, UpsamplingAnalysis, UpsamplingMethodResults,
-    detect_upsampling_ratio,
-};
-pub use stereo::{analyze_stereo, StereoAnalysis};
-pub use transients::{
-    analyze_pre_echo, PreEchoAnalysis, TransientInfo,
-    analyze_frame_boundaries, FrameBoundaryAnalysis,
-};
-pub use phase::{
-    analyze_phase, PhaseAnalysis,
-    analyze_instantaneous_frequency, InstantaneousFrequencyAnalysis,
-};
-pub use true_peak::{
-    analyze_true_peak, TruePeakAnalysis, LoudnessInfo,
-    analyze_true_peak_stereo, ChannelTruePeak,
-};
-pub use mfcc::{analyze_mfcc, MfccAnalysis, MfccParams};
-
-// Legacy dither module
-pub use dither::{DitherAnalyzer, DitherAnalysis, DitherType};
-
-// New enhanced detection modules
+// Re-export key types from each detection module
 pub use dither_detection::{
-    DitherDetector, DitherDetectionResult, DitherAlgorithm, DitherScale,
-    NoiseSpectrumProfile,
+    DitherDetector, DitherDetectionResult, DitherType, DitherCharacteristics,
 };
 pub use resample_detection::{
-    ResampleDetector, ResampleDetectionResult, ResamplerEngine,
-    ResampleQuality, ResampleDirection,
+    ResampleDetector, ResampleDetectionResult, ResamplerType, ResamplerQuality,
 };
+pub use mqa_detection::{
+    MqaDetector, MqaDetectionResult, MqaAuthenticationStatus, MqaStudioProvenance,
+};
+pub use enf_detection::{
+    EnfDetector, EnfDetectionResult, EnfBaseFrequency, EnfRegion, EnfAnomaly, EnfAnomalyType,
+};
+pub use clipping_detection::{
+    ClippingDetector, ClippingAnalysisResult, ClippingType, ClippingSeverity,
+    LoudnessAnalysis, RestorationAssessment, InterSampleAnalysis,
+};
+
+// Re-export internal analysis utilities
+pub(crate) use bit_depth::BitDepthAnalyzer;
+pub(crate) use spectral::SpectralAnalyzer;
+pub(crate) use upsampling::UpsamplingDetector;
+pub(crate) use stereo::StereoAnalyzer;
+pub(crate) use transients::TransientAnalyzer;
+pub(crate) use phase::PhaseAnalyzer;
+pub(crate) use true_peak::TruePeakMeter;
+pub(crate) use mfcc::MfccAnalyzer;
