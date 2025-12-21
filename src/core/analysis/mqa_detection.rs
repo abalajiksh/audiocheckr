@@ -430,7 +430,7 @@ impl MqaDetector {
         
         // Measure noise in 18-20kHz range (MQA encoded area)
         let high_start = (18000.0 / freq_per_bin) as usize;
-        let high_end = (20000.0 / freq_per_bin) as usize.min(n / 2);
+        let high_end = ((20000.0 / freq_per_bin) as usize).min(n / 2);
         
         let low_noise = Self::avg_magnitude(&buffer, low_start, low_end);
         let high_noise = Self::avg_magnitude(&buffer, high_start, high_end);

@@ -32,6 +32,16 @@ pub mod enf_detection;
 pub mod clipping_detection;
 pub mod detection_pipeline_enf_clipping;
 
+// Add these public re-exports near the top of the file:
+pub use bit_depth::{BitDepthAnalysis, analyze_bit_depth};
+pub use upsampling::{UpsamplingAnalysis, analyze_upsampling};
+pub use transients::{PreEchoAnalysis, analyze_pre_echo};
+pub use stereo::analyze_stereo;
+pub use spectral::{SpectralAnalysis, Codec, detect_transcode};
+pub use dither_detection::{DitherAlgorithm, DitherScale, NoiseSpectrumProfile};
+pub use resample_detection::{ResamplerEngine, ResampleQuality, ResampleDirection};
+
+
 pub use detection_pipeline::{DetectionContext, DetectionPipeline, DetectionResult};
 
 // Re-export key types from each detection module

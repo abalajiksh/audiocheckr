@@ -5,10 +5,10 @@
 //!
 //! Add this to your existing detection_pipeline.rs or use as a separate module.
 
-use crate::analysis::enf_detection::{
+use crate::core::analysis::enf_detection::{
     EnfDetector, EnfDetectionResult, EnfBaseFrequency, EnfRegion, EnfAnomalyType,
 };
-use crate::analysis::clipping_detection::{
+use crate::core::analysis::clipping_detection::{
     ClippingDetector, ClippingAnalysisResult, ClippingType,
     // NOTE: ClippingSeverity was removed - it doesn't exist in the actual module
     // Use ClippingCause, LikelyCause, TemporalDistribution instead

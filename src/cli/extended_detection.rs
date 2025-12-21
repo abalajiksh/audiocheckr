@@ -130,7 +130,7 @@ fn run_analysis(cli: &Cli, samples: &[f32], sample_rate: u32) {
 // Output Formatting Functions
 // ============================================================================
 
-use crate::analysis::detection_pipeline_enf_clipping::{
+use crate::core::analysis::detection_pipeline_enf_clipping::{
     ExtendedAnalysisResult, QualityGrade, QualityIssueType, AuthenticityResult,
 };
 
