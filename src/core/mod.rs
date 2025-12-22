@@ -29,5 +29,5 @@ pub use analysis::{
     ResampleQuality, ResampleDirection,
     // Existing analysis types
     BitDepthAnalysis, SpectralAnalysis, UpsamplingAnalysis,
-    PreEchoAnalysis, StereoAnalysis, TranscodeResult,
+    StereoAnalysis, TranscodeResult,
 };

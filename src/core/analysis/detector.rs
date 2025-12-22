@@ -13,6 +13,7 @@ use super::analysis::{
     SpectralAnalyzer, detect_transcode, Codec,
     MqaDetector,
 };
+use super::analysis::mqa_detection::MqaType;
 
 /// Detection configuration
 #[derive(Debug, Clone)]

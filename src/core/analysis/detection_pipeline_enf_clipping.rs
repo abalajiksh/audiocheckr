@@ -12,7 +12,7 @@ use crate::core::analysis::clipping_detection::{
     ClippingDetector, ClippingAnalysisResult, ClippingType,
     // NOTE: ClippingSeverity was removed - it doesn't exist in the actual module
     // Use ClippingCause, LikelyCause, TemporalDistribution instead
-    LikelyCause, TemporalDistribution,
+    TemporalDistribution,
 };
 
 /// Extended detection options including ENF and clipping analysis
@@ -299,8 +299,8 @@ impl ExtendedDetectionPipeline {
             }
 
             // Inter-sample peak penalty
-            if result.inter_sample_analysis.has_inter_sample_overs {
-                let isp_penalty = 0.1 * (result.inter_sample_analysis.inter_sample_over_count as f32 / 100.0).min(0.3);
+            if result.inter_sample_analysis.inter_sample_overs > 0 {
+                let isp_penalty = 0.1 * (result.inter_sample_analysis.inter_sample_overs as f32 / 100.0).min(0.3);
                 score -= isp_penalty;
                 
                 issues.push(QualityIssue {
@@ -308,14 +308,14 @@ impl ExtendedDetectionPipeline {
                     severity: isp_penalty / 0.3,
                     description: format!(
                         "{} inter-sample overs detected (true peak: {:.2} dBTP)",
-                        result.inter_sample_analysis.inter_sample_over_count,
+                        result.inter_sample_analysis.inter_sample_overs,
                         result.inter_sample_analysis.true_peak_db
                     ),
                 });
 
                 recommendations.push(format!(
                     "Apply {:.1} dB gain reduction to eliminate inter-sample peaks",
-                    -result.inter_sample_analysis.headroom_db
+                    -result.inter_sample_analysis.inter_sample_headroom_db
                 ));
             }
 
@@ -329,7 +329,7 @@ impl ExtendedDetectionPipeline {
                     description: format!(
                         "Loudness war victim: DR {:.1} dB, PLR {:.1} dB",
                         result.loudness_analysis.dynamic_range_db,
-                        result.loudness_analysis.peak_to_loudness_ratio
+                        result.loudness_analysis.plr_db
                     ),
                 });
 
@@ -353,7 +353,7 @@ impl ExtendedDetectionPipeline {
 
             // Check for soft clipping / limiter artifacts
             for event in &result.clipping_events {
-                match event.clipping_type {
+                match event.clip_type {
                     ClippingType::SoftAnalog => {
                         if !issues.iter().any(|i| i.issue_type == QualityIssueType::SoftClipping) {
                             issues.push(QualityIssue {

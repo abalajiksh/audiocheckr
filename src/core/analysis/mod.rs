@@ -36,23 +36,23 @@ pub mod detection_pipeline_enf_clipping;
 pub use bit_depth::{BitDepthAnalysis, analyze_bit_depth};
 pub use upsampling::{UpsamplingAnalysis, analyze_upsampling};
 pub use transients::{PreEchoAnalysis, analyze_pre_echo};
-pub use stereo::analyze_stereo;
-pub use spectral::{SpectralAnalysis, Codec, detect_transcode};
+pub use stereo::{analyze_stereo, StereoAnalysis};
+pub use spectral::{SpectralAnalysis, Codec, detect_transcode, TranscodeResult};
 pub use dither_detection::{DitherAlgorithm, DitherScale, NoiseSpectrumProfile};
 pub use resample_detection::{ResamplerEngine, ResampleQuality, ResampleDirection};
 
 
-pub use detection_pipeline::{DetectionContext, DetectionPipeline, DetectionResult};
+pub use detection_pipeline::DetectionContext;
 
 // Re-export key types from each detection module
 pub use dither_detection::{
-    DitherDetector, DitherDetectionResult, DitherType, DitherCharacteristics,
+    DitherDetector, DitherDetectionResult,
 };
 pub use resample_detection::{
-    ResampleDetector, ResampleDetectionResult, ResamplerType, ResamplerQuality,
+    ResampleDetector, ResampleDetectionResult,
 };
 pub use mqa_detection::{
-    MqaDetector, MqaDetectionResult, MqaAuthenticationStatus, MqaStudioProvenance,
+    MqaDetector, MqaDetectionResult, MqaType,
 };
 // Re-export ENF detection types
 pub use enf_detection::{
@@ -66,14 +66,12 @@ pub use enf_detection::{
     EnfMeasurement,
 };
 // Re-export Clipping detection types
-// NOTE: ClippingSeverity does NOT exist - use ClippingCause instead
 pub use clipping_detection::{
     ClippingDetector,
     ClippingAnalysisResult,
     ClippingType,
-    ClippingCause,           // NOT ClippingSeverity
+    ClippingCause,
     TemporalDistribution,
-    LikelyCause,
     RestorationAssessment,
     LoudnessAnalysis,
     InterSampleAnalysis,
@@ -99,12 +97,11 @@ pub use detection_pipeline_enf_clipping::{
     analyze_authenticity,
 };
 
-// Re-export internal analysis utilities
-pub(crate) use bit_depth::BitDepthAnalyzer;
-pub(crate) use spectral::SpectralAnalyzer;
-pub(crate) use upsampling::UpsamplingDetector;
-pub(crate) use stereo::StereoAnalyzer;
-pub(crate) use transients::TransientAnalyzer;
-pub(crate) use phase::PhaseAnalyzer;
-pub(crate) use true_peak::TruePeakMeter;
-pub(crate) use mfcc::MfccAnalyzer;
+// REMOVED - These types don't exist:
+// - BitDepthAnalyzer, UpsamplingDetector, StereoAnalyzer
+// - TransientAnalyzer, PhaseAnalyzer, TruePeakMeter, MfccAnalyzer
+// - DetectionPipeline, DetectionResult
+// - DitherType, DitherCharacteristics
+// - ResamplerType, ResamplerQuality
+// - MqaAuthenticationStatus, MqaStudioProvenance
+// - LikelyCause
