@@ -37,7 +37,8 @@ pub use bit_depth::{BitDepthAnalysis, analyze_bit_depth};
 pub use upsampling::{UpsamplingAnalysis, analyze_upsampling};
 pub use transients::{PreEchoAnalysis, analyze_pre_echo};
 pub use stereo::{analyze_stereo, StereoAnalysis};
-pub use spectral::{SpectralAnalysis, Codec, detect_transcode, TranscodeResult};
+// FIX: Added SpectralAnalyzer to the exports
+pub use spectral::{SpectralAnalysis, SpectralAnalyzer, Codec, detect_transcode, TranscodeResult};
 pub use dither_detection::{DitherAlgorithm, DitherScale, NoiseSpectrumProfile};
 pub use resample_detection::{ResamplerEngine, ResampleQuality, ResampleDirection};
 

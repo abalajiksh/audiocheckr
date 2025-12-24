@@ -191,23 +191,27 @@ pub fn print_text_report(result: &ExtendedAnalysisResult) {
         println!("│ Clipped Samples: {} ({:.4}%)                                │",
             clip.statistics.samples_at_digital_max,
             clip.statistics.clipping_percentage);
+        // FIX: Use peak_db instead of peak_level_db
         println!("│ Sample Peak: {:.2} dBFS                                     │",
-            clip.statistics.peak_level_db);
+            clip.statistics.peak_db);
         println!("│ True Peak: {:.2} dBTP                                       │",
             clip.inter_sample_analysis.true_peak_db);
+        // FIX: Use inter_sample_headroom_db instead of headroom_db
         println!("│ Headroom: {:.2} dB                                          │",
-            clip.inter_sample_analysis.headroom_db);
+            clip.inter_sample_analysis.inter_sample_headroom_db);
         println!("├─────────────────────────────────────────────────────────────┤");
         println!("│ LOUDNESS METRICS                                            │");
         println!("├─────────────────────────────────────────────────────────────┤");
+        // FIX: Use integrated_lufs instead of integrated_loudness_lufs
         println!("│ Integrated Loudness: {:.1} LUFS                             │",
-            clip.loudness_analysis.integrated_loudness_lufs);
+            clip.loudness_analysis.integrated_lufs);
         println!("│ Dynamic Range (DR): {:.1} dB                                │",
             clip.loudness_analysis.dynamic_range_db);
         println!("│ Crest Factor: {:.1} dB                                      │",
             clip.loudness_analysis.crest_factor_db);
+        // FIX: Use plr_db instead of peak_to_loudness_ratio
         println!("│ PLR (Peak-to-Loudness): {:.1} dB                            │",
-            clip.loudness_analysis.peak_to_loudness_ratio);
+            clip.loudness_analysis.plr_db);
         println!("│ Loudness War Victim: {}                                     │",
             if clip.loudness_analysis.loudness_war_victim { "YES ⚠️" } else { "NO" });
         println!("└─────────────────────────────────────────────────────────────┘");
@@ -222,8 +226,9 @@ pub fn print_text_report(result: &ExtendedAnalysisResult) {
             if let Some(method) = &clip.restoration_assessment.recommended_method {
                 println!("│ Recommended Method: {:?}                                    │", method);
             }
+            // FIX: Use restoration_quality instead of estimated_quality
             println!("│ Estimated Quality: {:.0}%                                    │",
-                clip.restoration_assessment.estimated_quality * 100.0);
+                clip.restoration_assessment.restoration_quality * 100.0);
             println!("│ Recoverable: {:.0}%                                          │",
                 clip.restoration_assessment.recoverable_percentage);
             println!("└─────────────────────────────────────────────────────────────┘");
@@ -342,8 +347,9 @@ pub fn print_detailed_report(result: &ExtendedAnalysisResult) {
         if !enf.harmonics.is_empty() {
             println!("Harmonics Detected:");
             for harmonic in &enf.harmonics {
+                // FIX: Use detected_frequency instead of frequency_hz, and strength_db instead of amplitude_db
                 println!("  - {:.1} Hz: {:.2} dB (SNR: {:.1} dB)",
-                    harmonic.frequency_hz, harmonic.amplitude_db, harmonic.snr_db);
+                    harmonic.detected_frequency, harmonic.strength_db, harmonic.snr_db);
             }
             println!();
         }
@@ -351,7 +357,8 @@ pub fn print_detailed_report(result: &ExtendedAnalysisResult) {
         println!("Frequency Trace: {} measurements", enf.frequency_trace.len());
         if let Some(first) = enf.frequency_trace.first() {
             if let Some(last) = enf.frequency_trace.last() {
-                println!("  Time span: {:.1}s - {:.1}s", first.time_secs, last.time_secs);
+                // FIX: Use time_offset_secs instead of time_secs
+                println!("  Time span: {:.1}s - {:.1}s", first.time_offset_secs, last.time_offset_secs);
                 println!("  Frequency range: {:.4} Hz - {:.4} Hz",
                     enf.frequency_trace.iter().map(|m| m.frequency_hz).fold(f32::INFINITY, f32::min),
                     enf.frequency_trace.iter().map(|m| m.frequency_hz).fold(f32::NEG_INFINITY, f32::max));

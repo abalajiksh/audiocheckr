@@ -17,8 +17,8 @@
 // Key Insight: Files at >48kHz CANNOT be direct MP3/AAC transcodes
 // because those codecs don't support sample rates above 48kHz.
 
-use crate::core::analysis::dither_detection::{DitherDetector, DitherDetectionResult, DitherAlgorithm};
-use crate::core::analysis::resample_detection::{ResampleDetector, ResampleDetectionResult, ResampleDirection};
+use crate::core::analysis::dither_detection::{DitherDetectionResult, DitherAlgorithm};
+use crate::core::analysis::resample_detection::{ResampleDetectionResult, ResampleDirection};
 
 /// Sample rate constraints for lossy codecs
 pub struct CodecConstraints {
