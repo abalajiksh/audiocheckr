@@ -1,11 +1,13 @@
-// src/core/detector.rs
+// src/core/analysis/detector.rs
 //
 // Quality issue detection with configurable thresholds and profiles.
 // This version actually uses spectral analysis to detect lossy transcodes.
+// NOTE: This file appears to be a duplicate/old version. The main detector 
+// is in src/core/detector.rs. This file should be removed or merged.
 
 use serde::{Deserialize, Serialize};
-use super::decoder::AudioData;
-use super::analysis::{
+use super::super::decoder::AudioData;
+use super::{
     analyze_bit_depth, BitDepthAnalysis,
     analyze_upsampling, UpsamplingAnalysis,
     analyze_pre_echo, PreEchoAnalysis,
@@ -13,7 +15,7 @@ use super::analysis::{
     SpectralAnalyzer, detect_transcode, Codec,
     MqaDetector,
 };
-use super::analysis::mqa_detection::MqaType;
+use super::mqa_detection::MqaType;
 
 /// Detection configuration
 #[derive(Debug, Clone)]
@@ -61,6 +63,13 @@ pub enum DefectType {
         original_rate: Option<u32>,
         mqa_type: String,
         lsb_entropy: f32,
+    },
+    UpsampledLossyTranscode {
+        original_rate: u32,
+        current_rate: u32,
+        codec: String,
+        estimated_bitrate: Option<u32>,
+        cutoff_hz: u32,
     },
 }
 
@@ -112,7 +121,10 @@ pub struct QualityReport {
 
 /// Run quality detection on decoded audio
 pub fn detect_quality_issues(audio: &AudioData, config: &DetectionConfig) -> QualityReport {
-    let mono = super::decoder::extract_mono(audio);
+    let mono = super::super::decoder::extract_mono(audio);
+    
+    // Initialize defects vector FIRST
+    let mut defects = Vec::new();
     
     // =========================================================================
     // SPECTRAL ANALYSIS - Detect lossy codec transcodes
@@ -166,7 +178,7 @@ pub fn detect_quality_issues(audio: &AudioData, config: &DetectionConfig) -> Qua
     // STEREO ANALYSIS
     // =========================================================================
     let stereo_analysis = if config.check_stereo && audio.channels >= 2 {
-        if let Some((left, right)) = super::decoder::extract_stereo(audio) {
+        if let Some((left, right)) = super::super::decoder::extract_stereo(audio) {
             Some(analyze_stereo(&left, &right, audio.sample_rate))
         } else {
             None
@@ -175,12 +187,7 @@ pub fn detect_quality_issues(audio: &AudioData, config: &DetectionConfig) -> Qua
         None
     };
     
-    // =========================================================================
-    // COLLECT DEFECTS
-    // =========================================================================
-    let mut defects = Vec::new();
-    
-    // ----- Check for lossy transcode (CRITICAL: This was missing!) -----
+    // ----- Check for lossy transcode -----
     if transcode_result.is_transcode && transcode_result.confidence > config.min_confidence {
         let mut evidence = vec![transcode_result.reason.clone()];
         
@@ -374,6 +381,8 @@ fn calculate_quality_score(
             DefectType::Clipping { .. } => 0.1,
             DefectType::InterSampleOvers { .. } => 0.05,
             DefectType::LowQuality { .. } => 0.15,
+            DefectType::MqaEncoded { .. } => 0.35,
+            DefectType::UpsampledLossyTranscode { .. } => 0.5,
         };
         score -= penalty * defect.confidence;
     }
