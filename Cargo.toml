@@ -27,6 +27,7 @@ md5 = "0.7"
 dirs = "5.0"
 rubato = "0.15"
 realfft = "3.3"
+uuid = { version = "1.0", features = ["v4"] }
 
 [features]
 default = []
