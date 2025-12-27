@@ -1,7 +1,7 @@
-// src/cli/mod.rs
-//
-// Command-line interface module for AudioCheckr
+//! Command-line interface module
 
+pub mod args;
 pub mod output;
 
-pub use output::{format_report, format_defect, format_defect_type, defect_severity_color};
+pub use args::Args;
+pub use output::OutputHandler;

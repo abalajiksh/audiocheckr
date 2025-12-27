@@ -1,108 +1,182 @@
-//! Audio analysis algorithms
-//!
-//! Contains specialized detection algorithms for:
-//! - Bit depth analysis (fake 24-bit detection)
-//! - Spectral analysis (frequency cutoff, lossy codec detection)
-//! - Upsampling detection
-//! - Stereo field analysis (joint stereo detection)
-//! - Transient/pre-echo analysis
-//! - Phase analysis
-//! - True peak measurement
-//! - MFCC (codec fingerprinting)
-//! - Dithering detection (rectangular, triangular, Shibata, etc.)
-//! - Resampling detection (SWR, SoXR, quality levels)
-//! - MQA detection (Master Quality Authenticated)
-//! - ENF detection (Electrical Network Frequency analysis)
-//! - Clipping detection (digital overs, inter-sample peaks, loudness war)
+//! Analysis types and result structures
 
-mod bit_depth;
-mod spectral;
-mod upsampling;
-mod stereo;
-mod transients;
-mod phase;
-mod true_peak;
-mod mfcc;
-pub mod dither;
-pub mod dither_detection;
-pub mod resample_detection;
-pub mod detection_pipeline;
-pub mod mqa_detection;
-pub mod enf_detection;
 pub mod clipping_detection;
 pub mod detection_pipeline_enf_clipping;
 
-// Add these public re-exports near the top of the file:
-pub use bit_depth::{BitDepthAnalysis, analyze_bit_depth};
-pub use upsampling::{UpsamplingAnalysis, analyze_upsampling};
-pub use transients::{PreEchoAnalysis, analyze_pre_echo};
-pub use stereo::{analyze_stereo, StereoAnalysis};
-// FIX: Added SpectralAnalyzer to the exports
-pub use spectral::{SpectralAnalysis, SpectralAnalyzer, Codec, detect_transcode, TranscodeResult};
-pub use dither_detection::{DitherAlgorithm, DitherScale, NoiseSpectrumProfile};
-pub use resample_detection::{ResamplerEngine, ResampleQuality, ResampleDirection};
+use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
+/// Configuration for audio analysis
+#[derive(Debug, Clone)]
+pub struct AnalysisConfig {
+    pub fft_size: usize,
+    pub hop_size: usize,
+    pub min_confidence: f64,
+    pub enable_mqa: bool,
+    pub enable_clipping: bool,
+    pub enable_enf: bool,
+    pub genre_profile: Option<String>,
+    pub sensitivity: AnalysisSensitivity,
+}
 
-pub use detection_pipeline::DetectionContext;
+impl Default for AnalysisConfig {
+    fn default() -> Self {
+        Self {
+            fft_size: 8192,
+            hop_size: 2048,
+            min_confidence: 0.5,
+            enable_mqa: false,
+            enable_clipping: false,
+            enable_enf: false,
+            genre_profile: None,
+            sensitivity: AnalysisSensitivity::Medium,
+        }
+    }
+}
 
-// Re-export key types from each detection module
-pub use dither_detection::{
-    DitherDetector, DitherDetectionResult,
-};
-pub use resample_detection::{
-    ResampleDetector, ResampleDetectionResult,
-};
-pub use mqa_detection::{
-    MqaDetector, MqaDetectionResult, MqaType,
-};
-// Re-export ENF detection types
-pub use enf_detection::{
-    EnfDetector,
-    EnfDetectionResult,
-    EnfBaseFrequency,
-    EnfRegion,
-    EnfAnomaly,
-    EnfAnomalyType,
-    EnfHarmonic,
-    EnfMeasurement,
-};
-// Re-export Clipping detection types
-pub use clipping_detection::{
-    ClippingDetector,
-    ClippingAnalysisResult,
-    ClippingType,
-    ClippingCause,
-    TemporalDistribution,
-    RestorationAssessment,
-    LoudnessAnalysis,
-    InterSampleAnalysis,
-    ClippingStatistics,
-    ClippingEvent,
-};
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnalysisSensitivity {
+    Low,
+    Medium,
+    High,
+}
 
-// Re-export Extended Detection Pipeline types
-pub use detection_pipeline_enf_clipping::{
-    ExtendedDetectionPipeline,
-    ExtendedDetectionOptions,
-    ExtendedAnalysisResult,
-    QualityAssessment,
-    QualityGrade,
-    QualityIssue,
-    QualityIssueType,
-    AuthenticityAssessment,
-    AuthenticityResult,
-    AuthenticityAnomaly,
-    // Convenience functions
-    analyze_audio_quality,
-    analyze_stereo_quality,
-    analyze_authenticity,
-};
+/// Complete analysis result for an audio file
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AnalysisResult {
+    pub file_path: PathBuf,
+    pub file_hash: String,
+    pub sample_rate: u32,
+    pub bit_depth: u16,
+    pub channels: u16,
+    pub duration: f64,
+    pub detections: Vec<Detection>,
+    pub confidence: f64,
+    pub quality_metrics: Option<QualityMetrics>,
+    pub analysis_timestamp: String,
+}
 
-// REMOVED - These types don't exist:
-// - BitDepthAnalyzer, UpsamplingDetector, StereoAnalyzer
-// - TransientAnalyzer, PhaseAnalyzer, TruePeakMeter, MfccAnalyzer
-// - DetectionPipeline, DetectionResult
-// - DitherType, DitherCharacteristics
-// - ResamplerType, ResamplerQuality
-// - MqaAuthenticationStatus, MqaStudioProvenance
-// - LikelyCause
+impl AnalysisResult {
+    /// Returns true if the file appears to be genuine lossless
+    pub fn is_genuine(&self) -> bool {
+        self.detections.is_empty() || 
+        self.detections.iter().all(|d| d.severity == Severity::Info || d.severity == Severity::Low)
+    }
+}
+
+/// A single detection/finding from the analysis
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Detection {
+    pub defect_type: DefectType,
+    pub confidence: f64,
+    pub severity: Severity,
+    pub method: DetectionMethod,
+    pub evidence: Option<String>,
+    pub temporal: Option<TemporalDistribution>,
+}
+
+/// Types of defects that can be detected
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum DefectType {
+    LossyTranscode {
+        codec: String,
+        estimated_bitrate: Option<u32>,
+        cutoff_hz: u32,
+    },
+    Upsampled {
+        original_rate: u32,
+        current_rate: u32,
+    },
+    BitDepthInflated {
+        actual_bits: u16,
+        claimed_bits: u16,
+    },
+    Clipping {
+        peak_level: f64,
+        clipped_samples: u64,
+    },
+    SilencePadding {
+        padding_duration: f64,
+    },
+    MqaEncoded {
+        original_rate: Option<u32>,
+        mqa_type: String,
+        lsb_entropy: f64,
+    },
+    UpsampledLossyTranscode {
+        original_rate: u32,
+        current_rate: u32,
+        codec: String,
+        estimated_bitrate: Option<u32>,
+        cutoff_hz: u32,
+    },
+}
+
+/// Severity levels for detections
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Severity {
+    Critical,
+    High,
+    Medium,
+    Low,
+    Info,
+}
+
+/// Detection method used to identify a defect
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DetectionMethod {
+    SpectralCutoff,
+    SpectralShape,
+    BitDepthAnalysis,
+    NullTest,
+    PhaseAnalysis,
+    TemporalAnalysis,
+    MqaSignature,
+    EnfAnalysis,
+    ClippingAnalysis,
+    StatisticalAnalysis,
+    MultiMethod,
+}
+
+/// Quality metrics for the audio file
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QualityMetrics {
+    pub dynamic_range: f64,
+    pub noise_floor: f64,
+    pub spectral_centroid: f64,
+    pub crest_factor: f64,
+    pub true_peak: f64,
+    pub lufs_integrated: f64,
+}
+
+impl Default for QualityMetrics {
+    fn default() -> Self {
+        Self {
+            dynamic_range: 0.0,
+            noise_floor: -96.0,
+            spectral_centroid: 0.0,
+            crest_factor: 0.0,
+            true_peak: 0.0,
+            lufs_integrated: -23.0,
+        }
+    }
+}
+
+/// Quality score enumeration
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum QualityScore {
+    Excellent,
+    Good,
+    Fair,
+    Poor,
+    Bad,
+}
+
+/// Temporal distribution of a detection
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TemporalDistribution {
+    pub start_time: f64,
+    pub end_time: f64,
+    pub peak_time: f64,
+    pub distribution: Vec<f64>,
+}

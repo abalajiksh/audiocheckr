@@ -1,92 +1,112 @@
-// src/cli/args.rs
-//
-// CLI argument parsing
+//! Command-line argument parsing
 
 use clap::Parser;
 use std::path::PathBuf;
 
+/// AudioCheckr - Advanced audio quality analysis tool
 #[derive(Parser, Debug, Clone)]
 #[command(name = "audiocheckr")]
-#[command(version = "0.3.0")]
-#[command(about = "Detect fake lossless, transcodes, and upsampled audio")]
+#[command(author = "Ashwin")]
+#[command(version = "0.12.0")]
+#[command(about = "Detects fake lossless audio files", long_about = None)]
 pub struct Args {
-    /// Input file or directory
-    #[arg(short, long, default_value = ".")]
+    /// Input file or directory to analyze
+    #[arg(required = true)]
     pub input: PathBuf,
 
-    /// Expected bit depth (16 or 24)
-    #[arg(short, long, default_value = "24")]
-    pub bit_depth: u32,
+    /// Output format (text, json, or detailed)
+    #[arg(short, long, default_value = "text")]
+    pub format: OutputFormat,
 
-    /// Generate spectrogram images
-    #[arg(short, long)]
-    pub spectrogram: bool,
-
-    /// Use linear frequency scale instead of mel scale
-    #[arg(long)]
-    pub linear_scale: bool,
-
-    /// Generate full-length spectrogram
-    #[arg(long)]
-    pub full_spectrogram: bool,
-
-    /// Output mode: "source", "current", or custom path
-    #[arg(short, long, default_value = "source")]
-    pub output: String,
-
-    /// Check for upsampling
-    #[arg(short = 'u', long)]
-    pub check_upsampling: bool,
-
-    /// Enable stereo analysis
-    #[arg(long)]
-    pub stereo: bool,
-
-    /// Enable transient/pre-echo analysis
-    #[arg(long)]
-    pub transients: bool,
-
-    /// Enable phase analysis (slower)
-    #[arg(long)]
-    pub phase: bool,
-
-    /// Verbose output with detailed analysis
+    /// Enable verbose output
     #[arg(short, long)]
     pub verbose: bool,
 
-    /// Output results as JSON
-    #[arg(long)]
-    pub json: bool,
-
-     /// Enable dithering detection (24→16 bit reduction)
-    #[arg(long)]
-    pub dithering: bool,
-
-    /// Enable resampling detection
-    #[arg(long)]
-    pub resampling: bool,
-
-    /// Minimum confidence threshold (0.0 - 1.0)
-    #[arg(long, default_value = "0.5")]
-    pub min_confidence: f32,
-
-    /// Quick mode - skip slower analyses
+    /// Process directories recursively
     #[arg(short, long)]
-    pub quick: bool,
+    pub recursive: bool,
 
-    /// Detection profile: standard, highres, electronic, noise, classical, podcast
-    #[arg(long, default_value = "standard")]
-    pub profile: String,
+    /// Number of parallel threads (0 = auto)
+    #[arg(short = 'j', long, default_value = "0")]
+    pub threads: usize,
 
-    /// Disable specific detectors (comma-separated)
+    /// Detection sensitivity (low, medium, high)
+    #[arg(short, long, default_value = "medium")]
+    pub sensitivity: Sensitivity,
+
+    /// Enable MQA detection
     #[arg(long)]
-    pub disable: Option<String>,
+    pub mqa: bool,
 
-    /// Show suppressed findings
+    /// Enable clipping detection
     #[arg(long)]
-    pub show_suppressed: bool,
+    pub clipping: bool,
+
+    /// Enable ENF (Electrical Network Frequency) analysis
+    #[arg(long)]
+    pub enf: bool,
+
+    /// Show spectrogram visualization
+    #[arg(long)]
+    pub spectrogram: bool,
+
+    /// Export detailed report to file
+    #[arg(long)]
+    pub report: Option<PathBuf>,
+
+    /// Minimum confidence threshold (0.0-1.0)
+    #[arg(long, default_value = "0.5")]
+    pub min_confidence: f64,
+
+    /// Genre profile for detection tuning
+    #[arg(long)]
+    pub genre: Option<GenreProfile>,
 }
 
-pub fn parse_args() -> Args {
-    Args::parse()
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum OutputFormat {
+    Text,
+    Json,
+    Detailed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum Sensitivity {
+    Low,
+    Medium,
+    High,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum GenreProfile {
+    Electronic,
+    Classical,
+    Rock,
+    Jazz,
+    Noise,
+    Ambient,
+    Pop,
+    HipHop,
+    Metal,
+    Acoustic,
+}
+
+impl Default for Args {
+    fn default() -> Self {
+        Self {
+            input: PathBuf::new(),
+            format: OutputFormat::Text,
+            verbose: false,
+            recursive: false,
+            threads: 0,
+            sensitivity: Sensitivity::Medium,
+            mqa: false,
+            clipping: false,
+            enf: false,
+            spectrogram: false,
+            report: None,
+            min_confidence: 0.5,
+            genre: None,
+        }
+    }
 }

@@ -2,35 +2,46 @@
 name = "audiocheckr"
 version = "0.3.5"
 edition = "2021"
-description = "Detect fake lossless files, transcodes, and upsampled audio with advanced spectral analysis"
-license = "AGPL-3.0"
+authors = ["Ashwin"]
+description = "Advanced audio quality analysis tool for detecting fake lossless files"
+license = "GPL-3.0"
 
 [dependencies]
-anyhow = "1.0"
-clap = { version = "4.0", features = ["derive"] }
+clap = { version = "4.4", features = ["derive", "env"] }
+hound = "3.5"
 symphonia = { version = "0.5", features = ["all"] }
-rustfft = "6.0"
-image = "0.24"
-imageproc = "0.23"
-rusttype = "0.9"
-walkdir = "2.3"
-colorful = "0.2"
+rustfft = "6.1"
+num-complex = "0.4"
+rayon = "1.8"
+indicatif = { version = "0.17", features = ["rayon"] }
+colorful = "0.3"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-rayon = "1.8"
-
-[dependencies.spectrum-analyzer]
-version = "1.5"
-
-[dev-dependencies]
-serde_json = "1.0"
-uuid = { version = "1.0", features = ["v4"] }
+walkdir = "2.4"
+log = "0.4"
+env_logger = "0.11"
+thiserror = "1.0"
+anyhow = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+md5 = "0.7"
+dirs = "5.0"
+rubato = "0.15"
+realfft = "3.3"
 
 [features]
 default = []
-integration_lib_tests = []
+simd = []
 
 [profile.release]
+opt-level = 3
 lto = true
 codegen-units = 1
-opt-level = 3
+panic = "abort"
+strip = true
+
+[profile.dev]
+opt-level = 1
+
+[[bin]]
+name = "audiocheckr"
+path = "src/main.rs"
