@@ -1,4 +1,51 @@
 pipeline {
+    def sendDiscordNotification(webhookUrl, status) {
+        def color
+        def emoji
+        def message
+
+        switch(status) {
+        case 'SUCCESS':
+        color = 3066993  // Green
+        emoji = '✅'
+        message = 'Build completed successfully!'
+        break
+        case 'UNSTABLE':
+        color = 16776960  // Yellow
+        emoji = '⚠️'
+        message = 'Build completed with test failures'
+        break
+        case 'FAILURE':
+        color = 15158332  // Red
+        emoji = '❌'
+        message = 'Build failed!'
+        break
+        default:
+        color = 9807270  // Gray
+        emoji = 'ℹ️'
+        message = 'Build completed'
+        }
+
+        discordSend(
+            webhookURL: webhookUrl,
+            title: "${emoji} AudioCheckr Build #${env.BUILD_NUMBER}",
+            description: """
+                        **Status:** ${message}
+                        **Test Type:** ${env.TEST_TYPE}
+                        **Commit:** ${env.GIT_COMMIT_SHORT ?: 'unknown'} by ${env.GIT_AUTHOR ?: 'unknown'}
+                        **Message:** ${env.GIT_COMMIT_MSG ?: 'No commit message'}
+                        **Duration:** ${currentBuild.durationString.replace(' and counting', '')}
+        """.trim(),
+            link: env.BUILD_URL,
+            result: status,
+            thumbnail: 'https://jenkins.io/images/logos/jenkins/jenkins.png',
+            customAvatarUrl: 'https://jenkins.io/images/logos/jenkins/jenkins.png',
+            customUsername: 'Jenkins AudioCheckr',
+            notes: "Build on ${env.NODE_NAME}",
+            successful: status == 'SUCCESS'
+        )
+    }
+
     agent any
     
     parameters {
@@ -608,48 +655,63 @@ EOF
             }
         }
     }
-    
+
     post {
         success {
             echo '✓ Build and tests completed successfully!'
+            script {
+                withCredentials([string(credentialsId: 'audiocheckrDiscordWebhook', variable: 'DISCORD_WEBHOOK')]) {
+                    sendDiscordNotification(DISCORD_WEBHOOK, 'SUCCESS')
+                }
+            }
         }
         unstable {
             echo '⚠ Build completed but some tests failed. Check test results.'
+            script {
+                withCredentials([string(credentialsId: 'audiocheckrDiscordWebhook', variable: 'DISCORD_WEBHOOK')]) {
+                    sendDiscordNotification(DISCORD_WEBHOOK, 'UNSTABLE')
+                }
+            }
         }
         failure {
             echo '✗ Build or tests failed. Check logs for details.'
+            script {
+                withCredentials([string(credentialsId: 'audiocheckrDiscordWebhook', variable: 'DISCORD_WEBHOOK')]) {
+                    sendDiscordNotification(DISCORD_WEBHOOK, 'FAILURE')
+                }
+            }
         }
         always {
             script {
                 // Archive x86_64 binary (on success or unstable)
                 if (currentBuild.result != 'FAILURE') {
-                    archiveArtifacts artifacts: 'target/release/audiocheckr', 
-                                   fingerprint: true, 
-                                   allowEmptyArchive: true
+                    archiveArtifacts artifacts: 'target/release/audiocheckr',
+                    fingerprint: true,
+                    allowEmptyArchive: true
                 }
-                
+
                 // Archive DSP diagnostic reports
                 if (env.TEST_TYPE == 'DSP_DIAGNOSTIC') {
-                    archiveArtifacts artifacts: 'target/dsp-diagnostics/**/*', 
-                                   allowEmptyArchive: true
-                    archiveArtifacts artifacts: 'target/test-results/dsp_diagnostic.txt', 
-                                   allowEmptyArchive: true
+                    archiveArtifacts artifacts: 'target/dsp-diagnostics/**/*',
+                    allowEmptyArchive: true
+                    archiveArtifacts artifacts: 'target/test-results/dsp_diagnostic.txt',
+                    allowEmptyArchive: true
                 }
-                
+
                 // Archive MQA test results
                 if (env.TEST_TYPE == 'MQA_TEST') {
-                    archiveArtifacts artifacts: 'target/test-results/mqa_test.txt', 
-                                   allowEmptyArchive: true
+                    archiveArtifacts artifacts: 'target/test-results/mqa_test.txt',
+                    allowEmptyArchive: true
                 }
             }
-            
+
             // Publish JUnit test results (shows in Jenkins UI)
             junit(
                 allowEmptyResults: true,
                 testResults: 'target/test-results/*.xml, target/allure-results/*-junit.xml',
                 skipPublishingChecks: false
             )
-            
+
             // Publish Allure report
             script {
                 try {
@@ -663,46 +725,46 @@ EOF
                     echo "⚠ Allure plugin not configured or failed: ${e.message}"
                     echo "  To enable: Install 'Allure Jenkins Plugin' from Plugin Manager"
                     echo "  Configure: Manage Jenkins → Global Tool Configuration → Allure Commandline"
-                    
+
                     // Archive the allure results as fallback
-                    archiveArtifacts artifacts: 'target/allure-results/**/*', 
-                                   allowEmptyArchive: true
-                    archiveArtifacts artifacts: 'target/allure-report/**/*', 
-                                   allowEmptyArchive: true
+                    archiveArtifacts artifacts: 'target/allure-results/**/*',
+                    allowEmptyArchive: true
+                    archiveArtifacts artifacts: 'target/allure-report/**/*',
+                    allowEmptyArchive: true
                 }
             }
-            
+
             // Clean up to save disk space
             script {
                 echo "🧹 Cleaning workspace to save disk space..."
-                
+
                 sh '''
-                    # Delete test files and ZIPs
-                    rm -f GenreTestSuiteLite.zip TestSuite.zip dithering_tests.zip resampling_tests.zip MQA.zip
-                    rm -rf GenreTestSuiteLite TestSuite dithering_tests resampling_tests MQA
-                    
-                    # Keep the release binary, clean build cache
-                    if [ -f target/release/audiocheckr ]; then
-                        cp target/release/audiocheckr /tmp/audiocheckr_backup_$BUILD_NUMBER 2>/dev/null || true
-                    fi
-                    
-                    # Clean target directory (saves ~2GB+)
-                    rm -rf target/debug
-                    rm -rf target/release/deps
-                    rm -rf target/release/build
-                    rm -rf target/release/.fingerprint
-                    rm -rf target/release/incremental
-                    
-                    # Restore binary
-                    if [ -f /tmp/audiocheckr_backup_$BUILD_NUMBER ]; then
-                        mkdir -p target/release
-                        mv /tmp/audiocheckr_backup_$BUILD_NUMBER target/release/audiocheckr
-                    fi
-                    
-                    echo "✓ Cleanup complete"
-                    du -sh . 2>/dev/null || true
-                '''
+                # Delete test files and ZIPs
+                rm -f GenreTestSuiteLite.zip TestSuite.zip dithering_tests.zip resampling_tests.zip MQA.zip
+                rm -rf GenreTestSuiteLite TestSuite dithering_tests resampling_tests MQA
+
+                # Keep the release binary, clean build cache
+                if [ -f target/release/audiocheckr ]; then
+                    cp target/release/audiocheckr /tmp/audiocheckr_backup_$BUILD_NUMBER 2>/dev/null || true
+                fi
+
+                # Clean target directory (saves ~2GB+)
+                rm -rf target/debug
+                rm -rf target/release/deps
+                rm -rf target/release/build
+                rm -rf target/release/.fingerprint
+                rm -rf target/release/incremental
+
+                # Restore binary
+                if [ -f /tmp/audiocheckr_backup_$BUILD_NUMBER ]; then
+                    mkdir -p target/release
+                    mv /tmp/audiocheckr_backup_$BUILD_NUMBER target/release/audiocheckr
+                fi
+
+                echo "✓ Cleanup complete"
+                du -sh . 2>/dev/null || true
+            '''
             }
         }
     }
-}
+
