@@ -395,15 +395,13 @@ EOF
                 }
 
                 stage('Qualification Genre Tests') {
-                    when {
-                        ex
-                            ression { return env.TEST_TYPE == 'QUALIFICAT
-                        ON_GENRE' }
-                    }
-                    steps {
-                        sh '''
-                            echo "=========================================="
-                            echo "Running QUALIFICATION GENRE tests"
+                when {
+                    expression { return env.TEST_TYPE == 'QUALIFICATION_GENRE' }
+                }
+                steps {
+                    sh '''
+                        echo "=========================================="
+                        echo "Running QUALIFICATION GENRE tests"
                             echo "=========================================="
                             
                             set +e
@@ -422,9 +420,7 @@ EOF
 
                 stage('Regression Genre Tests') {
                     when {
-                        ex
-                            ression { return env.TEST_TYPE == 'REGRESS
-                        ON_GENRE' }
+                        expression { return env.TEST_TYPE == 'REGRESSON_GENRE' }
                     }
                     steps {
                         sh '''
@@ -448,9 +444,7 @@ EOF
 
                 stage('Diagnostic Tests') {
                     when {
-                        ex
-                            ression { return env.TEST_TYPE == 'D
-                        AGNOSTIC' }
+                        expression { return env.TEST_TYPE == 'DAGNOSTIC' }
                     }
                     steps {
                         sh '''
@@ -474,9 +468,7 @@ EOF
 
                 stage('DSP Tests (Dithering & Resampling)') {
                     when {
-                        ex
-                            ression { return env.TEST_TYPE ==
-                        'DSP_TEST' }
+                        expression { return env.TEST_TYPE =='DSP_TEST' }
                     }
                     steps {
                         sh '''
@@ -505,9 +497,7 @@ EOF
 
                 stage('DSP Diagnostic Tests') {
                     when {
-                        ex
-                            ression { return env.TEST_TYPE == 'DSP_D
-                        AGNOSTIC' }
+                        expression { return env.TEST_TYPE == 'DSP_DAGNOSTIC' }
                     }
                     steps {
                         sh '''
@@ -549,9 +539,7 @@ EOF
 
                 stage('MQA Detection Tests') {
                     when {
-                        ex
-                            ression { return env.TEST_TYPE ==
-                        'MQA_TEST' }
+                        expression { return env.TEST_TYPE =='MQA_TEST' }
                     }
                     steps {
                         sh '''
@@ -633,11 +621,8 @@ EOF
         stage('SonarQube Analysis') {
             when {
                 allOf {
-                    ex
-                        ression { return !params.SKIP
-                    SONARQUBE }
-                    ex
-                        ression { return env.TEST_TYPE != 'DIAGNOSTIC' && env.TEST_TYPE != 'DSP_TEST' && env.TEST_TYPE != 'DSP_DIAGNOSTIC' && env.TEST_TYPE !=
+                    expression { return !params.SKIPSONARQUBE }
+                    expression { return env.TEST_TYPE != 'DIAGNOSTIC' && env.TEST_TYPE != 'DSP_TEST' && env.TEST_TYPE != 'DSP_DIAGNOSTIC' && env.TEST_TYPE !=
                     'MQA_TEST' }
                 }
             }
