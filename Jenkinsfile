@@ -44,10 +44,11 @@ def sendDiscordNotification(webhookUrl, status) {
         successful: status == 'SUCCESS'
     )
 }
-
 pipeline {
     agent any
     
+
+
     parameters {
         choice(
             name: 'TEST_TYPE',
@@ -65,7 +66,7 @@ pipeline {
             description: 'Clean workspace before build (use if seeing stale file issues)'
         )
     }
-    
+
     environment {
         // MinIO configuration
         MINIO_BUCKET = 'audiocheckr'
@@ -74,42 +75,42 @@ pipeline {
         MINIO_FILE_DITHERING = 'dithering_tests.zip'
         MINIO_FILE_RESAMPLING = 'resampling_tests.zip'
         MINIO_FILE_MQA = 'MQA.zip'
-        
+
         // SonarQube configuration
         SONAR_PROJECT_KEY = 'audiocheckr'
         SONAR_PROJECT_NAME = 'AudioCheckr'
         SONAR_SOURCES = 'src'
-        
+
         // Allure configuration
         ALLURE_RESULTS_DIR = 'target/allure-results'
         ALLURE_REPORT_DIR = 'target/allure-report'
-        
+
         // Path setup
         PATH = "$HOME/bin:$HOME/.cargo/bin:/usr/bin:$PATH"
-        
+
         // CI marker for test awareness
         CI = 'true'
     }
-    
+
     triggers {
         // Scheduled regression test - Saturday at 10:00 AM
         cron('0 10 * * 6')
     }
-    
+
     options {
         // Build timeout - increased for DSP tests with large files
         timeout(time: 90, unit: 'MINUTES')
-        
+
         // Keep last 10 builds
         buildDiscarder(logRotator(numToKeepStr: '10', artifactNumToKeepStr: '5'))
-        
+
         // Add timestamps to console output
         timestamps()
-        
+
         // Don't run concurrent builds
         disableConcurrentBuilds()
     }
-    
+
     stages {
         stage('Pre-flight') {
             steps {
@@ -119,7 +120,7 @@ pipeline {
                         deleteDir()
                         checkout scm
                     }
-                    
+
                     // Determine test type based on trigger
                     if (currentBuild.getBuildCauses('hudson.triggers.TimerTrigger$TimerTriggerCause')) {
                         // Scheduled build (cron) = REGRESSION_GENRE
@@ -134,7 +135,7 @@ pipeline {
                         env.TEST_TYPE = 'QUALIFICATION_GENRE'
                         echo "🔄 Push detected - running QUALIFICATION_GENRE tests"
                     }
-                    
+
                     // Display build info
                     echo """
 ========================================================
@@ -149,7 +150,7 @@ pipeline {
                 }
             }
         }
-        
+
         stage('Setup & Checkout') {
             parallel {
                 stage('Setup Tools') {
@@ -193,7 +194,7 @@ pipeline {
                         '''
                     }
                 }
-                
+
                 stage('Checkout') {
                     steps {
                         checkout scm
@@ -208,7 +209,7 @@ pipeline {
                 }
             }
         }
-        
+
         stage('Build & Prepare') {
             parallel {
                 stage('Build x86_64') {
@@ -227,7 +228,7 @@ pipeline {
                         '''
                     }
                 }
-                
+
                 stage('Download Test Files') {
                     steps {
                         script {
@@ -340,7 +341,7 @@ pipeline {
                 }
             }
         }
-        
+
         stage('Prepare Allure') {
             steps {
                 sh '''
@@ -369,7 +370,7 @@ EOF
                 '''
             }
         }
-        
+
         stage('Tests') {
             stages {
                 stage('Integration Tests') {
@@ -392,10 +393,12 @@ EOF
                         '''
                     }
                 }
-                
+
                 stage('Qualification Genre Tests') {
                     when {
-                        expression { return env.TEST_TYPE == 'QUALIFICATION_GENRE' }
+                        ex
+                            ression { return env.TEST_TYPE == 'QUALIFICAT
+                        ON_GENRE' }
                     }
                     steps {
                         sh '''
@@ -416,10 +419,12 @@ EOF
                         '''
                     }
                 }
-                
+
                 stage('Regression Genre Tests') {
                     when {
-                        expression { return env.TEST_TYPE == 'REGRESSION_GENRE' }
+                        ex
+                            ression { return env.TEST_TYPE == 'REGRESS
+                        ON_GENRE' }
                     }
                     steps {
                         sh '''
@@ -440,10 +445,12 @@ EOF
                         '''
                     }
                 }
-                
+
                 stage('Diagnostic Tests') {
                     when {
-                        expression { return env.TEST_TYPE == 'DIAGNOSTIC' }
+                        ex
+                            ression { return env.TEST_TYPE == 'D
+                        AGNOSTIC' }
                     }
                     steps {
                         sh '''
@@ -464,10 +471,12 @@ EOF
                         '''
                     }
                 }
-                
+
                 stage('DSP Tests (Dithering & Resampling)') {
                     when {
-                        expression { return env.TEST_TYPE == 'DSP_TEST' }
+                        ex
+                            ression { return env.TEST_TYPE ==
+                        'DSP_TEST' }
                     }
                     steps {
                         sh '''
@@ -493,10 +502,12 @@ EOF
                         '''
                     }
                 }
-                
+
                 stage('DSP Diagnostic Tests') {
                     when {
-                        expression { return env.TEST_TYPE == 'DSP_DIAGNOSTIC' }
+                        ex
+                            ression { return env.TEST_TYPE == 'DSP_D
+                        AGNOSTIC' }
                     }
                     steps {
                         sh '''
@@ -535,10 +546,12 @@ EOF
                         '''
                     }
                 }
-                
+
                 stage('MQA Detection Tests') {
                     when {
-                        expression { return env.TEST_TYPE == 'MQA_TEST' }
+                        ex
+                            ression { return env.TEST_TYPE ==
+                        'MQA_TEST' }
                     }
                     steps {
                         sh '''
@@ -583,7 +596,7 @@ EOF
                 }
             }
         }
-        
+
         stage('Generate Allure Report') {
             steps {
                 script {
@@ -616,12 +629,16 @@ EOF
                 }
             }
         }
-        
+
         stage('SonarQube Analysis') {
             when {
                 allOf {
-                    expression { return !params.SKIP_SONARQUBE }
-                    expression { return env.TEST_TYPE != 'DIAGNOSTIC' && env.TEST_TYPE != 'DSP_TEST' && env.TEST_TYPE != 'DSP_DIAGNOSTIC' && env.TEST_TYPE != 'MQA_TEST' }
+                    ex
+                        ression { return !params.SKIP
+                    SONARQUBE }
+                    ex
+                        ression { return env.TEST_TYPE != 'DIAGNOSTIC' && env.TEST_TYPE != 'DSP_TEST' && env.TEST_TYPE != 'DSP_DIAGNOSTIC' && env.TEST_TYPE !=
+                    'MQA_TEST' }
                 }
             }
             steps {
@@ -768,3 +785,4 @@ EOF
         }
     }
 
+}
