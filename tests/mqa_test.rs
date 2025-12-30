@@ -92,10 +92,8 @@ fn test_mqa_file(binary: &Path, path: &Path) -> Result<MqaTestResult, String> {
     let start = std::time::Instant::now();
     
     let output = Command::new(binary)
-        .arg("--input")
         .arg(path)
-        .arg("--bit-depth")
-        .arg("24")
+        .arg("--mqa")
         .arg("--verbose")
         .output()
         .map_err(|e| format!("Failed to execute binary: {}", e))?;

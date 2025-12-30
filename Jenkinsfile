@@ -1,51 +1,51 @@
-pipeline {
-    def sendDiscordNotification(webhookUrl, status) {
-        def color
-        def emoji
-        def message
+def sendDiscordNotification(webhookUrl, status) {
+    def color
+    def emoji
+    def message
 
-        switch(status) {
-        case 'SUCCESS':
-        color = 3066993  // Green
-        emoji = '✅'
-        message = 'Build completed successfully!'
-        break
-        case 'UNSTABLE':
-        color = 16776960  // Yellow
-        emoji = '⚠️'
-        message = 'Build completed with test failures'
-        break
-        case 'FAILURE':
-        color = 15158332  // Red
-        emoji = '❌'
-        message = 'Build failed!'
-        break
-        default:
-        color = 9807270  // Gray
-        emoji = 'ℹ️'
-        message = 'Build completed'
-        }
+    switch(status) {
+    case 'SUCCESS':
+    color = 3066993  // Green
+    emoji = '✅'
+    message = 'Build completed successfully!'
+    break
+    case 'UNSTABLE':
+    color = 16776960  // Yellow
+    emoji = '⚠️'
+    message = 'Build completed with test failures'
+    break
+    case 'FAILURE':
+    color = 15158332  // Red
+    emoji = '❌'
+    message = 'Build failed!'
+    break
+    default:
+    color = 9807270  // Gray
+    emoji = 'ℹ️'
+    message = 'Build completed'
+    }
 
-        discordSend(
-            webhookURL: webhookUrl,
-            title: "${emoji} AudioCheckr Build #${env.BUILD_NUMBER}",
-            description: """
+    discordSend(
+        webhookURL: webhookUrl,
+        title: "${emoji} AudioCheckr Build #${env.BUILD_NUMBER}",
+        description: """
                         **Status:** ${message}
                         **Test Type:** ${env.TEST_TYPE}
                         **Commit:** ${env.GIT_COMMIT_SHORT ?: 'unknown'} by ${env.GIT_AUTHOR ?: 'unknown'}
                         **Message:** ${env.GIT_COMMIT_MSG ?: 'No commit message'}
                         **Duration:** ${currentBuild.durationString.replace(' and counting', '')}
         """.trim(),
-            link: env.BUILD_URL,
-            result: status,
-            thumbnail: 'https://jenkins.io/images/logos/jenkins/jenkins.png',
-            customAvatarUrl: 'https://jenkins.io/images/logos/jenkins/jenkins.png',
-            customUsername: 'Jenkins AudioCheckr',
-            notes: "Build on ${env.NODE_NAME}",
-            successful: status == 'SUCCESS'
-        )
-    }
+        link: env.BUILD_URL,
+        result: status,
+        thumbnail: 'https://jenkins.io/images/logos/jenkins/jenkins.png',
+        customAvatarUrl: 'https://jenkins.io/images/logos/jenkins/jenkins.png',
+        customUsername: 'Jenkins AudioCheckr',
+        notes: "Build on ${env.NODE_NAME}",
+        successful: status == 'SUCCESS'
+    )
+}
 
+pipeline {
     agent any
     
     parameters {
