@@ -110,14 +110,14 @@ pub struct MqaDetector {
 impl Default for MqaDetector {
     fn default() -> Self {
         Self {
-            lsb_entropy_threshold: 0.85,
-            lsb_entropy_threshold_early: 0.60,  // Much lower for early encoders
-            noise_floor_threshold: 12.0,
-            noise_floor_threshold_early: 6.0,    // Lower for early encoders
+            lsb_entropy_threshold: 0.75,           // Lowered from 0.85 - current encoders
+            lsb_entropy_threshold_early: 0.45,     // Lowered from 0.60 - early encoders
+            noise_floor_threshold: 8.0,            // Lowered from 12.0
+            noise_floor_threshold_early: 3.0,      // Lowered from 6.0
             hf_analysis_freq: 18000.0,
-            analysis_window: 262144,             // ~5.9s at 44.1kHz
-            bit_pattern_threshold: 0.3,
-            detect_early_encoders: true,         // Enable by default
+            analysis_window: 262144,
+            bit_pattern_threshold: 0.25,           // Lowered from 0.3
+            detect_early_encoders: true,
         }
     }
 }
@@ -130,11 +130,11 @@ impl MqaDetector {
     /// Create detector optimized for early encoder versions
     pub fn for_early_encoders() -> Self {
         Self {
-            lsb_entropy_threshold: 0.60,
-            lsb_entropy_threshold_early: 0.45,
-            noise_floor_threshold: 6.0,
-            noise_floor_threshold_early: 3.0,
-            bit_pattern_threshold: 0.20,
+            lsb_entropy_threshold: 0.50,           // Lower for any MQA detection
+            lsb_entropy_threshold_early: 0.35,     // Very low for old encoders
+            noise_floor_threshold: 4.0,
+            noise_floor_threshold_early: 2.0,
+            bit_pattern_threshold: 0.15,
             detect_early_encoders: true,
             ..Default::default()
         }
@@ -334,7 +334,7 @@ impl MqaDetector {
         };
         
         // Detection threshold - lower for early encoders
-        let detection_threshold = if is_likely_early_encoder { 0.30 } else { 0.40 };
+        let detection_threshold = if is_likely_early_encoder { 0.20 } else { 0.30 };  // Lowered from 0.30/0.40
         result.is_mqa_encoded = result.confidence > detection_threshold;
         
         // Determine encoder version
@@ -366,37 +366,37 @@ impl MqaDetector {
     fn check_early_encoder_indicators(&self, result: &MqaDetectionResult) -> EarlyEncoderIndicators {
         let mut score = 0.0f32;
         let mut reasons = Vec::new();
-        
-        // Early encoders have lower entropy (0.5-0.75 range)
-        if result.lsb_entropy > 0.45 && result.lsb_entropy < 0.80 {
-            score += 0.25;
+
+        // Early encoders have moderate entropy (0.35-0.75 range, not as high as current)
+        if result.lsb_entropy > 0.35 && result.lsb_entropy < 0.75 {
+            score += 0.30;  // Increased weight
             reasons.push(format!("entropy in early range ({:.2})", result.lsb_entropy));
         }
-        
+
         // Early encoders have higher periodicity in LSBs
-        if result.lsb_periodicity_score > 0.25 {
-            score += 0.20;
+        if result.lsb_periodicity_score > 0.15 {  // Lowered from 0.25
+            score += 0.25;  // Increased weight
             reasons.push(format!("LSB periodicity ({:.2})", result.lsb_periodicity_score));
         }
-        
+
         // Early encoders have more clustered LSB values
-        if result.lsb_value_clustering > 0.35 {
+        if result.lsb_value_clustering > 0.25 {  // Lowered from 0.35
             score += 0.20;
             reasons.push(format!("value clustering ({:.2})", result.lsb_value_clustering));
         }
-        
+
         // Early encoders have specific bit transition rates
-        if result.bit_transition_rate > 0.40 && result.bit_transition_rate < 0.52 {
+        if result.bit_transition_rate > 0.38 && result.bit_transition_rate < 0.55 {  // Widened range
             score += 0.15;
             reasons.push(format!("transition rate ({:.2})", result.bit_transition_rate));
         }
-        
+
         // Early encoders have lower HF noise injection
-        if result.noise_floor_elevation > 3.0 && result.noise_floor_elevation < 12.0 {
+        if result.noise_floor_elevation > 2.0 && result.noise_floor_elevation < 15.0 {  // Widened
             score += 0.20;
             reasons.push(format!("moderate HF noise (+{:.1}dB)", result.noise_floor_elevation));
         }
-        
+
         EarlyEncoderIndicators { score, reasons }
     }
     
