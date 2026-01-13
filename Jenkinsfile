@@ -80,6 +80,7 @@ pipeline {
         SONAR_PROJECT_KEY = 'audiocheckr'
         SONAR_PROJECT_NAME = 'AudioCheckr'
         SONAR_SOURCES = 'src'
+        SONARQUBE_URL = "${env.SONARQUBE_URL ?: 'http://192.168.178.101:9000'}"
 
         // Allure configuration
         ALLURE_RESULTS_DIR = 'target/allure-results'
@@ -224,7 +225,7 @@ pipeline {
                             echo "=== x86_64 Build Artifact ==="
                             ls -lh target/release/audiocheckr
                             file target/release/audiocheckr
-                            echo "=============================="
+                            echo "============================="
                         '''
                     }
                 }
@@ -420,7 +421,7 @@ EOF
 
                 stage('Regression Genre Tests') {
                     when {
-                        expression { return env.TEST_TYPE == 'REGRESSON_GENRE' }
+                        expression { return env.TEST_TYPE == 'REGRESSION_GENRE' }
                     }
                     steps {
                         sh '''
@@ -444,7 +445,7 @@ EOF
 
                 stage('Diagnostic Tests') {
                     when {
-                        expression { return env.TEST_TYPE == 'DAGNOSTIC' }
+                        expression { return env.TEST_TYPE == 'DIAGNOSTIC' }
                     }
                     steps {
                         sh '''
@@ -468,7 +469,7 @@ EOF
 
                 stage('DSP Tests (Dithering & Resampling)') {
                     when {
-                        expression { return env.TEST_TYPE =='DSP_TEST' }
+                        expression { return env.TEST_TYPE == 'DSP_TEST' }
                     }
                     steps {
                         sh '''
@@ -497,7 +498,7 @@ EOF
 
                 stage('DSP Diagnostic Tests') {
                     when {
-                        expression { return env.TEST_TYPE == 'DSP_DAGNOSTIC' }
+                        expression { return env.TEST_TYPE == 'DSP_DIAGNOSTIC' }
                     }
                     steps {
                         sh '''
@@ -539,7 +540,7 @@ EOF
 
                 stage('MQA Detection Tests') {
                     when {
-                        expression { return env.TEST_TYPE =='MQA_TEST' }
+                        expression { return env.TEST_TYPE == 'MQA_TEST' }
                     }
                     steps {
                         sh '''
@@ -621,37 +622,32 @@ EOF
         stage('SonarQube Analysis') {
             when {
                 allOf {
-                    expression { return !params.SKIPSONARQUBE }
-                    expression { return env.TEST_TYPE != 'DIAGNOSTIC' && env.TEST_TYPE != 'DSP_TEST' && env.TEST_TYPE != 'DSP_DIAGNOSTIC' && env.TEST_TYPE !=
-                    'MQA_TEST' }
+                    expression { return !params.SKIP_SONARQUBE }
+                    expression { return env.TEST_TYPE != 'DIAGNOSTIC' && env.TEST_TYPE != 'DSP_TEST' && env.TEST_TYPE != 'DSP_DIAGNOSTIC' && env.TEST_TYPE != 'MQA_TEST' }
                 }
             }
             steps {
                 script {
-                    // Check if credential exists, if not skip
                     try {
+                        def scannerHome = tool name: 'SonarQube Scanner', type: 'hudson.plugins.sonar.SonarRunnerInstallation'
+                        
                         withCredentials([string(credentialsId: 'sonarqube-token', variable: 'SONAR_TOKEN')]) {
-                            sh '''
-                                if ! command -v sonar-scanner >/dev/null 2>&1; then
-                                    echo "⚠ sonar-scanner not found, skipping SonarQube analysis"
-                                    exit 0
-                                fi
-                                
-                                echo "=========================================="
-                                echo "Running SonarQube Analysis"
-                                echo "=========================================="
-                                
-                                sonar-scanner \
-                                    -Dsonar.projectKey=${SONAR_PROJECT_KEY} \
-                                    -Dsonar.projectName="${SONAR_PROJECT_NAME}" \
-                                    -Dsonar.sources=${SONAR_SOURCES} \
-                                    -Dsonar.host.url=${SONARQUBE_URL} \
-                                    -Dsonar.login=${SONAR_TOKEN}
-                            '''
+                            echo "=========================================="
+                            echo "Running SonarQube Analysis"
+                            echo "=========================================="
+                            
+                            sh """
+                                \"${scannerHome}/bin/sonar-scanner\" \\
+                                    -Dsonar.projectKey=${SONAR_PROJECT_KEY} \\
+                                    -Dsonar.projectName=\"${SONAR_PROJECT_NAME}\" \\
+                                    -Dsonar.sources=${SONAR_SOURCES} \\
+                                    -Dsonar.host.url=${SONARQUBE_URL} \\
+                                    -Dsonar.token=\$SONAR_TOKEN
+                            """
                         }
                     } catch (Exception e) {
-                        echo "⚠ SonarQube credential not found (sonarqube-token), skipping analysis"
-                        echo "  To enable: Add 'sonarqube-token' credential in Jenkins"
+                        echo "⚠ SonarQube analysis failed: ${e.message}"
+                        echo "  Verify: 'sonarqube-token' credential is valid"
                     }
                 }
             }
