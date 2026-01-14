@@ -34,7 +34,7 @@ use std::collections::{HashMap, HashSet};
 
 use test_utils::{
     AllureTestBuilder, AllureTestSuite, AllureEnvironment, AllureSeverity,
-    write_categories, default_audiocheckr_categories,
+    write_categories, default_audiocheckr_categories, get_binary_path, run_audiocheckr
 };
 
 #[derive(Clone)]
@@ -84,7 +84,6 @@ struct TestResult {
 
 #[test]
 fn test_qualification_genre_suite() {
-    let binary_path = get_binary_path();
     let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let allure_results_dir = project_root.join("target").join("allure-results");
     
@@ -123,7 +122,7 @@ fn test_qualification_genre_suite() {
     println!("Found {} files across {} categories\n", total_tests, count_categories(&test_cases));
 
     // Run tests in parallel with 4 threads
-    let results = run_tests_parallel(&binary_path, test_cases.clone(), 4);
+    let results = run_tests_parallel(test_cases.clone(), 4);
 
     // Create Allure test suite
     let mut allure_suite = AllureTestSuite::new("Qualification Genre Tests", &allure_results_dir);
@@ -541,11 +540,9 @@ fn count_categories(cases: &[GenreTestCase]) -> usize {
 }
 
 fn run_tests_parallel(
-    binary: &Path,
     test_cases: Vec<GenreTestCase>,
     num_threads: usize,
 ) -> Vec<TestResult> {
-    let binary = binary.to_path_buf();
     let test_cases = Arc::new(test_cases);
     let results = Arc::new(Mutex::new(Vec::new()));
     let index = Arc::new(Mutex::new(0usize));
@@ -554,7 +551,6 @@ fn run_tests_parallel(
     println!("Running tests with {} parallel threads...\n", num_threads);
 
     for _ in 0..num_threads {
-        let binary = binary.clone();
         let test_cases = Arc::clone(&test_cases);
         let results = Arc::clone(&results);
         let index = Arc::clone(&index);
@@ -572,7 +568,7 @@ fn run_tests_parallel(
                 };
 
                 let test_case = &test_cases[current_idx];
-                let result = run_single_test(&binary, test_case);
+                let result = run_single_test(test_case);
 
                 if current_idx > 0 && current_idx % 10 == 0 {
                     println!("Progress: {}/{} tests completed", current_idx, test_cases.len());
@@ -723,15 +719,14 @@ fn validate_test_result(
     }
 }
 
-fn run_single_test(binary: &Path, test_case: &GenreTestCase) -> TestResult {
+fn run_single_test(test_case: &GenreTestCase) -> TestResult {
     let start = std::time::Instant::now();
     
-    let output = Command::new(binary)
-        .arg("--input")
-        .arg(&test_case.file_path)
-        .arg("--bit-depth")
-        .arg("24")
-        .arg("--check-upsampling")
+    // Use the shared run_audiocheckr helper via positional args
+    // Use high sensitivity for testing to ensure strict checking
+    let output = run_audiocheckr(&test_case.file_path)
+        .arg("--sensitivity")
+        .arg("high")
         .output()
         .expect("Failed to execute binary");
 
@@ -769,36 +764,6 @@ fn sanitize_name(s: &str) -> String {
     s.chars()
         .map(|c| if c.is_alphanumeric() || c == '_' { c } else { '_' })
         .collect()
-}
-
-fn get_binary_path() -> PathBuf {
-    let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    path.push("target");
-
-    let release_path = path.join("release").join("audiocheckr");
-    let debug_path = path.join("debug").join("audiocheckr");
-
-    #[cfg(windows)]
-    {
-        let release_path_exe = release_path.with_extension("exe");
-        let debug_path_exe = debug_path.with_extension("exe");
-        if release_path_exe.exists() {
-            return release_path_exe;
-        } else if debug_path_exe.exists() {
-            return debug_path_exe;
-        }
-    }
-
-    #[cfg(unix)]
-    {
-        if release_path.exists() {
-            return release_path;
-        } else if debug_path.exists() {
-            return debug_path;
-        }
-    }
-
-    panic!("Binary not found. Run: cargo build --release");
 }
 
 #[test]
