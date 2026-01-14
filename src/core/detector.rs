@@ -162,9 +162,9 @@ impl AudioDetector {
             detections.push(detection);
         }
         
-        // 4. MQA detection (if enabled)
+        // 4. MQA detection (if enabled) - FIXED: now passes bit_depth
         if self.config.enable_mqa {
-            if let Some(detection) = self.detect_mqa(samples, sample_rate)? {
+            if let Some(detection) = self.detect_mqa(samples, sample_rate, bit_depth)? {
                 detections.push(detection);
             }
         }
@@ -395,67 +395,30 @@ impl AudioDetector {
         Ok(None)
     }
 
-    /// Detect MQA encoding
-    fn detect_mqa(&self, samples: &[f32], sample_rate: u32) -> Result<Option<Detection>> {
-        // MQA detection looks for specific LSB patterns and signatures
-        // This is a simplified implementation
+    /// Detect MQA encoding - FIXED: Now uses proper MqaDetector with bit_depth parameter
+    fn detect_mqa(&self, samples: &[f32], sample_rate: u32, bit_depth: u16) -> Result<Option<Detection>> {
+        use crate::core::analysis::mqa_detection::MqaDetector;
         
-        if samples.len() < 4096 {
-            return Ok(None);
-        }
+        // Use the comprehensive MQA detector with proper 24-bit handling
+        let detector = MqaDetector::default();
+        let result = detector.detect(samples, sample_rate, bit_depth as u32);
         
-        // Calculate LSB entropy
-        let mut lsb_values = Vec::with_capacity(samples.len());
-        for &sample in samples {
-            let int_val = (sample * 32767.0) as i16;
-            lsb_values.push((int_val & 0x7) as u8); // Bottom 3 bits
-        }
-        
-        // Calculate entropy of LSB values
-        let mut histogram = [0u64; 8];
-        for &v in &lsb_values {
-            histogram[v as usize] += 1;
-        }
-        
-        let total = lsb_values.len() as f64;
-        let entropy: f64 = histogram
-            .iter()
-            .filter(|&&c| c > 0)
-            .map(|&c| {
-                let p = c as f64 / total;
-                -p * p.log2()
-            })
-            .sum();
-        
-        // MQA typically has lower LSB entropy due to encoding
-        // Maximum entropy for 3 bits is 3.0
-        let expected_entropy = 3.0;
-        let entropy_ratio = entropy / expected_entropy;
-        
-        if entropy_ratio < 0.7 {
-            let confidence = (0.7 - entropy_ratio) / 0.3;
-            let confidence = confidence.clamp(0.0, 1.0);
-            
-            // Try to detect MQA type
-            let mqa_type = if entropy_ratio < 0.4 {
-                "MQA Studio"
-            } else {
-                "MQA"
+        if result.is_mqa_encoded {
+            let mqa_type = match result.mqa_type {
+                Some(ref t) => format!("{:?}", t),
+                None => "Unknown".to_string(),
             };
             
             return Ok(Some(Detection {
                 defect_type: DefectType::MqaEncoded {
-                    original_rate: Some(sample_rate * 2), // Typical MQA unfolds to 2x
-                    mqa_type: mqa_type.to_string(),
-                    lsb_entropy: entropy,
+                    original_rate: result.original_sample_rate,
+                    mqa_type,
+                    lsb_entropy: result.lsb_entropy as f64,
                 },
-                confidence,
-                severity: Severity::Info, // MQA is not necessarily a defect
+                confidence: result.confidence as f64,
+                severity: Severity::Info, // MQA is informational, not a defect
                 method: DetectionMethod::MqaSignature,
-                evidence: Some(format!(
-                    "LSB entropy {:.2} (expected ~{:.2} for PCM)",
-                    entropy, expected_entropy
-                )),
+                evidence: Some(result.evidence.join("; ")),
                 temporal: None,
             }));
         }
