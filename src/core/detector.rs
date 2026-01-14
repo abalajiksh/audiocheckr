@@ -147,29 +147,51 @@ impl AudioDetector {
         // Convert to f64 for analysis
         let samples_f64: Vec<f64> = samples.iter().map(|&s| s as f64).collect();
         
-        // 1. Spectral cutoff detection (transcode detection)
+        // 1. Dithering Detection
+        if let Some(detection) = self.detect_dithering(samples, bit_depth)? {
+             detections.push(detection);
+             // If dithered, upsampling detection might need to be less strict or skipped?
+             // We'll let it run but inform logic
+        }
+
+        // 2. Resampling Detection
+        let mut found_resampling = false;
+        if let Some(detection) = self.detect_resampling(samples, sample_rate)? {
+             detections.push(detection);
+             found_resampling = true;
+        }
+
+        // 3. Spectral cutoff detection (transcode detection)
+        // If we found specific resampling evidence, we might skip generic transcode detection 
+        // to avoid duplicate/conflicting findings, but transcode usually implies LOSSY (MP3 cutoffs).
         if let Some(detection) = self.detect_spectral_cutoff(&samples_f64, sample_rate)? {
-            detections.push(detection);
+            // Filter out if we already found resampling that explains the cutoff
+            if !found_resampling {
+                detections.push(detection);
+            }
         }
         
-        // 2. Upsampling detection
-        if let Some(detection) = self.detect_upsampling(&samples_f64, sample_rate)? {
-            detections.push(detection);
+        // 4. Upsampling detection (generic)
+        // Avoid if we already identified it as specific Resampling
+        if !found_resampling {
+            if let Some(detection) = self.detect_upsampling(&samples_f64, sample_rate)? {
+                detections.push(detection);
+            }
         }
         
-        // 3. Bit depth analysis
+        // 5. Bit depth analysis
         if let Some(detection) = self.detect_bit_depth_inflation(samples, bit_depth)? {
             detections.push(detection);
         }
         
-        // 4. MQA detection (if enabled) - FIXED: now passes bit_depth
+        // 6. MQA detection (if enabled)
         if self.config.enable_mqa {
             if let Some(detection) = self.detect_mqa(samples, sample_rate, bit_depth)? {
                 detections.push(detection);
             }
         }
         
-        // 5. Clipping detection (if enabled)
+        // 7. Clipping detection (if enabled)
         if self.config.enable_clipping {
             if let Some(detection) = self.detect_clipping(samples, sample_rate)? {
                 detections.push(detection);
@@ -180,6 +202,62 @@ impl AudioDetector {
         detections.retain(|d| d.confidence >= self.config.min_confidence);
         
         Ok(detections)
+    }
+
+    fn detect_dithering(&self, samples: &[f32], bit_depth: u16) -> Result<Option<Detection>> {
+        use crate::core::analysis::dithering_detection::{DitheringDetector, DitherType};
+        let detector = DitheringDetector::new();
+        let result = detector.detect(samples, bit_depth);
+        
+        if result.is_dithered {
+            let type_str = match result.dither_type {
+                DitherType::TPDF => "TPDF",
+                DitherType::RPDF => "RPDF",
+                DitherType::Shaped => "Noise Shaped",
+                DitherType::Gaussian => "Gaussian",
+                _ => "Unknown",
+            };
+            
+            return Ok(Some(Detection {
+                defect_type: DefectType::DitheringDetected {
+                    dither_type: type_str.to_string(),
+                    bit_depth: result.bit_depth,
+                    noise_shaping: result.noise_shaping,
+                },
+                confidence: result.confidence,
+                severity: Severity::Info,
+                method: DetectionMethod::NoiseFloorAnalysis,
+                evidence: Some(format!("{} dither detected at {} bits", type_str, result.bit_depth)),
+                temporal: None,
+            }));
+        }
+        Ok(None)
+    }
+
+    fn detect_resampling(&self, samples: &[f32], sample_rate: u32) -> Result<Option<Detection>> {
+        use crate::core::analysis::resampling_detection::ResamplingDetector;
+        let detector = ResamplingDetector::new();
+        let result = detector.detect(samples, sample_rate);
+        
+        if result.is_resampled {
+            let quality = result.quality;
+            let target = result.target_rate;
+            let orig = result.original_rate.unwrap_or(0);
+            
+            return Ok(Some(Detection {
+                defect_type: DefectType::ResamplingDetected {
+                    original_rate: orig,
+                    target_rate: target,
+                    quality: quality.clone(),
+                },
+                confidence: result.confidence,
+                severity: Severity::Medium, // Resampling is usually a modification
+                method: DetectionMethod::SpectralShape,
+                evidence: Some(format!("Resampling signature detected: {}", quality)),
+                temporal: None,
+            }));
+        }
+        Ok(None)
     }
 
     /// Detect lossy transcode via spectral cutoff
