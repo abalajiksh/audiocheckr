@@ -1,6 +1,6 @@
 use crate::core::analysis::{AnalysisResult, DefectType, Severity};
 use anyhow::Result;
-use colorful::Colorful; // Correct import
+use colorful::Colorful;
 use serde_json::json;
 
 pub struct OutputHandler {
@@ -44,10 +44,11 @@ impl OutputHandler {
                         Severity::Info => colorful::Color::Blue,
                     };
 
-                    let severity_str = format!("{:?}", detection.severity).color(severity_color);
+                    let severity_str = format!("{:?}", detection.severity);
+                    let colored_severity = severity_str.as_str().color(severity_color);
                     let confidence_str = format!("{:.0}%", detection.confidence * 100.0);
                     
-                    print!("     - [{}] ({}) ", severity_str, confidence_str);
+                    print!("     - [{}] ({}) ", colored_severity, confidence_str);
 
                     match &detection.defect_type {
                         DefectType::LossyTranscode { codec, estimated_bitrate, cutoff_hz } => {
