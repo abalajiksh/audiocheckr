@@ -242,6 +242,27 @@ fn format_defect(defect: &DefectType, confidence: f64) -> String {
                 codec, bitrate_str, original_rate, current_rate, cutoff_hz, conf_str
             )
         }
+        DefectType::DitheringDetected {
+            dither_type,
+            bit_depth,
+            noise_shaping,
+        } => {
+            let shaping_str = if *noise_shaping { " (shaped)" } else { "" };
+            format!(
+                "Dithering detected: {} {}-bit{}{}",
+                dither_type, bit_depth, shaping_str, conf_str
+            )
+        }
+        DefectType::ResamplingDetected {
+            original_rate,
+            target_rate,
+            quality,
+        } => {
+            format!(
+                "Resampling detected: {} Hz → {} Hz ({}){}",
+                original_rate, target_rate, quality, conf_str
+            )
+        }
     }
 }
 
@@ -255,6 +276,8 @@ fn get_severity_icon(defect: &DefectType) -> &'static str {
         DefectType::SilencePadding { .. } => "[.]",
         DefectType::MqaEncoded { .. } => "[i]",
         DefectType::UpsampledLossyTranscode { .. } => "[!!!]",
+        DefectType::DitheringDetected { .. } => "[i]",
+        DefectType::ResamplingDetected { .. } => "[!]",
     }
 }
 
