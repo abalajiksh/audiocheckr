@@ -5,13 +5,86 @@
 // v2: Added "Wrong Defect Type" category for detecting incorrect defect classification
 // v3: Added AllureStatus enum for compatibility with qualification_test.rs
 // v4: Added "Extra Defects" category for detecting additional wrong defects beyond expected
+// v5: Added CLI execution helpers for centralized argument management
 
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output};
+use std::env;
 use uuid::Uuid;
 use serde::{Deserialize, Serialize};
+
+// ============================================================================
+// CLI Execution Helpers
+// ============================================================================
+
+/// Get the path to the compiled audiocheckr binary
+pub fn get_binary_path() -> PathBuf {
+    let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    path.push("target");
+
+    #[cfg(windows)]
+    let binary_name = "audiocheckr.exe";
+    #[cfg(not(windows))]
+    let binary_name = "audiocheckr";
+
+    let release_path = path.join("release").join(binary_name);
+    let debug_path = path.join("debug").join(binary_name);
+
+    if release_path.exists() {
+        release_path
+    } else if debug_path.exists() {
+        debug_path
+    } else {
+        // Fallback for when running in non-standard environments
+        // Try looking in target/debug or target/release without binary suffix first
+        if path.join("release").exists() {
+             return path.join("release").join(binary_name);
+        }
+        panic!("Binary not found at:\n  - {}\n  - {}\nRun: cargo build --release", 
+            release_path.display(), debug_path.display());
+    }
+}
+
+/// Create a base Command for running audiocheckr with the given input
+/// Automatically handles the move from --input flag to positional argument
+pub fn run_audiocheckr<P: AsRef<Path>>(input: P) -> Command {
+    let binary = get_binary_path();
+    let mut cmd = Command::new(&binary);
+    cmd.arg(input.as_ref());
+    cmd
+}
+
+/// Run analysis with verbose output and high sensitivity
+/// This is the standard configuration for most tests
+pub fn run_verbose_analysis<P: AsRef<Path>>(input: P) -> Output {
+    run_audiocheckr(input)
+        .arg("--verbose")
+        .arg("--sensitivity")
+        .arg("high")
+        .output()
+        .expect("Failed to execute audiocheckr")
+}
+
+/// Run analysis with MQA detection enabled
+pub fn run_mqa_analysis<P: AsRef<Path>>(input: P) -> Output {
+    run_audiocheckr(input)
+        .arg("--mqa")
+        .arg("--verbose")
+        .output()
+        .expect("Failed to execute audiocheckr")
+}
+
+/// Run analysis requesting JSON output
+pub fn run_json_analysis<P: AsRef<Path>>(input: P) -> Output {
+    run_audiocheckr(input)
+        .arg("--format")
+        .arg("json")
+        .output()
+        .expect("Failed to execute audiocheckr")
+}
 
 // ============================================================================
 // Allure Report Structures
