@@ -37,7 +37,7 @@ impl ResamplingDetector {
         // Scan from Nyquist down
         let mut cutoff_bin = 0;
         let mut found_cutoff = false;
-        let noise_floor_db = -100.0; // Assumption
+        let _noise_floor_db = -100.0; // Assumption (unused, prefixed with _)
         let signal_threshold = -80.0;
         
         for i in (100..spectrum.len()).rev() {
@@ -75,7 +75,7 @@ impl ResamplingDetector {
             if rate >= sample_rate { continue; }
             let nyquist = rate as f64 / 2.0;
             
-            // Filters usually cut at 90-99% of Nyquist
+            // Filters usually cut off at 90-99% of Nyquist
             // SoXR default is ~91%. VHQ is ~95%?
             
             if cutoff_freq < nyquist && cutoff_freq > nyquist * 0.8 {
@@ -98,16 +98,6 @@ impl ResamplingDetector {
         }
         
         if let Some(orig) = matched_rate {
-             // It looks like Upsampling (or Downsampling if we consider the history, but here we see "Upsampling" evidence in the current file)
-             // Wait, "Downsampling detection" in the user query implies 176->96 should be detected.
-             // If 176->96, the cutoff is ~48k. The file is 96k. The cutoff is AT the new Nyquist.
-             // So it's FULL BANDWIDTH for the new rate.
-             // How do we detect it was downsampled?
-             // Maybe by the "sharpness" of the cut at 48k vs natural roll-off?
-             // Natural audio rarely has a brickwall at 48k.
-             // If we see a brickwall at 48k (or just below, e.g. 43k), it's a digital filter.
-             // So if `cutoff_freq` is close to `sample_rate/2`, check slope.
-             
              return ResamplingResult {
                  is_resampled: true,
                  original_rate: Some(orig),
@@ -116,14 +106,6 @@ impl ResamplingDetector {
                  confidence: match_confidence,
              };
         } 
-        
-        // Check for Downsampling (Current rate is lower than original, but filter signature remains?)
-        // Actually, if downsampled 176->96, we see a filter at ~48k.
-        // If the file is 96k, a filter at 48k is expected for ANY digital audio at 96k?
-        // Yes, but standard ADCs have softer roll-offs or different phases.
-        // SoXR / Resamplers have very distinctive "Brickwall" linear phase responses.
-        // If we detect a very sharp brickwall at > 20kHz, it's likely Resampled or Synthesized.
-        // Natural recordings roll off smoother.
         
         // Check for 96k file with brickwall at ~43k-47k
         let current_nyquist = sample_rate as f64 / 2.0;
