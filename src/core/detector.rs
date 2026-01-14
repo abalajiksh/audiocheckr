@@ -2,7 +2,7 @@
 
 use crate::core::analysis::{
     AnalysisConfig, AnalysisResult, DefectType, Detection, DetectionMethod,
-    QualityMetrics, Severity, TemporalDistribution,
+    QualityMetrics, Severity,
 };
 use crate::core::dsp::{SpectralAnalyzer, WindowFunction};
 use anyhow::{Context, Result};
