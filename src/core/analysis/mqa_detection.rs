@@ -111,12 +111,12 @@ impl Default for MqaDetector {
     fn default() -> Self {
         Self {
             lsb_entropy_threshold: 0.75,           // Lowered from 0.85 - current encoders
-            lsb_entropy_threshold_early: 0.40,     // Lowered from 0.45 - early encoders (FIXED)
-            noise_floor_threshold: 6.0,            // Lowered from 8.0 (FIXED)
-            noise_floor_threshold_early: 2.0,      // Lowered from 3.0 (FIXED)
+            lsb_entropy_threshold_early: 0.40,     // Lowered from 0.45 - early encoders
+            noise_floor_threshold: 6.0,            // Lowered from 8.0
+            noise_floor_threshold_early: 2.0,      // Lowered from 3.0
             hf_analysis_freq: 18000.0,
             analysis_window: 262144,
-            bit_pattern_threshold: 0.20,           // Lowered from 0.25 (FIXED)
+            bit_pattern_threshold: 0.20,           // Lowered from 0.25
             detect_early_encoders: true,
         }
     }
@@ -131,9 +131,9 @@ impl MqaDetector {
     pub fn for_early_encoders() -> Self {
         Self {
             lsb_entropy_threshold: 0.50,           // Lower for any MQA detection
-            lsb_entropy_threshold_early: 0.30,     // Very low for old encoders (FIXED)
+            lsb_entropy_threshold_early: 0.30,     // Very low for old encoders
             noise_floor_threshold: 4.0,
-            noise_floor_threshold_early: 1.5,      // FIXED
+            noise_floor_threshold_early: 1.5,
             bit_pattern_threshold: 0.15,
             detect_early_encoders: true,
             ..Default::default()
@@ -165,6 +165,13 @@ impl MqaDetector {
         // Limit analysis to reasonable window
         let analysis_len = samples.len().min(self.analysis_window);
         let samples = &samples[..analysis_len];
+        
+        // FIXED: Check for silence before processing
+        let rms = Self::calculate_rms(samples);
+        if rms < 1e-6 {
+            result.evidence.push("Audio appears to be silence or near-silent".to_string());
+            return result;
+        }
         
         // 1. Analyze LSB entropy (primary indicator)
         result.lsb_entropy = self.analyze_lsb_entropy(samples);
@@ -390,6 +397,20 @@ impl MqaDetector {
         result
     }
     
+    /// Calculate RMS level for silence detection
+    fn calculate_rms(samples: &[f32]) -> f32 {
+        if samples.is_empty() {
+            return 0.0;
+        }
+        
+        let sum_squares: f32 = samples.iter()
+            .take(8192)  // Sample first 8k samples for speed
+            .map(|&s| s * s)
+            .sum();
+        
+        (sum_squares / samples.len().min(8192) as f32).sqrt()
+    }
+    
     /// Check for indicators of early MQA encoder (v2.3.x)
     fn check_early_encoder_indicators(&self, result: &MqaDetectionResult) -> EarlyEncoderIndicators {
         let mut score = 0.0f32;
@@ -429,13 +450,25 @@ impl MqaDetector {
     }
     
     /// Analyze entropy in the least significant bits
+    /// FIXED: Improved 24-bit conversion and handling
     fn analyze_lsb_entropy(&self, samples: &[f32]) -> f32 {
         let mut lsb_values = Vec::with_capacity(samples.len());
         
         for &sample in samples {
-            let int24 = (sample * 8388607.0) as i32;
-            let lsb = (int24 & 0xFF) as u8;
+            // FIXED: Use abs() and clamp to ensure proper range
+            // Convert to 24-bit integer representation (-8388608 to 8388607)
+            let sample_clamped = sample.clamp(-1.0, 1.0);
+            let int24 = (sample_clamped * 8388607.0) as i32;
+            
+            // Extract the least significant byte
+            let lsb = (int24.abs() & 0xFF) as u8;
             lsb_values.push(lsb);
+        }
+        
+        // FIXED: Check for degenerate case (all zeros or single value)
+        let unique_values: std::collections::HashSet<u8> = lsb_values.iter().copied().collect();
+        if unique_values.len() <= 1 {
+            return 0.0;  // No entropy in constant signal
         }
         
         let mut histogram = [0u32; 256];
@@ -466,8 +499,9 @@ impl MqaDetector {
         let mut lsb_values: Vec<i32> = Vec::with_capacity(samples.len());
         
         for &sample in samples {
-            let int24 = (sample * 8388607.0) as i32;
-            let lsb = (int24 & 0xFF) as i32;
+            let sample_clamped = sample.clamp(-1.0, 1.0);
+            let int24 = (sample_clamped * 8388607.0) as i32;
+            let lsb = (int24.abs() & 0xFF) as i32;
             lsb_values.push(lsb);
         }
         
@@ -515,8 +549,9 @@ impl MqaDetector {
         let mut lsb_values: Vec<u8> = Vec::with_capacity(samples.len().min(65536));
         
         for &sample in samples.iter().take(65536) {
-            let int24 = (sample * 8388607.0) as i32;
-            let lsb = (int24 & 0xFF) as u8;
+            let sample_clamped = sample.clamp(-1.0, 1.0);
+            let int24 = (sample_clamped * 8388607.0) as i32;
+            let lsb = (int24.abs() & 0xFF) as u8;
             lsb_values.push(lsb);
         }
         
@@ -561,8 +596,9 @@ impl MqaDetector {
         let mut prev_byte = 0u8;
         
         for (i, &sample) in samples.iter().take(100000).enumerate() {
-            let int24 = (sample * 8388607.0) as i32;
-            let lsb = (int24 & 0xFF) as u8;
+            let sample_clamped = sample.clamp(-1.0, 1.0);
+            let int24 = (sample_clamped * 8388607.0) as i32;
+            let lsb = (int24.abs() & 0xFF) as u8;
             
             if i > 0 {
                 // Count bit transitions between consecutive LSB bytes
@@ -590,8 +626,9 @@ impl MqaDetector {
         let mut total = 0u32;
         
         for &sample in samples.iter().take(100000) {
-            let int24 = (sample * 8388607.0) as i32;
-            let lsb = (int24 & 0xFF) as u8;
+            let sample_clamped = sample.clamp(-1.0, 1.0);
+            let int24 = (sample_clamped * 8388607.0) as i32;
+            let lsb = (int24.abs() & 0xFF) as u8;
             histogram[lsb as usize] += 1;
             total += 1;
         }
@@ -720,8 +757,9 @@ impl MqaDetector {
         let mut bit_stream: Vec<u8> = Vec::new();
         
         for &sample in samples.iter().take(16384) {
-            let int24 = (sample * 8388607.0) as i32;
-            let lsb = (int24 & 0xFF) as u8;
+            let sample_clamped = sample.clamp(-1.0, 1.0);
+            let int24 = (sample_clamped * 8388607.0) as i32;
+            let lsb = (int24.abs() & 0xFF) as u8;
             bit_stream.push(lsb);
         }
         
@@ -955,5 +993,19 @@ mod tests {
         let clustering = detector.analyze_lsb_clustering(&samples);
         // Should detect clustering
         assert!(clustering >= 0.0 && clustering <= 1.0);
+    }
+    
+    #[test]
+    fn test_silence_detection() {
+        let detector = MqaDetector::default();
+        
+        // Create silent samples
+        let samples = vec![0.0f32; 44100];
+        
+        let result = detector.detect(&samples, 44100, 24);
+        
+        // Should detect silence and return early
+        assert!(!result.is_mqa_encoded);
+        assert!(result.evidence.iter().any(|e| e.contains("silence")));
     }
 }
