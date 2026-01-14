@@ -3,6 +3,8 @@
 pub mod clipping_detection;
 pub mod detection_pipeline_enf_clipping;
 pub mod mqa_detection;
+pub mod resampling_detection;
+pub mod dithering_detection;
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -111,7 +113,6 @@ pub enum DefectType {
         estimated_bitrate: Option<u32>,
         cutoff_hz: u32,
     },
-    // New defect types for Dithering and Resampling detection
     DitheringDetected {
         dither_type: String,
         bit_depth: u16,
@@ -148,7 +149,7 @@ pub enum DetectionMethod {
     ClippingAnalysis,
     StatisticalAnalysis,
     MultiMethod,
-    NoiseFloorAnalysis, // Added for Dithering
+    NoiseFloorAnalysis,
 }
 
 /// Quality metrics for the audio file
