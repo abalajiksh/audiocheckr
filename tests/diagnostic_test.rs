@@ -16,7 +16,7 @@ use std::process::Command;
 
 use test_utils::{
     AllureTestBuilder, AllureTestSuite, AllureEnvironment, AllureSeverity,
-    write_categories, default_audiocheckr_categories,
+    write_categories, default_audiocheckr_categories, get_binary_path, run_audiocheckr
 };
 
 #[derive(Debug, Clone)]
@@ -38,7 +38,6 @@ struct DiagnosticResult {
 
 #[test]
 fn diagnose_control_files() {
-    let binary_path = get_binary_path();
     let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let test_base = project_root.join("TestSuite").join("Control_Original");
     let allure_results_dir = project_root.join("target").join("allure-results");
@@ -76,13 +75,10 @@ fn diagnose_control_files() {
         
         let filename = path.file_name().unwrap().to_string_lossy().to_string();
         
-        // Run with verbose output
-        let output = Command::new(&binary_path)
-            .arg("--input")
-            .arg(&path)
-            .arg("--bit-depth")
-            .arg("24")
-            .arg("--check-upsampling")
+        // Run with verbose output and high sensitivity
+        let output = run_audiocheckr(&path)
+            .arg("--sensitivity")
+            .arg("high")
             .arg("--verbose")
             .output()
             .expect("Failed to execute binary");
@@ -516,40 +512,9 @@ fn sanitize_name(s: &str) -> String {
         .collect()
 }
 
-fn get_binary_path() -> PathBuf {
-    let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    path.push("target");
-    
-    let release_path = path.join("release").join("audiocheckr");
-    let debug_path = path.join("debug").join("audiocheckr");
-    
-    #[cfg(windows)]
-    {
-        let release_path_exe = release_path.with_extension("exe");
-        let debug_path_exe = debug_path.with_extension("exe");
-        if release_path_exe.exists() {
-            return release_path_exe;
-        } else if debug_path_exe.exists() {
-            return debug_path_exe;
-        }
-    }
-    
-    #[cfg(unix)]
-    {
-        if release_path.exists() {
-            return release_path;
-        } else if debug_path.exists() {
-            return debug_path;
-        }
-    }
-    
-    panic!("Binary not found. Run: cargo build --release");
-}
-
 /// Additional test: Compare control files with known transcoded files
 #[test]
 fn compare_control_vs_transcoded() {
-    let binary_path = get_binary_path();
     let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let test_suite = project_root.join("TestSuite");
     let allure_results_dir = project_root.join("target").join("allure-results");
@@ -576,10 +541,10 @@ fn compare_control_vs_transcoded() {
     let mut allure_suite = AllureTestSuite::new("Comparison Tests", &allure_results_dir);
     
     println!("Analyzing Control files...");
-    let control_results = analyze_directory(&binary_path, &control_dir, 5);
+    let control_results = analyze_directory(&control_dir, 5);
     
     println!("\nAnalyzing MP3_128_Boundary files...");
-    let mp3_results = analyze_directory(&binary_path, &mp3_dir, 5);
+    let mp3_results = analyze_directory(&mp3_dir, 5);
     
     // Print comparison table
     println!("\n{}", "-".repeat(100));
@@ -699,7 +664,7 @@ fn compare_control_vs_transcoded() {
     println!("\nAllure results written to: {}", allure_results_dir.display());
 }
 
-fn analyze_directory(binary: &Path, dir: &Path, limit: usize) -> Vec<DiagnosticResult> {
+fn analyze_directory(dir: &Path, limit: usize) -> Vec<DiagnosticResult> {
     let mut results = Vec::new();
     
     let entries = match fs::read_dir(dir) {
@@ -724,12 +689,9 @@ fn analyze_directory(binary: &Path, dir: &Path, limit: usize) -> Vec<DiagnosticR
         
         let filename = path.file_name().unwrap().to_string_lossy().to_string();
         
-        let output = Command::new(binary)
-            .arg("--input")
-            .arg(&path)
-            .arg("--bit-depth")
-            .arg("24")
-            .arg("--check-upsampling")
+        let output = run_audiocheckr(&path)
+            .arg("--sensitivity")
+            .arg("high")
             .arg("--verbose")
             .output()
             .expect("Failed to execute binary");
