@@ -16,7 +16,6 @@
 mod test_utils;
 
 use std::env;
-use std::process::Command;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -24,7 +23,7 @@ use std::fs;
 
 use test_utils::{
     AllureTestBuilder, AllureTestSuite, AllureEnvironment, AllureSeverity,
-    write_categories, default_audiocheckr_categories,
+    write_categories, default_audiocheckr_categories, get_binary_path, run_mqa_analysis
 };
 
 #[derive(Debug, Clone)]
@@ -88,15 +87,11 @@ fn collect_flac_files(dir: &Path) -> Vec<PathBuf> {
     files
 }
 
-fn test_mqa_file(binary: &Path, path: &Path) -> Result<MqaTestResult, String> {
+fn test_mqa_file(path: &Path) -> Result<MqaTestResult, String> {
     let start = std::time::Instant::now();
     
-    let output = Command::new(binary)
-        .arg(path)
-        .arg("--mqa")
-        .arg("--verbose")
-        .output()
-        .map_err(|e| format!("Failed to execute binary: {}", e))?;
+    // Use shared helper from test_utils
+    let output = run_mqa_analysis(path);
     
     let duration_ms = start.elapsed().as_millis() as u64;
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
@@ -289,14 +284,7 @@ fn parse_quality_score(stdout: &str) -> f32 {
 #[test]
 #[ignore]
 fn test_mqa_detection_suite() {
-    let binary_path = match get_binary_path() {
-        Ok(path) => path,
-        Err(e) => {
-            eprintln!("\n❌ {}", e);
-            eprintln!("   Run: cargo build --release");
-            panic!("{}", e);
-        }
-    };
+    let binary_path = get_binary_path();
     
     let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let allure_results_dir = project_root.join("target").join("allure-results");
@@ -336,7 +324,7 @@ fn test_mqa_detection_suite() {
     println!("Running tests in parallel ({} threads)...\n", thread_count);
 
     // Run tests in parallel
-    let results = run_tests_parallel(&binary_path, files.clone(), thread_count);
+    let results = run_tests_parallel(files.clone(), thread_count);
 
     // Create Allure test suite
     let mut allure_suite = AllureTestSuite::new("MQA Detection Tests", &allure_results_dir);
@@ -513,14 +501,6 @@ fn test_mqa_detection_suite() {
 #[test]
 #[ignore]
 fn test_single_mqa_file() {
-    let binary_path = match get_binary_path() {
-        Ok(path) => path,
-        Err(e) => {
-            eprintln!("❌ {}", e);
-            return;
-        }
-    };
-    
     let mqa_folder = match find_mqa_folder() {
         Some(path) => path,
         None => {
@@ -538,7 +518,7 @@ fn test_single_mqa_file() {
     let file = &files[0];
     println!("\n🔍 Testing single file: {}\n", file.file_name().unwrap().to_str().unwrap());
 
-    match test_mqa_file(&binary_path, file) {
+    match test_mqa_file(file) {
         Ok(result) => {
             println!("File Information:");
             println!("  Sample Rate: {} Hz", result.sample_rate);
@@ -562,18 +542,15 @@ fn test_single_mqa_file() {
 }
 
 fn run_tests_parallel(
-    binary: &Path,
     files: Vec<PathBuf>,
     num_threads: usize
 ) -> Vec<Result<MqaTestResult, String>> {
-    let binary = binary.to_path_buf();
     let files = Arc::new(files);
     let results = Arc::new(Mutex::new(Vec::new()));
     let index = Arc::new(Mutex::new(0usize));
     let mut handles = Vec::new();
 
     for _ in 0..num_threads {
-        let binary = binary.clone();
         let files = Arc::clone(&files);
         let results = Arc::clone(&results);
         let index = Arc::clone(&index);
@@ -591,7 +568,7 @@ fn run_tests_parallel(
                 };
 
                 let file = &files[current_idx];
-                let result = test_mqa_file(&binary, file);
+                let result = test_mqa_file(file);
 
                 let mut results_guard = results.lock().unwrap();
                 results_guard.push((current_idx, result));
@@ -643,32 +620,6 @@ fn sanitize_name(s: &str) -> String {
     s.chars()
         .map(|c| if c.is_alphanumeric() || c == '_' { c } else { '_' })
         .collect()
-}
-
-fn get_binary_path() -> Result<PathBuf, String> {
-    let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    path.push("target");
-
-    #[cfg(windows)]
-    let binary_name = "audiocheckr.exe";
-    #[cfg(not(windows))]
-    let binary_name = "audiocheckr";
-
-    // Try release first, then debug
-    let release_path = path.join("release").join(binary_name);
-    let debug_path = path.join("debug").join(binary_name);
-
-    if release_path.exists() {
-        Ok(release_path)
-    } else if debug_path.exists() {
-        Ok(debug_path)
-    } else {
-        Err(format!(
-            "Binary not found at:\n  - {}\n  - {}\nRun: cargo build --release",
-            release_path.display(),
-            debug_path.display()
-        ))
-    }
 }
 
 #[cfg(test)]
