@@ -41,7 +41,7 @@ use std::thread;
 
 use test_utils::{
     AllureEnvironment, AllureSeverity, AllureTestBuilder, AllureTestSuite,
-    default_audiocheckr_categories, write_categories,
+    default_audiocheckr_categories, write_categories, get_binary_path, run_audiocheckr
 };
 
 // ============================================================================
@@ -517,7 +517,9 @@ fn parse_resample_filename(filename: &str) -> Option<(u32, String, String)> {
 // ============================================================================
 
 fn run_tests_parallel(binary: &Path, test_cases: Vec<DspTestCase>, num_threads: usize) -> Vec<TestResult> {
-    let binary = binary.to_path_buf();
+    // Note: 'binary' path is passed for compatibility but we mostly use run_audiocheckr from utils now
+    // We'll keep using it here just to check it exists or if we need specific manual execution
+    
     let test_cases = Arc::new(test_cases);
     let results = Arc::new(Mutex::new(Vec::new()));
     let index = Arc::new(Mutex::new(0usize));
@@ -530,7 +532,6 @@ fn run_tests_parallel(binary: &Path, test_cases: Vec<DspTestCase>, num_threads: 
     let _ = std::io::stdout().flush();
 
     for _ in 0..effective_threads {
-        let binary = binary.clone();
         let test_cases = Arc::clone(&test_cases);
         let results = Arc::clone(&results);
         let index = Arc::clone(&index);
@@ -552,7 +553,7 @@ fn run_tests_parallel(binary: &Path, test_cases: Vec<DspTestCase>, num_threads: 
                 println!("[{}/{}] Testing: {}", current_idx + 1, total, test_case.filename);
                 let _ = std::io::stdout().flush();
                 
-                let result = run_single_test(&binary, test_case);
+                let result = run_single_test(test_case);
 
                 let status = match result.validation_result {
                     ValidationResult::Pass => "✓ PASS",
@@ -586,15 +587,13 @@ fn run_tests_parallel(binary: &Path, test_cases: Vec<DspTestCase>, num_threads: 
     results_vec.into_iter().map(|(_, result)| result).collect()
 }
 
-fn run_single_test(binary: &Path, test_case: &DspTestCase) -> TestResult {
+fn run_single_test(test_case: &DspTestCase) -> TestResult {
     let start = std::time::Instant::now();
 
-    let output = Command::new(binary)
-        .arg("--input")
-        .arg(&test_case.file_path)
-        .arg("--bit-depth")
-        .arg("24")
-        .arg("--check-upsampling")
+    // Use shared helper to run with correct arguments (positional input, sensitivity)
+    let output = run_audiocheckr(&test_case.file_path)
+        .arg("--sensitivity")
+        .arg("high")  // High sensitivity for DSP tests
         .arg("--verbose")
         .output()
         .expect("Failed to execute binary");
@@ -948,36 +947,6 @@ fn sanitize_name(s: &str) -> String {
     s.chars()
         .map(|c| if c.is_alphanumeric() || c == '_' { c } else { '_' })
         .collect()
-}
-
-fn get_binary_path() -> PathBuf {
-    let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    path.push("target");
-
-    let release_path = path.join("release").join("audiocheckr");
-    let debug_path = path.join("debug").join("audiocheckr");
-
-    #[cfg(windows)]
-    {
-        let release_path_exe = release_path.with_extension("exe");
-        let debug_path_exe = debug_path.with_extension("exe");
-        if release_path_exe.exists() {
-            return release_path_exe;
-        } else if debug_path_exe.exists() {
-            return debug_path_exe;
-        }
-    }
-
-    #[cfg(unix)]
-    {
-        if release_path.exists() {
-            return release_path;
-        } else if debug_path.exists() {
-            return debug_path;
-        }
-    }
-
-    panic!("Binary not found. Run: cargo build --release");
 }
 
 // ============================================================================
