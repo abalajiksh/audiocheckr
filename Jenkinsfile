@@ -96,6 +96,74 @@ def determineTestTypeFromChanges() {
     return 'QUALIFICATION_GENRE'
 }
 
+def shouldRebuildBinary() {
+    // Check if src directory has changes
+    def srcChanged = sh(
+        script: 'git diff --name-only HEAD~1 HEAD 2>/dev/null | grep "^src/" || true',
+        returnStdout: true
+    ).trim()
+    
+    def cargoChanged = sh(
+        script: 'git diff --name-only HEAD~1 HEAD 2>/dev/null | grep "^Cargo" || true',
+        returnStdout: true
+    ).trim()
+    
+    if (srcChanged || cargoChanged) {
+        echo "🔨 Source code or Cargo files changed - rebuild required"
+        echo "  Changed src files: ${srcChanged ?: 'none'}"
+        echo "  Changed Cargo files: ${cargoChanged ?: 'none'}"
+        return true
+    }
+    
+    echo "✅ No source code changes detected - will reuse existing binary"
+    return false
+}
+
+def fetchLatestBinary() {
+    // Find the latest successful build with artifacts
+    def latestBuild = null
+    def currentBuildNum = currentBuild.number
+    
+    // Search backwards through builds
+    for (int i = currentBuildNum - 1; i > 0 && i > currentBuildNum - 50; i--) {
+        def build = Jenkins.instance.getItemByFullName(env.JOB_NAME).getBuildByNumber(i)
+        if (build && build.result == hudson.model.Result.SUCCESS) {
+            def artifacts = build.artifacts
+            if (artifacts.find { it.fileName == 'audiocheckr' }) {
+                latestBuild = build
+                echo "✅ Found latest successful build with binary: #${i}"
+                break
+            }
+        }
+    }
+    
+    if (latestBuild) {
+        // Copy artifact from the latest successful build
+        sh '''
+            mkdir -p target/release
+        '''
+        
+        copyArtifacts(
+            projectName: env.JOB_NAME,
+            selector: specific("${latestBuild.number}"),
+            filter: 'target/release/audiocheckr',
+            target: '.'
+        )
+        
+        sh '''
+            chmod +x target/release/audiocheckr
+            echo "📦 Reusing binary from build #${latestBuild.number}"
+            ls -lh target/release/audiocheckr
+            file target/release/audiocheckr
+        '''
+        
+        return true
+    } else {
+        echo "⚠️ No previous successful build found with artifacts - will build from scratch"
+        return false
+    }
+}
+
 pipeline {
     agent any
     
@@ -116,6 +184,11 @@ pipeline {
             name: 'CLEAN_WORKSPACE_BEFORE',
             defaultValue: false,
             description: 'Clean workspace before build (use if seeing stale file issues)'
+        )
+        booleanParam(
+            name: 'FORCE_REBUILD',
+            defaultValue: false,
+            description: 'Force rebuild even if source code has not changed'
         )
     }
 
@@ -143,6 +216,9 @@ pipeline {
 
         // CI marker for test awareness
         CI = 'true'
+        
+        // Build control flags
+        SKIP_BUILD = 'false'
     }
 
     triggers {
@@ -188,6 +264,15 @@ pipeline {
                         env.TEST_TYPE = determineTestTypeFromChanges()
                         echo "🔄 Push detected - intelligently selected ${env.TEST_TYPE} tests based on file changes"
                     }
+                    
+                    // Check if we should skip build
+                    if (!params.FORCE_REBUILD && !shouldRebuildBinary()) {
+                        env.SKIP_BUILD = 'true'
+                        echo "🚀 Binary build will be skipped - reusing existing artifact"
+                    } else {
+                        env.SKIP_BUILD = 'false'
+                        echo "🔨 Binary will be built from source"
+                    }
 
                     // Display build info
                     echo """
@@ -195,6 +280,7 @@ pipeline {
                   AUDIOCHECKR CI/CD                     
 ========================================================
   Test Type:     ${env.TEST_TYPE}
+  Skip Build:    ${env.SKIP_BUILD}
   Allure:        ENABLED ✓
   Build #:       ${currentBuild.number}
   Triggered by:  ${currentBuild.getBuildCauses()[0].shortDescription}
@@ -266,6 +352,9 @@ pipeline {
         stage('Build & Prepare') {
             parallel {
                 stage('Build x86_64') {
+                    when {
+                        expression { return env.SKIP_BUILD == 'false' }
+                    }
                     steps {
                         sh '''
                             echo "=========================================="
@@ -279,6 +368,35 @@ pipeline {
                             file target/release/audiocheckr
                             echo "============================="
                         '''
+                    }
+                }
+                
+                stage('Fetch Existing Binary') {
+                    when {
+                        expression { return env.SKIP_BUILD == 'true' }
+                    }
+                    steps {
+                        script {
+                            echo "=========================================="
+                            echo "Fetching existing binary from artifacts"
+                            echo "=========================================="
+                            
+                            def fetched = fetchLatestBinary()
+                            
+                            if (!fetched) {
+                                echo "⚠️ Failed to fetch existing binary - falling back to build"
+                                env.SKIP_BUILD = 'false'
+                                sh '''
+                                    echo "Building x86_64 binary (RELEASE mode)"
+                                    cargo build --release 2>&1 | tee build_x86_64.txt
+                                    echo ""
+                                    echo "=== x86_64 Build Artifact ==="
+                                    ls -lh target/release/audiocheckr
+                                    file target/release/audiocheckr
+                                    echo "============================="
+                                '''
+                            }
+                        }
                     }
                 }
 
@@ -416,6 +534,7 @@ Build.Number=${BUILD_NUMBER}
 Git.Commit=${GIT_COMMIT_SHORT:-unknown}
 Git.Branch=${GIT_BRANCH:-unknown}
 CI.Environment=Jenkins
+Binary.Rebuilt=${SKIP_BUILD}
 EOF
                     
                     echo "✓ Allure environment configured"
