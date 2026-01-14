@@ -44,6 +44,58 @@ def sendDiscordNotification(webhookUrl, status) {
         successful: status == 'SUCCESS'
     )
 }
+
+def determineTestTypeFromChanges() {
+    // Get list of changed files in the commit
+    def changedFiles = sh(
+        script: 'git diff --name-only HEAD~1 HEAD 2>/dev/null || git diff --name-only HEAD',
+        returnStdout: true
+    ).trim().split('\n')
+    
+    echo "Changed files:"
+    changedFiles.each { file ->
+        echo "  - ${file}"
+    }
+    
+    // Check for MQA-related changes
+    def mqaFiles = [
+        'src/core/analysis/mqa_detection.rs',
+        'tests/mqa_test.rs'
+    ]
+    if (changedFiles.any { file -> mqaFiles.contains(file) }) {
+        echo "🎯 MQA-related files changed - running MQA_TEST"
+        return 'MQA_TEST'
+    }
+    
+    // Check for DSP-related changes
+    def dspFiles = [
+        'src/core/analysis/dither.rs',
+        'src/core/analysis/dither_detection.rs',
+        'src/core/analysis/resample_detection.rs',
+        'src/core/analysis/upsampling.rs',
+        'tests/dithering_resampling_test.rs'
+    ]
+    if (changedFiles.any { file -> dspFiles.contains(file) }) {
+        echo "🎯 DSP-related files changed - running DSP_TEST"
+        return 'DSP_TEST'
+    }
+    
+    // Check for specific test file changes
+    if (changedFiles.contains('tests/diagnostic_test.rs')) {
+        echo "🎯 Diagnostic test file changed - running DIAGNOSTIC"
+        return 'DIAGNOSTIC'
+    }
+    
+    if (changedFiles.contains('tests/dsp_diagnostic_test.rs')) {
+        echo "🎯 DSP diagnostic test file changed - running DSP_DIAGNOSTIC"
+        return 'DSP_DIAGNOSTIC'
+    }
+    
+    // Default to qualification genre tests for all other changes
+    echo "📋 Other changes detected - running QUALIFICATION_GENRE"
+    return 'QUALIFICATION_GENRE'
+}
+
 pipeline {
     agent any
     
@@ -122,7 +174,7 @@ pipeline {
                         checkout scm
                     }
 
-                    // Determine test type based on trigger
+                    // Determine test type based on trigger and file changes
                     if (currentBuild.getBuildCauses('hudson.triggers.TimerTrigger$TimerTriggerCause')) {
                         // Scheduled build (cron) = REGRESSION_GENRE
                         env.TEST_TYPE = 'REGRESSION_GENRE'
@@ -132,9 +184,9 @@ pipeline {
                         env.TEST_TYPE = params.TEST_TYPE
                         echo "👤 Manual build - running ${env.TEST_TYPE} tests"
                     } else {
-                        // GitHub push = QUALIFICATION_GENRE
-                        env.TEST_TYPE = 'QUALIFICATION_GENRE'
-                        echo "🔄 Push detected - running QUALIFICATION_GENRE tests"
+                        // GitHub push = intelligent test selection based on changed files
+                        env.TEST_TYPE = determineTestTypeFromChanges()
+                        echo "🔄 Push detected - intelligently selected ${env.TEST_TYPE} tests based on file changes"
                     }
 
                     // Display build info
