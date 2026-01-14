@@ -2,6 +2,7 @@
 
 pub mod clipping_detection;
 pub mod detection_pipeline_enf_clipping;
+pub mod mqa_detection;  // ADDED: Export MQA detection module
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
