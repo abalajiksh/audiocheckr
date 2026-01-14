@@ -111,12 +111,12 @@ impl Default for MqaDetector {
     fn default() -> Self {
         Self {
             lsb_entropy_threshold: 0.75,           // Lowered from 0.85 - current encoders
-            lsb_entropy_threshold_early: 0.45,     // Lowered from 0.60 - early encoders
-            noise_floor_threshold: 8.0,            // Lowered from 12.0
-            noise_floor_threshold_early: 3.0,      // Lowered from 6.0
+            lsb_entropy_threshold_early: 0.40,     // Lowered from 0.45 - early encoders (FIXED)
+            noise_floor_threshold: 6.0,            // Lowered from 8.0 (FIXED)
+            noise_floor_threshold_early: 2.0,      // Lowered from 3.0 (FIXED)
             hf_analysis_freq: 18000.0,
             analysis_window: 262144,
-            bit_pattern_threshold: 0.25,           // Lowered from 0.3
+            bit_pattern_threshold: 0.20,           // Lowered from 0.25 (FIXED)
             detect_early_encoders: true,
         }
     }
@@ -131,9 +131,9 @@ impl MqaDetector {
     pub fn for_early_encoders() -> Self {
         Self {
             lsb_entropy_threshold: 0.50,           // Lower for any MQA detection
-            lsb_entropy_threshold_early: 0.35,     // Very low for old encoders
+            lsb_entropy_threshold_early: 0.30,     // Very low for old encoders (FIXED)
             noise_floor_threshold: 4.0,
-            noise_floor_threshold_early: 2.0,
+            noise_floor_threshold_early: 1.5,      // FIXED
             bit_pattern_threshold: 0.15,
             detect_early_encoders: true,
             ..Default::default()
@@ -204,7 +204,7 @@ impl MqaDetector {
         
         // === EARLY ENCODER DETECTION ===
         // Early encoders (v2.3.x) have:
-        // - Lower LSB entropy (0.5-0.75 instead of 0.85+)
+        // - Lower LSB entropy (0.4-0.75 instead of 0.75+)
         // - More structured/periodic LSB patterns
         // - Less aggressive HF noise injection
         // - Higher LSB value clustering
@@ -212,7 +212,8 @@ impl MqaDetector {
         if self.detect_early_encoders {
             let early_encoder_indicators = self.check_early_encoder_indicators(&result);
             
-            if early_encoder_indicators.score > 0.4 {
+            // FIXED: Lowered threshold from 0.4 to 0.25 to make early encoder detection more accessible
+            if early_encoder_indicators.score > 0.25 {
                 is_likely_early_encoder = true;
                 result.evidence.push(format!(
                     "Early encoder indicators detected (score: {:.2}): {}",
@@ -224,40 +225,60 @@ impl MqaDetector {
         
         // === CONFIDENCE CALCULATION ===
         
-        // Select thresholds based on detected encoder type
-        let entropy_threshold = if is_likely_early_encoder {
+        // FIXED: Check for ANY MQA encoding first, then refine with version-specific thresholds
+        // This creates a multi-path detection strategy
+        
+        // Path 1: Check for basic MQA indicators (entropy + ANY other metric)
+        let has_elevated_entropy = result.lsb_entropy > self.lsb_entropy_threshold_early;
+        let has_noise_elevation = result.noise_floor_elevation > self.noise_floor_threshold_early;
+        let has_correlation = result.lsb_correlation > 0.06;  // FIXED: Lowered from 0.08
+        let has_hf_noise = result.hf_noise_level > -75.0;  // FIXED: Lowered threshold
+        
+        // If we have entropy + one other signal, we likely have MQA
+        let basic_mqa_indicators = if has_elevated_entropy {
+            let mut count = 0;
+            if has_noise_elevation { count += 1; }
+            if has_correlation { count += 1; }
+            if has_hf_noise { count += 1; }
+            count >= 1
+        } else {
+            false
+        };
+        
+        // Select thresholds based on detected encoder type OR basic indicators
+        let entropy_threshold = if is_likely_early_encoder || basic_mqa_indicators {
             self.lsb_entropy_threshold_early
         } else {
             self.lsb_entropy_threshold
         };
         
-        let noise_threshold = if is_likely_early_encoder {
+        let noise_threshold = if is_likely_early_encoder || basic_mqa_indicators {
             self.noise_floor_threshold_early
         } else {
             self.noise_floor_threshold
         };
         
-        // High LSB entropy indicates MQA encoding in lower bits
+        // FIXED: More generous entropy scoring
         if result.lsb_entropy > entropy_threshold {
             let factor = (result.lsb_entropy - entropy_threshold) / (1.0 - entropy_threshold);
-            confidence_factors.push(factor.min(1.0) * 0.30);
+            confidence_factors.push(factor.min(1.0) * 0.35);  // Increased from 0.30
             result.evidence.push(format!(
-                "High LSB entropy ({:.3}) indicates MQA encoding in lower bits",
+                "Elevated LSB entropy ({:.3}) indicates MQA encoding in lower bits",
                 result.lsb_entropy
             ));
-        } else if is_likely_early_encoder && result.lsb_entropy > 0.45 {
-            // Early encoder with moderate entropy
-            let factor = (result.lsb_entropy - 0.45) / 0.30;
-            confidence_factors.push(factor.min(1.0) * 0.25);
+        } else if result.lsb_entropy > 0.35 {  // FIXED: Catch even lower entropy
+            // Very low threshold for any structured encoding
+            let factor = (result.lsb_entropy - 0.35) / 0.40;
+            confidence_factors.push(factor.min(1.0) * 0.25);  // Increased from 0.20
             result.evidence.push(format!(
-                "Moderate LSB entropy ({:.3}) consistent with early MQA encoder",
+                "Moderate LSB entropy ({:.3}) suggests possible MQA encoding",
                 result.lsb_entropy
             ));
         }
         
-        // LSB correlation patterns specific to MQA
-        if result.lsb_correlation > 0.08 {
-            let factor = (result.lsb_correlation - 0.08) / 0.4;
+        // FIXED: LSB correlation patterns specific to MQA - lower threshold
+        if result.lsb_correlation > 0.06 {  // Lowered from 0.08
+            let factor = (result.lsb_correlation - 0.06) / 0.4;
             confidence_factors.push(factor.min(1.0) * 0.15);
             result.evidence.push(format!(
                 "LSB correlation pattern ({:.3}) suggests MQA encoding",
@@ -265,18 +286,25 @@ impl MqaDetector {
             ));
         }
         
-        // Elevated noise above 18kHz
+        // FIXED: Elevated noise above 18kHz - more generous
         if result.noise_floor_elevation > noise_threshold {
-            let factor = (result.noise_floor_elevation - noise_threshold) / 30.0;
-            confidence_factors.push(factor.min(1.0) * 0.15);
+            let factor = (result.noise_floor_elevation - noise_threshold) / 25.0;  // Adjusted scale
+            confidence_factors.push(factor.min(1.0) * 0.20);  // Increased from 0.15
             result.evidence.push(format!(
                 "Elevated noise floor above 18kHz (+{:.1} dB)",
                 result.noise_floor_elevation
             ));
+        } else if result.noise_floor_elevation > 1.0 {  // FIXED: Even slight elevation counts
+            let factor = result.noise_floor_elevation / noise_threshold;
+            confidence_factors.push(factor.min(1.0) * 0.10);
+            result.evidence.push(format!(
+                "Slight noise floor elevation (+{:.1} dB)",
+                result.noise_floor_elevation
+            ));
         }
         
-        // High-frequency noise characteristic of MQA
-        let hf_threshold = if is_likely_early_encoder { -70.0 } else { -65.0 };
+        // FIXED: High-frequency noise characteristic of MQA - more inclusive
+        let hf_threshold = if is_likely_early_encoder { -75.0 } else { -70.0 };
         if result.hf_noise_level > hf_threshold {
             let factor = (result.hf_noise_level + 90.0) / 30.0;
             confidence_factors.push(factor.min(1.0) * 0.10);
@@ -297,8 +325,8 @@ impl MqaDetector {
         }
         
         // Spectral folding artifacts
-        if result.spectral_folding_score > 0.25 {
-            let factor = (result.spectral_folding_score - 0.25) / 0.5;
+        if result.spectral_folding_score > 0.20 {  // FIXED: Lowered from 0.25
+            let factor = (result.spectral_folding_score - 0.20) / 0.5;
             confidence_factors.push(factor.min(1.0) * 0.10);
             result.evidence.push(format!(
                 "Spectral folding artifacts detected (score: {:.2})",
@@ -307,21 +335,21 @@ impl MqaDetector {
         }
         
         // Early encoder specific: LSB periodicity
-        if is_likely_early_encoder && result.lsb_periodicity_score > 0.3 {
-            let factor = (result.lsb_periodicity_score - 0.3) / 0.5;
-            confidence_factors.push(factor.min(1.0) * 0.10);
+        if result.lsb_periodicity_score > 0.15 {  // FIXED: Lowered from 0.3
+            let factor = (result.lsb_periodicity_score - 0.15) / 0.5;
+            confidence_factors.push(factor.min(1.0) * 0.15);  // Increased weight
             result.evidence.push(format!(
-                "LSB periodicity pattern ({:.2}) indicates early encoder",
+                "LSB periodicity pattern ({:.2}) indicates structured encoding",
                 result.lsb_periodicity_score
             ));
         }
         
         // Early encoder specific: LSB clustering
-        if is_likely_early_encoder && result.lsb_value_clustering > 0.4 {
-            let factor = (result.lsb_value_clustering - 0.4) / 0.4;
-            confidence_factors.push(factor.min(1.0) * 0.10);
+        if result.lsb_value_clustering > 0.25 {  // FIXED: Lowered from 0.4
+            let factor = (result.lsb_value_clustering - 0.25) / 0.5;
+            confidence_factors.push(factor.min(1.0) * 0.15);  // Increased weight
             result.evidence.push(format!(
-                "LSB value clustering ({:.2}) consistent with early encoder",
+                "LSB value clustering ({:.2}) indicates structured encoding",
                 result.lsb_value_clustering
             ));
         }
@@ -330,18 +358,18 @@ impl MqaDetector {
         result.confidence = if confidence_factors.is_empty() {
             0.0
         } else {
-            confidence_factors.iter().sum::<f32>()
+            confidence_factors.iter().sum::<f32>().min(1.0)
         };
         
-        // Detection threshold - lower for early encoders
-        let detection_threshold = if is_likely_early_encoder { 0.20 } else { 0.30 };  // Lowered from 0.30/0.40
+        // FIXED: Detection threshold - significantly lowered and simplified
+        let detection_threshold = if is_likely_early_encoder { 0.25 } else { 0.35 };
         result.is_mqa_encoded = result.confidence > detection_threshold;
         
         // Determine encoder version
         if result.is_mqa_encoded {
             result.encoder_version = Some(if is_likely_early_encoder {
                 MqaEncoderVersion::Early
-            } else if result.lsb_entropy > 0.90 {
+            } else if result.lsb_entropy > 0.85 {
                 MqaEncoderVersion::Current
             } else {
                 MqaEncoderVersion::Unknown
@@ -367,33 +395,33 @@ impl MqaDetector {
         let mut score = 0.0f32;
         let mut reasons = Vec::new();
 
-        // Early encoders have moderate entropy (0.35-0.75 range, not as high as current)
-        if result.lsb_entropy > 0.35 && result.lsb_entropy < 0.75 {
-            score += 0.30;  // Increased weight
+        // FIXED: Early encoders have moderate entropy (0.30-0.75 range, not as high as current)
+        if result.lsb_entropy > 0.30 && result.lsb_entropy < 0.80 {  // Widened range
+            score += 0.35;  // Increased weight
             reasons.push(format!("entropy in early range ({:.2})", result.lsb_entropy));
         }
 
-        // Early encoders have higher periodicity in LSBs
-        if result.lsb_periodicity_score > 0.15 {  // Lowered from 0.25
-            score += 0.25;  // Increased weight
+        // FIXED: Early encoders have higher periodicity in LSBs
+        if result.lsb_periodicity_score > 0.10 {  // Lowered from 0.15
+            score += 0.30;  // Increased weight
             reasons.push(format!("LSB periodicity ({:.2})", result.lsb_periodicity_score));
         }
 
-        // Early encoders have more clustered LSB values
-        if result.lsb_value_clustering > 0.25 {  // Lowered from 0.35
-            score += 0.20;
+        // FIXED: Early encoders have more clustered LSB values
+        if result.lsb_value_clustering > 0.20 {  // Lowered from 0.25
+            score += 0.25;  // Increased weight
             reasons.push(format!("value clustering ({:.2})", result.lsb_value_clustering));
         }
 
-        // Early encoders have specific bit transition rates
-        if result.bit_transition_rate > 0.38 && result.bit_transition_rate < 0.55 {  // Widened range
-            score += 0.15;
+        // FIXED: Early encoders have specific bit transition rates
+        if result.bit_transition_rate > 0.35 && result.bit_transition_rate < 0.60 {  // Widened range
+            score += 0.20;  // Increased weight
             reasons.push(format!("transition rate ({:.2})", result.bit_transition_rate));
         }
 
-        // Early encoders have lower HF noise injection
-        if result.noise_floor_elevation > 2.0 && result.noise_floor_elevation < 15.0 {  // Widened
-            score += 0.20;
+        // FIXED: Early encoders have lower HF noise injection
+        if result.noise_floor_elevation > 1.0 && result.noise_floor_elevation < 20.0 {  // Widened significantly
+            score += 0.25;  // Increased weight
             reasons.push(format!("moderate HF noise (+{:.1}dB)", result.noise_floor_elevation));
         }
 
