@@ -1,6 +1,6 @@
 [package]
 name = "audiocheckr"
-version = "0.3.6"
+version = "0.3.7"
 edition = "2021"
 authors = ["Ashwin"]
 description = "Advanced audio quality analysis tool for detecting fake lossless files"
