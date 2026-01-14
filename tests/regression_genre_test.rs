@@ -34,7 +34,7 @@ use std::collections::{HashMap, HashSet};
 
 use test_utils::{
     AllureTestBuilder, AllureTestSuite, AllureEnvironment, AllureSeverity,
-    write_categories, default_audiocheckr_categories,
+    write_categories, default_audiocheckr_categories, get_binary_path, run_audiocheckr
 };
 
 #[derive(Clone)]
@@ -545,8 +545,7 @@ fn count_categories(cases: &[GenreTestCase]) -> usize {
     categories.len()
 }
 
-fn run_tests_parallel(binary: &Path, test_cases: Vec<GenreTestCase>, num_threads: usize) -> Vec<TestResult> {
-    let binary = binary.to_path_buf();
+fn run_tests_parallel(test_cases: Vec<GenreTestCase>, num_threads: usize) -> Vec<TestResult> {
     let test_cases = Arc::new(test_cases);
     let results = Arc::new(Mutex::new(Vec::new()));
     let index = Arc::new(Mutex::new(0usize));
@@ -555,7 +554,6 @@ fn run_tests_parallel(binary: &Path, test_cases: Vec<GenreTestCase>, num_threads
     println!("Running tests with {} parallel threads...\n", num_threads);
     
     for _ in 0..num_threads {
-        let binary = binary.clone();
         let test_cases = Arc::clone(&test_cases);
         let results = Arc::clone(&results);
         let index = Arc::clone(&index);
@@ -573,7 +571,7 @@ fn run_tests_parallel(binary: &Path, test_cases: Vec<GenreTestCase>, num_threads
                 };
                 
                 let test_case = &test_cases[current_idx];
-                let result = run_single_test(&binary, test_case);
+                let result = run_single_test(test_case);
                 
                 if current_idx > 0 && current_idx % 10 == 0 {
                     println!("Progress: {}/{} tests completed", current_idx, test_cases.len());
@@ -718,15 +716,14 @@ fn validate_test_result(
     }
 }
 
-fn run_single_test(binary: &Path, test_case: &GenreTestCase) -> TestResult {
+fn run_single_test(test_case: &GenreTestCase) -> TestResult {
     let start = std::time::Instant::now();
     
-    let output = Command::new(binary)
-        .arg("--input")
-        .arg(&test_case.file_path)
-        .arg("--bit-depth")
-        .arg("24")
-        .arg("--check-upsampling")
+    // Use the shared run_audiocheckr helper via positional args
+    // Use high sensitivity for testing to ensure strict checking
+    let output = run_audiocheckr(&test_case.file_path)
+        .arg("--sensitivity")
+        .arg("high")
         .output()
         .expect("Failed to execute binary");
     
