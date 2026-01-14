@@ -1,6 +1,6 @@
 use crate::core::analysis::{AnalysisResult, DefectType, Severity};
 use anyhow::Result;
-use colored::*;
+use colorful::Colorful; // Correct import
 use serde_json::json;
 
 pub struct OutputHandler {
@@ -35,12 +35,13 @@ impl OutputHandler {
             if !result.detections.is_empty() {
                 println!("   Detections:");
                 for detection in &result.detections {
+                    // Use RGB colors since colorful might not support string color names easily
                     let severity_color = match detection.severity {
-                        Severity::Critical => "red",
-                        Severity::High => "red",
-                        Severity::Medium => "yellow",
-                        Severity::Low => "yellow",
-                        Severity::Info => "blue",
+                        Severity::Critical => colorful::Color::Red,
+                        Severity::High => colorful::Color::Red,
+                        Severity::Medium => colorful::Color::Yellow,
+                        Severity::Low => colorful::Color::Yellow,
+                        Severity::Info => colorful::Color::Blue,
                     };
 
                     let severity_str = format!("{:?}", detection.severity).color(severity_color);
