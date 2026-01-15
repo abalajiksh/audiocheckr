@@ -67,9 +67,9 @@ impl OutputHandler {
                         DefectType::SilencePadding { padding_duration } => {
                             println!("Silence Padding: {:.2}s", padding_duration);
                         },
-                        DefectType::MqaEncoded { original_rate, mqa_type, lsb_entropy } => {
-                            let orig = original_rate.map(|r| format!(" (orig: {} Hz)", r)).unwrap_or_default();
-                            println!("MQA Encoded: {}{} [Entropy: {:.2}]", mqa_type, orig, lsb_entropy);
+                        DefectType::MqaEncoded { encoder_version, bit_depth, .. } => {
+                            // Display only encoder version and bit depth as requested
+                            println!("MQA Encoded: Version {} ({}-bit)", encoder_version, bit_depth);
                         },
                         DefectType::UpsampledLossyTranscode { codec, cutoff_hz, .. } => {
                             println!("Upsampled Lossy Transcode: {} (cutoff: {} Hz)", codec, cutoff_hz);
