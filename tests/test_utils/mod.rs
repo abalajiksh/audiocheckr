@@ -20,10 +20,25 @@ pub fn get_binary_path() -> PathBuf {
     release
 }
 
-pub fn run_audiocheckr(file_path: &str) -> Command {
+pub fn run_audiocheckr<P: AsRef<std::ffi::OsStr>>(file_path: P) -> Command {
     let mut cmd = Command::new(get_binary_path());
     cmd.arg(file_path);
     cmd
+}
+
+pub fn run_json_analysis<P: AsRef<std::ffi::OsStr>>(file_path: P) -> std::process::Output {
+    run_audiocheckr(file_path)
+        .arg("--format")
+        .arg("json")
+        .output()
+        .expect("Failed to execute with json format")
+}
+
+pub fn run_verbose_analysis<P: AsRef<std::ffi::OsStr>>(file_path: P) -> std::process::Output {
+    run_audiocheckr(file_path)
+        .arg("--verbose")
+        .output()
+        .expect("Failed to execute with verbose flag")
 }
 
 pub fn default_audiocheckr_categories() -> Vec<String> {
