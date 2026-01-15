@@ -26,7 +26,6 @@ mod test_utils;
 
 use std::env;
 use std::fs;
-use std::process::Command;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -34,7 +33,7 @@ use std::collections::{HashMap, HashSet};
 
 use test_utils::{
     AllureTestBuilder, AllureTestSuite, AllureEnvironment, AllureSeverity,
-    write_categories, default_audiocheckr_categories, get_binary_path, run_audiocheckr
+    write_categories, default_audiocheckr_categories, run_audiocheckr
 };
 
 #[derive(Clone)]
@@ -84,7 +83,7 @@ struct TestResult {
 
 #[test]
 fn test_regression_genre_suite() {
-    let binary_path = get_binary_path();
+    let _binary_path = get_binary_path();
     let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let test_base = project_root.join("TestSuite");
     let allure_results_dir = project_root.join("target").join("allure-results");
@@ -113,7 +112,7 @@ fn test_regression_genre_suite() {
     println!("Found {} files across {} categories\n", total_tests, count_categories(&test_cases));
     
     // Run tests in parallel with 8 threads
-    let results = run_tests_parallel(&binary_path, test_cases.clone(), 8);
+    let results = run_tests_parallel(test_cases.clone(), 8);
     
     // Create Allure test suite
     let mut allure_suite = AllureTestSuite::new("Regression Genre Tests", &allure_results_dir);
