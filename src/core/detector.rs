@@ -487,11 +487,18 @@ impl AudioDetector {
                 None => "Unknown".to_string(),
             };
             
+            let encoder_version = match result.encoder_version {
+                Some(ref v) => format!("{:?}", v),
+                None => "Unknown".to_string(),
+            };
+            
             return Ok(Some(Detection {
                 defect_type: DefectType::MqaEncoded {
                     original_rate: result.original_sample_rate,
                     mqa_type,
                     lsb_entropy: result.lsb_entropy as f64,
+                    encoder_version,
+                    bit_depth,
                 },
                 confidence: result.confidence as f64,
                 severity: Severity::Info, // MQA is informational, not a defect
