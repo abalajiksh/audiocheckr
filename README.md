@@ -1,4 +1,4 @@
-# AudioCheckr v0.3.5
+# AudioCheckr v0.3.7
 
 Advanced audio analysis tool for detecting fake lossless files, transcodes, upsampled audio, and various audio quality issues. Uses pure DSP algorithms—no machine learning.
 
@@ -23,27 +23,33 @@ Advanced audio analysis tool for detecting fake lossless files, transcodes, upsa
 
 ---
 
-## What's New in v0.3.5
+## Changelog
 
-### Major Restructure & New Features
+### v0.3.7 (Current)
 
-- **Genre-Aware Detection Profiles**: Reduce false positives with presets for Electronic, Classical, Ambient, Podcast, and more
-- **Modular Codebase**: Clean separation of core analysis, CLI, configuration, and detection result handling
-- **Enhanced Dithering Detection**: Identifies 10+ dithering algorithms (Rectangular, Triangular, Shibata variants, F-weighted, E-weighted) with scale estimation (0.5x–2.0x)
-- **Enhanced Resampling Detection**: Detects SWR (Kaiser, Blackman-Nuttall) and SoXR (HQ, VHQ, Chebyshev) with quality tier classification
-- **MQA Detection**: New detector for Master Quality Authenticated files using LSB entropy analysis and high-frequency noise patterns
-- **ENF Analysis (NEW)**: Electrical Network Frequency detection for recording authenticity verification, edit/splice detection, and geographic region estimation (50Hz vs 60Hz power grids)
-- **Clipping Detection (NEW)**: Comprehensive digital clipping analysis including true peak measurement, inter-sample over detection, loudness war victim identification, dynamic range analysis, and restoration assessment
-- **Profile Builder API**: Create custom detection profiles programmatically
-- **Confidence Modifiers**: Per-detector sensitivity adjustment with suppression options
+- **16-bit MQA Support**: Fixed detection for legacy 16-bit MQA containers (MQAEncode v2.3.x) often found on MQA-CD rips.
+- **MQA Detection Accuracy**:
+  - Implemented bit-depth aware integer quantization (handling 16-bit vs 24-bit scales).
+  - Fixed entropy calculation bugs that caused 24-bit files to read as 0.000 entropy.
+  - Tuned thresholds for "Early Encoder" detection to prevent circular logic failures.
+- **Allure Reporting**: Integrated comprehensive Allure reporting for MQA test suites.
+- **Test Infrastructure**: Fixed ownership and compilation issues in diagnostic and regression tests.
 
-### Architecture Changes
+### v0.3.6
 
-- Reorganized into `core/`, `cli/`, `config/`, and `detection/` modules
-- Analysis algorithms split into dedicated files (spectral, bit_depth, upsampling, dithering, resampling, MQA)
-- DSP utilities consolidated in `core/dsp/`
-- Visualization tools in `core/visualization/`
-- Test generation utilities in `testgen/`
+- **Modular DSP Integration**: Fully integrated `dithering_detection` and `resampling_detection` modules into the main pipeline.
+- **MQA Overhaul**: Replaced simplified MQA stub with a comprehensive `MqaDetector` supporting multi-metric analysis (Entropy, Noise Floor, Spectral Artifacts).
+- **Intelligent CI/CD**:
+  - **Smart Test Selection**: Automatically determines which tests to run based on changed files (e.g., runs MQA tests only when MQA modules change).
+  - **Binary Caching**: Skips rebuilding the binary in CI if source files haven't changed, speeding up pipeline runs.
+- **Defect Types**: Added specific `DitheringDetected` and `ResamplingDetected` defect types to the JSON output.
+
+### v0.3.5
+
+- **Genre-Aware Profiles**: Introduction of detection profiles (Electronic, Classical, Noise, etc.).
+- **ENF Analysis**: Added Electrical Network Frequency detection.
+- **Clipping Detection**: Added broadcast-standard clipping and true-peak analysis.
+- **Architecture**: Major refactor into `core`, `cli`, `config`, and `detection` modules.
 
 ---
 
@@ -693,47 +699,6 @@ Key crates:
 - `colorful` - Terminal colors
 - `walkdir` - Directory traversal
 - `anyhow` - Error handling
-
----
-
-## Changelog
-
-### v0.3.5 (Current)
-
-- **New**: Genre-aware detection profiles (Standard, HighRes, Electronic, Noise, Classical, Podcast)
-- **New**: Enhanced dithering detection (10 algorithms, 6 scale variants)
-- **New**: Enhanced resampling detection (SWR/SoXR engines, quality tiers)
-- **New**: MQA encoding detection via LSB entropy
-- **New**: ENF (Electrical Network Frequency) analysis for authenticity verification
-- **New**: Comprehensive clipping detection with true peak, loudness war detection
-- **New**: Detection pipeline with sample-rate awareness
-- **New**: Profile Builder API for custom configurations
-- **New**: Test file generation utilities
-- **Changed**: Modular architecture with clean separation of concerns
-- **Changed**: Conservative bit depth thresholds to reduce false positives
-- **Changed**: Improved spectral analysis with multi-method detection
-- **Fixed**: False positives on high-sample-rate files
-- **Fixed**: Better handling of dithered and noise-shaped audio
-
-### v0.2.x
-
-See collapsed section for historical changes.
-
-<details>
-<summary>v0.2.x Changelog</summary>
-
-#### v0.2.4
-Better detector, results on the way.
-
-#### v0.2.3
-Minor parameter adjustments to `detector.rs` to not flag clean source files. Jenkins fixes.
-
-#### v0.2.2
-Fixed test case logic with `is_clean || is_lossless` to just `is_clean` for better reporting.
-
-#### v0.2.1
-Fixed false positives on high sample rate files (88.2kHz+). New algorithm uses absolute frequency thresholds for high-res files and requires positive codec identification before flagging.
-</details>
 
 ---
 
