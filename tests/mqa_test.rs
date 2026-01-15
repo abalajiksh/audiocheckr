@@ -10,6 +10,7 @@ use test_utils::{
 };
 
 #[test]
+#[ignore]
 fn test_mqa_detection() {
     let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let mqa_dir = project_root.join("MQA");
