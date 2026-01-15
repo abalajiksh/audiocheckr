@@ -201,8 +201,8 @@ fn test_qualification_genre_suite() {
         );
         allure_builder = allure_builder.description(&description);
         
-        // Attach stdout as evidence
-        let _ = allure_builder.attach_text("Analysis Output", &result.stdout, &allure_results_dir);
+        // Attach stdout as evidence (assigned to allure_builder)
+        allure_builder = allure_builder.attach_text("Analysis Output", &result.stdout, &allure_results_dir);
 
         match result.validation_result {
             ValidationResult::Pass => {
