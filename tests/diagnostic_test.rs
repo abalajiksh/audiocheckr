@@ -174,8 +174,8 @@ fn diagnose_control_files() {
         );
         allure_builder = allure_builder.description(&description);
         
-        // Attach verbose output
-        let _ = allure_builder.attach_text("Verbose Analysis Output", &r.stdout, &allure_results_dir);
+        // Attach verbose output (assigned to allure_builder)
+        allure_builder = allure_builder.attach_text("Verbose Analysis Output", &r.stdout, &allure_results_dir);
         
         if r.is_false_positive {
             false_positive_count += 1;
