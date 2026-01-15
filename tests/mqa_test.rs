@@ -70,7 +70,9 @@ fn test_mqa_detection() {
                 if is_mqa { "PASS" } else { "FAIL" }
             );
             allure_builder = allure_builder.description(&description);
-            let _ = allure_builder.attach_text("Analysis Output", &stdout, &allure_results_dir);
+            
+            // Fix: Reassign the result of attach_text back to allure_builder
+            allure_builder = allure_builder.attach_text("Analysis Output", &stdout, &allure_results_dir);
 
             if is_mqa {
                 println!("{} {} - PASSED", "[OK]".bg_green(), file_name);
