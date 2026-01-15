@@ -34,7 +34,12 @@ pub fn default_audiocheckr_categories() -> Vec<String> {
     ]
 }
 
-pub fn write_categories(_categories: &[String], _output_dir: &Path) -> std::io::Result<()> {
+pub fn write_categories(categories: &[String], output_dir: &Path) -> std::io::Result<()> {
+    let _ = fs::create_dir_all(output_dir);
+    let categories_file = output_dir.join("categories.json");
+    if let Ok(file) = fs::File::create(categories_file) {
+        let _ = serde_json::to_writer(file, categories);
+    }
     Ok(())
 }
 
@@ -48,12 +53,28 @@ pub enum AllureSeverity {
     Trivial,
 }
 
-pub struct AllureEnvironment;
+pub struct AllureEnvironment {
+    properties: std::collections::HashMap<String, String>,
+}
 
 impl AllureEnvironment {
-    pub fn new() -> Self { Self }
-    pub fn add(&mut self, _key: &str, _value: &str) {}
-    pub fn write(&self, _output_dir: &Path) -> std::io::Result<()> { Ok(()) }
+    pub fn new() -> Self { 
+        Self { properties: std::collections::HashMap::new() } 
+    }
+    
+    pub fn add(&mut self, key: &str, value: &str) {
+        self.properties.insert(key.to_string(), value.to_string());
+    }
+    
+    pub fn write(&self, output_dir: &Path) -> std::io::Result<()> {
+        let _ = fs::create_dir_all(output_dir);
+        let path = output_dir.join("environment.properties");
+        let mut content = String::new();
+        for (key, value) in &self.properties {
+            content.push_str(&format!("{}={}\n", key, value));
+        }
+        fs::write(path, content)
+    }
 }
 
 pub struct AllureTestSuite {
@@ -98,6 +119,7 @@ pub struct AllureResult {
     stop: u64,
     labels: Vec<Label>,
     status_details: Option<StatusDetails>,
+    attachments: Vec<Attachment>,
 }
 
 #[derive(Serialize)]
@@ -110,6 +132,14 @@ struct Label {
 struct StatusDetails {
     message: Option<String>,
     trace: Option<String>,
+}
+
+#[derive(Serialize)]
+struct Attachment {
+    name: String,
+    source: String,
+    #[serde(rename = "type")]
+    mime_type: String,
 }
 
 pub struct AllureTestBuilder {
@@ -128,26 +158,74 @@ impl AllureTestBuilder {
                 stop: 0,
                 labels: Vec::new(),
                 status_details: None,
+                attachments: Vec::new(),
             }
         }
     }
 
-    pub fn full_name(self, _name: &str) -> Self { self }
-    pub fn severity(self, _severity: AllureSeverity) -> Self { self }
-    pub fn epic(self, _v: &str) -> Self { self }
-    pub fn feature(self, _v: &str) -> Self { self }
-    pub fn story(self, _v: &str) -> Self { self }
-    pub fn suite(self, _v: &str) -> Self { self }
-    pub fn sub_suite(self, _v: &str) -> Self { self }
-    pub fn tag(self, _v: &str) -> Self { self }
-    pub fn parameter(self, _k: &str, _v: &str) -> Self { self }
+    pub fn full_name(mut self, name: &str) -> Self { 
+        self.result.labels.push(Label { name: "fullName".to_string(), value: name.to_string() });
+        self 
+    }
+
+    pub fn severity(mut self, severity: AllureSeverity) -> Self { 
+        self.result.labels.push(Label { name: "severity".to_string(), value: format!("{:?}", severity).to_lowercase() });
+        self 
+    }
+
+    pub fn epic(mut self, v: &str) -> Self { 
+        self.result.labels.push(Label { name: "epic".to_string(), value: v.to_string() });
+        self 
+    }
+
+    pub fn feature(mut self, v: &str) -> Self { 
+        self.result.labels.push(Label { name: "feature".to_string(), value: v.to_string() });
+        self 
+    }
+
+    pub fn story(mut self, v: &str) -> Self { 
+        self.result.labels.push(Label { name: "story".to_string(), value: v.to_string() });
+        self 
+    }
+
+    pub fn suite(mut self, v: &str) -> Self { 
+        self.result.labels.push(Label { name: "suite".to_string(), value: v.to_string() });
+        self 
+    }
+
+    pub fn sub_suite(mut self, v: &str) -> Self { 
+        self.result.labels.push(Label { name: "subSuite".to_string(), value: v.to_string() });
+        self 
+    }
+
+    pub fn tag(mut self, v: &str) -> Self { 
+        self.result.labels.push(Label { name: "tag".to_string(), value: v.to_string() });
+        self 
+    }
+
+    pub fn parameter(mut self, k: &str, v: &str) -> Self { 
+        self.result.labels.push(Label { name: k.to_string(), value: v.to_string() }); // Parameter as label for now, or use specific param struct if needed
+        self 
+    }
 
     pub fn description(mut self, desc: &str) -> Self {
         self.result.description = Some(desc.to_string());
         self
     }
 
-    pub fn attach_text(self, _name: &str, _content: &str, _dir: &Path) -> Self { self }
+    pub fn attach_text(mut self, name: &str, content: &str, dir: &Path) -> Self { 
+        let uuid = Uuid::new_v4().to_string();
+        let file_name = format!("{}-attachment.txt", uuid);
+        let path = dir.join(&file_name);
+        if fs::write(&path, content).is_ok() {
+            self.result.attachments.push(Attachment {
+                name: name.to_string(),
+                source: file_name,
+                mime_type: "text/plain".to_string(),
+            });
+        }
+        self 
+    }
 
     pub fn passed(mut self) -> Self {
         self.result.status = "passed".to_string();
