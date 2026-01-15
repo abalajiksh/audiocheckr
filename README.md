@@ -362,6 +362,13 @@ Detects MQA (Master Quality Authenticated) encoding by analyzing:
 - LSB entropy threshold: 0.85
 - Noise floor elevation: +15dB above 18kHz
 
+**Tested MQA Encoders** (all pass detection successfully):
+- MQAEncode v1.1, 2.5.0+1239 (24-bit)
+- MQAEncode v1.1, 2.5.0+1239 (24-bit)
+- MQAEncode v1.1, 2.3.3+800 (16-bit)
+
+The MQA detection algorithm is currently fine-grained and future improvements are planned to enhance detection accuracy and encoder version identification.
+
 ### ENF (Electrical Network Frequency) Analysis
 
 Detects power grid frequency signatures embedded in audio recordings for authenticity verification:
