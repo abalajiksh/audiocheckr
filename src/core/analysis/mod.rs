@@ -105,6 +105,8 @@ pub enum DefectType {
         original_rate: Option<u32>,
         mqa_type: String,
         lsb_entropy: f64,
+        encoder_version: String,
+        bit_depth: u16,
     },
     UpsampledLossyTranscode {
         original_rate: u32,
