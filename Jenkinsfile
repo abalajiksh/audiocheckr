@@ -265,6 +265,9 @@ pipeline {
                         echo "🔄 Push detected - intelligently selected ${env.TEST_TYPE} tests based on file changes"
                     }
                     
+                    // Set build description to show test type
+                    currentBuild.description = "Tests: ${env.TEST_TYPE}"
+                    
                     // Check if we should skip build
                     if (!params.FORCE_REBUILD && !shouldRebuildBinary()) {
                         env.SKIP_BUILD = 'true'
