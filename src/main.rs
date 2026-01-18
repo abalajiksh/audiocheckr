@@ -218,6 +218,7 @@ fn format_defect(defect: &DefectType, confidence: f64) -> String {
             original_rate,
             mqa_type,
             lsb_entropy,
+            ..
         } => {
             let orig_str = original_rate
                 .map(|r| format!(" (original: {} Hz)", r))
@@ -307,6 +308,6 @@ mod tests {
             cutoff_hz: 16000,
         };
 
-        assert_eq!(get_severity_icon(&defect), "[!!!]");
+        assert_eq!(get_severity_icon(&defect), "[!!!");
     }
 }
