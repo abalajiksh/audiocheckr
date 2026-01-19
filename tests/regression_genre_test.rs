@@ -21,11 +21,16 @@
 // v5: STRICTER validation logic
 //     - Extra/wrong defects detected → FAIL (not pass), reported as warning
 //     - Multiple expected defects with partial match → PASS with warning (acceptable)
+// v6: Jenkins CI/CD fix
+//     - More frequent progress updates (every test, not every 10)
+//     - Stdout flushing after each update
+//     - Timestamps for monitoring
 
 mod test_utils;
 
 use std::env;
 use std::fs;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -110,6 +115,7 @@ fn test_regression_genre_suite() {
     let total_tests = test_cases.len();
     
     println!("Found {} files across {} categories\n", total_tests, count_categories(&test_cases));
+    io::stdout().flush().unwrap();
     
     // Run tests in parallel with 8 threads
     let results = run_tests_parallel(test_cases.clone(), 8);
@@ -128,7 +134,7 @@ fn test_regression_genre_suite() {
     let mut results_by_category: HashMap<String, Vec<&TestResult>> = HashMap::new();
     
     for (idx, result) in results.iter().enumerate() {
-        let test_case = &test_cases[idx];
+        let _test_case = &test_cases[idx];
         
         results_by_category
             .entry(result.category.clone())
@@ -548,33 +554,66 @@ fn run_tests_parallel(test_cases: Vec<GenreTestCase>, num_threads: usize) -> Vec
     let test_cases = Arc::new(test_cases);
     let results = Arc::new(Mutex::new(Vec::new()));
     let index = Arc::new(Mutex::new(0usize));
+    let start_time = std::time::Instant::now();
     let mut handles = Vec::new();
     
     println!("Running tests with {} parallel threads...\n", num_threads);
+    io::stdout().flush().unwrap();
     
     for _ in 0..num_threads {
         let test_cases = Arc::clone(&test_cases);
         let results = Arc::clone(&results);
         let index = Arc::clone(&index);
+        let start_time = start_time;
         
         let handle = thread::spawn(move || {
             loop {
-                let current_idx = {
+                let (current_idx, test_desc, test_cat) = {
                     let mut idx = index.lock().unwrap();
                     if *idx >= test_cases.len() {
                         return;
                     }
                     let current = *idx;
+                    let desc = test_cases[current].description.clone();
+                    let cat = test_cases[current].defect_category.clone();
                     *idx += 1;
-                    current
+                    (current, desc, cat)
                 };
+                
+                // Print progress before starting test (more frequent updates for Jenkins)
+                let elapsed_secs = start_time.elapsed().as_secs();
+                println!(
+                    "[{:02}:{:02}] Starting test {}/{} - [{}] {}",
+                    elapsed_secs / 60,
+                    elapsed_secs % 60,
+                    current_idx + 1,
+                    test_cases.len(),
+                    test_cat,
+                    test_desc
+                );
+                io::stdout().flush().unwrap();
                 
                 let test_case = &test_cases[current_idx];
                 let result = run_single_test(test_case);
                 
-                if current_idx > 0 && current_idx % 10 == 0 {
-                    println!("Progress: {}/{} tests completed", current_idx, test_cases.len());
-                }
+                // Print completion status with result
+                let status_icon = match result.validation_result {
+                    ValidationResult::Pass => "✓",
+                    ValidationResult::PassWithWarning => "⚠",
+                    _ => "✗",
+                };
+                println!(
+                    "[{:02}:{:02}] {} Completed test {}/{} in {}ms - [{}] {}",
+                    start_time.elapsed().as_secs() / 60,
+                    start_time.elapsed().as_secs() % 60,
+                    status_icon,
+                    current_idx + 1,
+                    test_cases.len(),
+                    result.duration_ms,
+                    test_cat,
+                    test_desc
+                );
+                io::stdout().flush().unwrap();
                 
                 let mut results_guard = results.lock().unwrap();
                 results_guard.push((current_idx, result));
@@ -586,6 +625,15 @@ fn run_tests_parallel(test_cases: Vec<GenreTestCase>, num_threads: usize) -> Vec
     for handle in handles {
         handle.join().expect("Thread panicked");
     }
+    
+    let total_elapsed = start_time.elapsed();
+    println!(
+        "\nAll tests completed in {:02}:{:02} ({} seconds)\n",
+        total_elapsed.as_secs() / 60,
+        total_elapsed.as_secs() % 60,
+        total_elapsed.as_secs()
+    );
+    io::stdout().flush().unwrap();
     
     let mut results_vec: Vec<(usize, TestResult)> = Arc::try_unwrap(results)
         .expect("Arc still has multiple owners")
