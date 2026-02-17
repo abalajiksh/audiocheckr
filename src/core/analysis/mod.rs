@@ -1,7 +1,6 @@
 //! Analysis types and result structures
 
 pub mod clipping_detection;
-pub mod detection_pipeline;
 pub mod mqa_detection;
 pub mod resampling_detection;
 pub mod dithering_detection;
