@@ -5,9 +5,11 @@ pub mod detection_pipeline_enf_clipping;
 pub mod mqa_detection;
 pub mod resampling_detection;
 pub mod dithering_detection;
+pub mod dynamic_range;
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+pub use dynamic_range::{DynamicRangeAnalyzer, DynamicRangeResult, DynamicRangeVerdict};
 
 /// Configuration for audio analysis
 #[derive(Debug, Clone)]
@@ -57,6 +59,7 @@ pub struct AnalysisResult {
     pub confidence: f64,
     pub quality_metrics: Option<QualityMetrics>,
     pub analysis_timestamp: String,
+    pub dynamic_range: Option<DynamicRangeResult>,
 }
 
 impl AnalysisResult {

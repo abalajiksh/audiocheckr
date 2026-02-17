@@ -4,6 +4,7 @@ use crate::core::analysis::{
     AnalysisConfig, AnalysisResult, DefectType, Detection, DetectionMethod,
     QualityMetrics, Severity,
 };
+use crate::core::analysis::dynamic_range::DynamicRangeAnalyzer;
 use crate::core::dsp::{SpectralAnalyzer, WindowFunction};
 use anyhow::{Context, Result};
 use std::path::Path;
@@ -198,6 +199,13 @@ impl AudioDetector {
             }
         }
         
+	// 8. Dynamic Range Calculation
+	let dr_analyzer = DynamicRangeAnalyzer::new(sample_rate);
+
+	// Build channel slices from your decoded audio
+	let channel_refs: Vec<&[f64]> = decoded_channels.iter().map(|c| c.as_slice()).collect();
+	let dr_result = dr_analyzer.analyze(&channel_refs);
+
         // Filter by minimum confidence
         detections.retain(|d| d.confidence >= self.config.min_confidence);
         

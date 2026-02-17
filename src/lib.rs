@@ -10,6 +10,7 @@ pub mod core;
 pub use core::analysis::{
     AnalysisConfig, AnalysisResult, DefectType, Detection, DetectionMethod,
     QualityMetrics, QualityScore, Severity, TemporalDistribution,
+    DynamicRangeAnalyzer, DynamicRangeResult, DynamicRangeVerdict,
 };
 pub use core::detector::AudioDetector;
 pub use core::dsp::{SpectralAnalyzer, WindowFunction};

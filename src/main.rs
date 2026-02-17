@@ -264,6 +264,16 @@ fn format_defect(defect: &DefectType, confidence: f64) -> String {
                 original_rate, target_rate, quality, conf_str
             )
         }
+	DefectType::LoudnessWarVictim { 
+	    tt_dr_score, 
+	    integrated_lufs, 
+	    plr_db 
+	} => {
+    	    format!(
+        	"Loudness war victim: DR {:.0} dB, {:.1} LUFS, PLR {:.1} dB{}",
+        	tt_dr_score, integrated_lufs, plr_db, conf_str
+    	    )
+	}
     }
 }
 

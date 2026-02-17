@@ -90,6 +90,18 @@ impl OutputHandler {
                 }
             }
         }
+
+	if let Some(ref dr) = result.dynamic_range {
+    		println!("  Dynamic Range:");
+    		println!("    Crest Factor:    {:.1} dB", dr.crest_factor_db);
+    		println!("    TT DR Score:     {:.1} dB  [{}]", dr.tt_dr_score, dr.verdict);
+    		println!("    Integrated LUFS: {:.1} LUFS", dr.integrated_loudness_lufs);
+    		println!("    PLR:             {:.1} dB", dr.plr_db);
+    		println!("    True Peak:       {:.1} dBFS", dr.true_peak_dbfs);
+    		if dr.loudness_war_victim {
+        		println!("    ⚠ Loudness war victim detected");
+    		}
+	}
         Ok(())
     }
 

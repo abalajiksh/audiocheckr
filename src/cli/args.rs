@@ -61,6 +61,10 @@ pub struct Args {
     /// Genre profile for detection tuning
     #[arg(long)]
     pub genre: Option<GenreProfile>,
+
+    /// Enable dynamic range analysis (Crest Factor, EBU R128, TT DR)
+    #[arg(long = "dynamic-range", alias = "dr")]
+    pub dynamic_range: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
