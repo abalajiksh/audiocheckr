@@ -17,8 +17,8 @@
 // Key Insight: Files at >48kHz CANNOT be direct MP3/AAC transcodes
 // because those codecs don't support sample rates above 48kHz.
 
-use crate::core::analysis::dither_detection::{DitherDetectionResult, DitherAlgorithm};
-use crate::core::analysis::resample_detection::{ResampleDetectionResult, ResampleDirection};
+use crate::core::analysis::dithering_detection::DitheringResult;
+use crate::core::analysis::resampling_detection::ResamplingResult;
 
 /// Sample rate constraints for lossy codecs
 pub struct CodecConstraints {
@@ -61,9 +61,9 @@ pub struct DetectionContext {
     /// Is Opus detection applicable for this sample rate?
     pub opus_detection_applicable: bool,
     /// Detected dithering (if any)
-    pub dithering: Option<DitherDetectionResult>,
+    pub dithering: Option<DitheringResult>,
     /// Detected resampling (if any)
-    pub resampling: Option<ResampleDetectionResult>,
+    pub resampling: Option<ResamplingResult>,
     /// Should suppress lossy detection due to DSP artifacts?
     pub suppress_lossy_detection: bool,
     /// Reasons for detection decisions
@@ -111,38 +111,34 @@ impl DetectionContext {
     }
     
     /// Update context with dithering detection results
-    pub fn set_dithering(&mut self, result: DitherDetectionResult) {
-        if result.is_bit_reduced && result.algorithm != DitherAlgorithm::None {
+    pub fn set_dithering(&mut self, result: DitheringResult) {
+        if result.is_dithered {
             self.evidence.push(format!(
-                "Dithering detected: {} ({}→{} bit)",
-                result.algorithm, result.container_bit_depth, result.effective_bit_depth
+                "Dithering detected: {:?} at {} bit",
+                result.dither_type, result.bit_depth
             ));
             
             // If dithering is detected, we should be more cautious about
             // lossy codec detection - noise shaping can look like spectral artifacts
-            if result.algorithm_confidence > 0.6 {
+            if result.confidence > 0.6 {
                 self.evidence.push(
                     "High-confidence dithering: reducing lossy detection sensitivity".to_string()
                 );
             }
         }
         
-        self.actual_bit_depth = result.effective_bit_depth;
+        self.actual_bit_depth = result.bit_depth as u8;
         self.dithering = Some(result);
     }
     
     /// Update context with resampling detection results
-    pub fn set_resampling(&mut self, result: ResampleDetectionResult) {
+    pub fn set_resampling(&mut self, result: ResamplingResult) {
         if result.is_resampled {
             self.evidence.push(format!(
-                "Resampling detected: {} Hz → {} Hz ({})",
-                result.original_sample_rate.unwrap_or(0),
-                result.current_sample_rate,
-                match result.direction {
-                    ResampleDirection::Upsample => "upsampled",
-                    ResampleDirection::Downsample => "downsampled",
-                    ResampleDirection::None => "unknown direction",
-                }
+                "Resampling detected: {} → {} Hz ({})",
+                result.original_rate.map(|r| r.to_string()).unwrap_or_else(|| "?".to_string()),
+                result.target_rate,
+                result.quality
             ));
             
             // If high-quality resampling is detected, spectral rolloff is expected
@@ -181,7 +177,7 @@ impl DetectionContext {
         
         // Reduce confidence if dithering was detected
         if let Some(ref dither) = self.dithering {
-            if dither.is_bit_reduced && dither.algorithm_confidence > 0.5 {
+            if dither.is_dithered && dither.confidence > 0.5 {
                 // Noise shaping can create spectral characteristics similar to lossy
                 confidence *= 0.7;
             }
