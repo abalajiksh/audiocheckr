@@ -79,246 +79,195 @@ impl Default for ExtendedDetectionArgs {
 }
 
 // ============================================================================
-// Example Integration Code
+// Stub types for extended analysis (to be fully implemented)
 // ============================================================================
 
-/*
-// Add to your existing CLI Args struct:
+use serde::{Deserialize, Serialize};
 
-use crate::cli::extended_detection::{ExtendedDetectionArgs, ExtendedOutputFormat};
-
-#[derive(Parser)]
-#[command(name = "audiocheckr")]
-#[command(about = "Audio quality analysis and fake lossless detection")]
-pub struct Cli {
-    // ... existing arguments ...
-
-    #[command(flatten)]
-    pub extended: ExtendedDetectionArgs,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExtendedAnalysisResult {
+    pub quality_assessment: QualityAssessment,
+    pub clipping_result: Option<ClippingResult>,
+    pub enf_result: Option<EnfResult>,
+    pub authenticity_assessment: Option<AuthenticityAssessment>,
 }
 
-// In your analysis function:
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QualityAssessment {
+    pub grade: QualityGrade,
+    pub score: f64,
+    pub issues: Vec<QualityIssue>,
+    pub recommendations: Vec<String>,
+}
 
-fn run_analysis(cli: &Cli, samples: &[f32], sample_rate: u32) {
-    // Convert CLI args to detection options
-    let extended_options = ExtendedDetectionOptions {
-        enable_enf: cli.extended.enf,
-        enf_sensitive_mode: cli.extended.enf_sensitive,
-        expected_enf_frequency: cli.extended.enf_frequency.map(|f| match f {
-            EnfFrequencyArg::Hz50 => EnfBaseFrequency::Hz50,
-            EnfFrequencyArg::Hz60 => EnfBaseFrequency::Hz60,
-        }),
-        enable_clipping: !cli.extended.no_clipping,
-        clipping_strict_mode: cli.extended.clipping_strict,
-        enable_inter_sample_peaks: !cli.extended.no_inter_sample,
-        enable_loudness_analysis: !cli.extended.no_loudness,
-    };
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum QualityGrade {
+    Excellent,
+    Good,
+    Acceptable,
+    Poor,
+    Severe,
+}
 
-    let pipeline = ExtendedDetectionPipeline::with_options(extended_options);
-    let result = pipeline.analyze_mono(samples, sample_rate);
-
-    // Output results based on format
-    match cli.extended.extended_output {
-        ExtendedOutputFormat::Text => print_text_report(&result),
-        ExtendedOutputFormat::Json => print_json_report(&result),
-        ExtendedOutputFormat::Report => print_detailed_report(&result),
+impl std::fmt::Display for QualityGrade {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            QualityGrade::Excellent => write!(f, "Excellent"),
+            QualityGrade::Good => write!(f, "Good"),
+            QualityGrade::Acceptable => write!(f, "Acceptable"),
+            QualityGrade::Poor => write!(f, "Poor"),
+            QualityGrade::Severe => write!(f, "Severe"),
+        }
     }
 }
-*/
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QualityIssue {
+    pub issue_type: QualityIssueType,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum QualityIssueType {
+    DigitalClipping,
+    InterSamplePeaks,
+    LoudnessWarVictim,
+    LowDynamicRange,
+    HighCompressionSeverity,
+    SoftClipping,
+    LimiterArtifacts,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClippingResult {
+    pub has_clipping: bool,
+    pub severity: f64,
+    pub statistics: ClippingStatistics,
+    pub inter_sample_analysis: InterSampleAnalysis,
+    pub loudness_analysis: LoudnessAnalysis,
+    pub restoration_assessment: RestorationAssessment,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClippingStatistics {
+    pub samples_at_digital_max: u64,
+    pub clipping_percentage: f64,
+    pub peak_db: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InterSampleAnalysis {
+    pub true_peak_db: f64,
+    pub inter_sample_headroom_db: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoudnessAnalysis {
+    pub integrated_lufs: f64,
+    pub dynamic_range_db: f64,
+    pub crest_factor_db: f64,
+    pub plr_db: f64,
+    pub loudness_war_victim: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RestorationAssessment {
+    pub restorable: bool,
+    pub recommended_method: Option<String>,
+    pub restoration_quality: f64,
+    pub recoverable_percentage: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EnfResult {
+    pub enf_detected: bool,
+    pub base_frequency: Option<String>,
+    pub enf_snr_db: f64,
+    pub stability_score: f64,
+    pub confidence: f64,
+    pub harmonics: Vec<EnfHarmonic>,
+    pub frequency_trace: Vec<EnfMeasurement>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EnfHarmonic {
+    pub detected_frequency: f64,
+    pub strength_db: f64,
+    pub snr_db: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EnfMeasurement {
+    pub time_offset_secs: f64,
+    pub frequency_hz: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuthenticityAssessment {
+    pub result: AuthenticityResult,
+    pub confidence: f64,
+    pub estimated_region: Option<String>,
+    pub anomalies: Vec<AuthenticityAnomaly>,
+    pub evidence: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AuthenticityResult {
+    Authentic,
+    LikelyAuthentic,
+    Inconclusive,
+    PotentiallyEdited,
+    LikelySynthetic,
+}
+
+impl std::fmt::Display for AuthenticityResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AuthenticityResult::Authentic => write!(f, "Authentic"),
+            AuthenticityResult::LikelyAuthentic => write!(f, "Likely Authentic"),
+            AuthenticityResult::Inconclusive => write!(f, "Inconclusive"),
+            AuthenticityResult::PotentiallyEdited => write!(f, "Potentially Edited"),
+            AuthenticityResult::LikelySynthetic => write!(f, "Likely Synthetic"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuthenticityAnomaly {
+    pub timestamp_secs: f64,
+    pub anomaly_type: String,
+    pub severity: f64,
+}
 
 // ============================================================================
-// Output Formatting Functions
+// Output Formatting Functions (stubs - print warnings for now)
 // ============================================================================
-
-use crate::core::analysis::detection_pipeline_enf_clipping::{
-    ExtendedAnalysisResult, QualityGrade, QualityIssueType, AuthenticityResult,
-};
 
 /// Print text format report
 pub fn print_text_report(result: &ExtendedAnalysisResult) {
-    println!("\n╔══════════════════════════════════════════════════════════════╗");
-    println!("║              EXTENDED AUDIO ANALYSIS REPORT                  ║");
-    println!("╚══════════════════════════════════════════════════════════════╝\n");
-
-    // Quality Assessment
-    println!("┌─────────────────────────────────────────────────────────────┐");
-    println!("│ QUALITY ASSESSMENT                                          │");
-    println!("├─────────────────────────────────────────────────────────────┤");
+    println!("\n[Extended Analysis - Stub Implementation]");
+    println!("Quality Grade: {:?}", result.quality_assessment.grade);
+    println!("Quality Score: {:.1}/100", result.quality_assessment.score * 100.0);
     
-    let grade_icon = match result.quality_assessment.grade {
-        QualityGrade::Excellent => "★★★★★",
-        QualityGrade::Good => "★★★★☆",
-        QualityGrade::Acceptable => "★★★☆☆",
-        QualityGrade::Poor => "★★☆☆☆",
-        QualityGrade::Severe => "★☆☆☆☆",
-    };
-    
-    println!("│ Grade: {} {}                          │", 
-        result.quality_assessment.grade, grade_icon);
-    println!("│ Score: {:.1}/100                                             │",
-        result.quality_assessment.score * 100.0);
-    println!("└─────────────────────────────────────────────────────────────┘");
-
-    // Issues
-    if !result.quality_assessment.issues.is_empty() {
-        println!("\n┌─────────────────────────────────────────────────────────────┐");
-        println!("│ ISSUES DETECTED                                             │");
-        println!("├─────────────────────────────────────────────────────────────┤");
-        
-        for issue in &result.quality_assessment.issues {
-            let icon = match issue.issue_type {
-                QualityIssueType::DigitalClipping => "🔴",
-                QualityIssueType::InterSamplePeaks => "🟠",
-                QualityIssueType::LoudnessWarVictim => "🔴",
-                QualityIssueType::LowDynamicRange => "🟡",
-                QualityIssueType::HighCompressionSeverity => "🟠",
-                QualityIssueType::SoftClipping => "🟡",
-                QualityIssueType::LimiterArtifacts => "🟡",
-            };
-            println!("│ {} {:?}: {}",
-                icon, issue.issue_type, issue.description);
-        }
-        println!("└─────────────────────────────────────────────────────────────┘");
-    }
-
-    // Clipping Details
     if let Some(ref clip) = result.clipping_result {
-        println!("\n┌─────────────────────────────────────────────────────────────┐");
-        println!("│ CLIPPING ANALYSIS                                           │");
-        println!("├─────────────────────────────────────────────────────────────┤");
-        println!("│ Digital Clipping: {}                                        │",
-            if clip.has_clipping { "YES" } else { "NO" });
-        println!("│ Clipped Samples: {} ({:.4}%)                                │",
-            clip.statistics.samples_at_digital_max,
-            clip.statistics.clipping_percentage);
-        // FIX: Use peak_db instead of peak_level_db
-        println!("│ Sample Peak: {:.2} dBFS                                     │",
-            clip.statistics.peak_db);
-        println!("│ True Peak: {:.2} dBTP                                       │",
-            clip.inter_sample_analysis.true_peak_db);
-        // FIX: Use inter_sample_headroom_db instead of headroom_db
-        println!("│ Headroom: {:.2} dB                                          │",
-            clip.inter_sample_analysis.inter_sample_headroom_db);
-        println!("├─────────────────────────────────────────────────────────────┤");
-        println!("│ LOUDNESS METRICS                                            │");
-        println!("├─────────────────────────────────────────────────────────────┤");
-        // FIX: Use integrated_lufs instead of integrated_loudness_lufs
-        println!("│ Integrated Loudness: {:.1} LUFS                             │",
-            clip.loudness_analysis.integrated_lufs);
-        println!("│ Dynamic Range (DR): {:.1} dB                                │",
-            clip.loudness_analysis.dynamic_range_db);
-        println!("│ Crest Factor: {:.1} dB                                      │",
-            clip.loudness_analysis.crest_factor_db);
-        // FIX: Use plr_db instead of peak_to_loudness_ratio
-        println!("│ PLR (Peak-to-Loudness): {:.1} dB                            │",
-            clip.loudness_analysis.plr_db);
-        println!("│ Loudness War Victim: {}                                     │",
-            if clip.loudness_analysis.loudness_war_victim { "YES ⚠️" } else { "NO" });
-        println!("└─────────────────────────────────────────────────────────────┘");
-
-        // Restoration Assessment
-        if clip.has_clipping {
-            println!("\n┌─────────────────────────────────────────────────────────────┐");
-            println!("│ RESTORATION ASSESSMENT                                      │");
-            println!("├─────────────────────────────────────────────────────────────┤");
-            println!("│ Restorable: {}                                              │",
-                if clip.restoration_assessment.restorable { "YES" } else { "NO" });
-            if let Some(method) = &clip.restoration_assessment.recommended_method {
-                println!("│ Recommended Method: {:?}                                    │", method);
-            }
-            // FIX: Use restoration_quality instead of estimated_quality
-            println!("│ Estimated Quality: {:.0}%                                    │",
-                clip.restoration_assessment.restoration_quality * 100.0);
-            println!("│ Recoverable: {:.0}%                                          │",
-                clip.restoration_assessment.recoverable_percentage);
-            println!("└─────────────────────────────────────────────────────────────┘");
-        }
+        println!("\nClipping: {}", if clip.has_clipping { "YES" } else { "NO" });
+        println!("Severity: {:.2}", clip.severity);
     }
-
-    // ENF/Authenticity Assessment
+    
     if let Some(ref auth) = result.authenticity_assessment {
-        println!("\n┌─────────────────────────────────────────────────────────────┐");
-        println!("│ AUTHENTICITY ASSESSMENT (ENF Analysis)                      │");
-        println!("├─────────────────────────────────────────────────────────────┤");
-        
-        let auth_icon = match auth.result {
-            AuthenticityResult::Authentic => "✅",
-            AuthenticityResult::LikelyAuthentic => "✅",
-            AuthenticityResult::Inconclusive => "❓",
-            AuthenticityResult::PotentiallyEdited => "⚠️",
-            AuthenticityResult::LikelySynthetic => "🤖",
-        };
-        
-        println!("│ Result: {} {}                                              │",
-            auth_icon, auth.result);
-        println!("│ Confidence: {:.1}%                                          │",
-            auth.confidence * 100.0);
-        
-        if let Some(ref region) = auth.estimated_region {
-            println!("│ Estimated Region: {:?}                                      │", region);
-        }
-        
-        if !auth.anomalies.is_empty() {
-            println!("├─────────────────────────────────────────────────────────────┤");
-            println!("│ DETECTED ANOMALIES                                          │");
-            for anomaly in &auth.anomalies {
-                println!("│ • {:.1}s: {} (severity: {:.0}%)                             │",
-                    anomaly.timestamp_secs, anomaly.anomaly_type, anomaly.severity * 100.0);
-            }
-        }
-        
-        println!("├─────────────────────────────────────────────────────────────┤");
-        println!("│ EVIDENCE                                                     │");
-        for evidence in &auth.evidence {
-            println!("│ • {}                                                        │", evidence);
-        }
-        println!("└─────────────────────────────────────────────────────────────┘");
+        println!("\nAuthenticity: {:?}", auth.result);
+        println!("Confidence: {:.1}%", auth.confidence * 100.0);
     }
-
-    // Recommendations
-    if !result.quality_assessment.recommendations.is_empty() {
-        println!("\n┌─────────────────────────────────────────────────────────────┐");
-        println!("│ RECOMMENDATIONS                                             │");
-        println!("├─────────────────────────────────────────────────────────────┤");
-        for rec in &result.quality_assessment.recommendations {
-            println!("│ → {}                                                        │", rec);
-        }
-        println!("└─────────────────────────────────────────────────────────────┘");
-    }
-
-    println!();
+    
+    println!("\n[Note: Full implementation pending]\n");
 }
 
 /// Print JSON format report
 pub fn print_json_report(result: &ExtendedAnalysisResult) {
-    // In production, use serde_json::to_string_pretty
-    println!("{{");
-    println!("  \"quality_assessment\": {{");
-    println!("    \"score\": {:.3},", result.quality_assessment.score);
-    println!("    \"grade\": \"{}\",", result.quality_assessment.grade);
-    println!("    \"issues_count\": {}", result.quality_assessment.issues.len());
-    println!("  }},");
-    
-    if let Some(ref clip) = result.clipping_result {
-        println!("  \"clipping\": {{");
-        println!("    \"has_clipping\": {},", clip.has_clipping);
-        println!("    \"severity\": {:.4},", clip.severity);
-        println!("    \"clipped_samples\": {},", clip.statistics.samples_at_digital_max);
-        println!("    \"true_peak_db\": {:.2},", clip.inter_sample_analysis.true_peak_db);
-        println!("    \"dynamic_range_db\": {:.1},", clip.loudness_analysis.dynamic_range_db);
-        println!("    \"loudness_war_victim\": {}", clip.loudness_analysis.loudness_war_victim);
-        println!("  }},");
+    match serde_json::to_string_pretty(result) {
+        Ok(json) => println!("{}", json),
+        Err(e) => eprintln!("Error serializing to JSON: {}", e),
     }
-    
-    if let Some(ref auth) = result.authenticity_assessment {
-        println!("  \"authenticity\": {{");
-        println!("    \"result\": \"{}\",", auth.result);
-        println!("    \"confidence\": {:.3},", auth.confidence);
-        println!("    \"anomaly_count\": {}", auth.anomalies.len());
-        println!("  }}");
-    }
-    
-    println!("}}");
 }
 
 /// Print detailed report format
@@ -328,45 +277,8 @@ pub fn print_detailed_report(result: &ExtendedAnalysisResult) {
     println!("================================================================================");
     println!();
     
-    // Call text report for now, but this could be expanded
     print_text_report(result);
     
-    // Additional technical details for report format
-    if let Some(ref enf) = result.enf_result {
-        println!("================================================================================");
-        println!("                         ENF TECHNICAL DETAILS                                 ");
-        println!("================================================================================");
-        println!();
-        println!("ENF Detected: {}", enf.enf_detected);
-        println!("Base Frequency: {:?}", enf.base_frequency);
-        println!("SNR: {:.2} dB", enf.enf_snr_db);
-        println!("Stability Score: {:.4}", enf.stability_score);
-        println!("Confidence: {:.4}", enf.confidence);
-        println!();
-        
-        if !enf.harmonics.is_empty() {
-            println!("Harmonics Detected:");
-            for harmonic in &enf.harmonics {
-                // FIX: Use detected_frequency instead of frequency_hz, and strength_db instead of amplitude_db
-                println!("  - {:.1} Hz: {:.2} dB (SNR: {:.1} dB)",
-                    harmonic.detected_frequency, harmonic.strength_db, harmonic.snr_db);
-            }
-            println!();
-        }
-        
-        println!("Frequency Trace: {} measurements", enf.frequency_trace.len());
-        if let Some(first) = enf.frequency_trace.first() {
-            if let Some(last) = enf.frequency_trace.last() {
-                // FIX: Use time_offset_secs instead of time_secs
-                println!("  Time span: {:.1}s - {:.1}s", first.time_offset_secs, last.time_offset_secs);
-                println!("  Frequency range: {:.4} Hz - {:.4} Hz",
-                    enf.frequency_trace.iter().map(|m| m.frequency_hz).fold(f32::INFINITY, f32::min),
-                    enf.frequency_trace.iter().map(|m| m.frequency_hz).fold(f32::NEG_INFINITY, f32::max));
-            }
-        }
-    }
-    
-    println!();
     println!("================================================================================");
     println!("                              END OF REPORT                                     ");
     println!("================================================================================");
