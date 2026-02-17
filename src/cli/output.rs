@@ -35,7 +35,6 @@ impl OutputHandler {
             if !result.detections.is_empty() {
                 println!("   Detections:");
                 for detection in &result.detections {
-                    // Use RGB colors since colorful might not support string color names easily
                     let severity_color = match detection.severity {
                         Severity::Critical => colorful::Color::Red,
                         Severity::High => colorful::Color::Red,
@@ -68,7 +67,6 @@ impl OutputHandler {
                             println!("Silence Padding: {:.2}s", padding_duration);
                         },
                         DefectType::MqaEncoded { encoder_version, bit_depth, .. } => {
-                            // Display only encoder version and bit depth as requested
                             println!("MQA Encoded: Version {} ({}-bit)", encoder_version, bit_depth);
                         },
                         DefectType::UpsampledLossyTranscode { codec, cutoff_hz, .. } => {
@@ -81,7 +79,11 @@ impl OutputHandler {
                         DefectType::ResamplingDetected { original_rate, target_rate, quality } => {
                             let orig = if *original_rate > 0 { format!("{} Hz -> ", original_rate) } else { String::new() };
                             println!("Resampling: {}{} Hz ({})", orig, target_rate, quality);
-                        }
+                        },
+                        DefectType::LoudnessWarVictim { tt_dr_score, integrated_lufs, plr_db } => {
+                            println!("Loudness War Victim: DR {:.0} dB, {:.1} LUFS, PLR {:.1} dB",
+                                tt_dr_score, integrated_lufs, plr_db);
+                        },
                     }
 
                     if let Some(evidence) = &detection.evidence {
@@ -91,17 +93,18 @@ impl OutputHandler {
             }
         }
 
-	if let Some(ref dr) = result.dynamic_range {
-    		println!("  Dynamic Range:");
-    		println!("    Crest Factor:    {:.1} dB", dr.crest_factor_db);
-    		println!("    TT DR Score:     {:.1} dB  [{}]", dr.tt_dr_score, dr.verdict);
-    		println!("    Integrated LUFS: {:.1} LUFS", dr.integrated_loudness_lufs);
-    		println!("    PLR:             {:.1} dB", dr.plr_db);
-    		println!("    True Peak:       {:.1} dBFS", dr.true_peak_dbfs);
-    		if dr.loudness_war_victim {
-        		println!("    ⚠ Loudness war victim detected");
-    		}
-	}
+        if let Some(ref dr) = result.dynamic_range {
+            println!("  Dynamic Range:");
+            println!("    Crest Factor:    {:.1} dB", dr.crest_factor_db);
+            println!("    TT DR Score:     {:.1} dB  [{}]", dr.tt_dr_score, dr.verdict);
+            println!("    Integrated LUFS: {:.1} LUFS", dr.integrated_loudness_lufs);
+            println!("    PLR:             {:.1} dB", dr.plr_db);
+            println!("    True Peak:       {:.1} dBFS", dr.true_peak_dbfs);
+            if dr.loudness_war_victim {
+                println!("    \u{26a0} Loudness war victim detected");
+            }
+        }
+
         Ok(())
     }
 

@@ -111,6 +111,7 @@ impl Default for Args {
             report: None,
             min_confidence: 0.5,
             genre: None,
+            dynamic_range: false,
         }
     }
 }

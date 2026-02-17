@@ -4,7 +4,7 @@ use crate::core::analysis::{
     AnalysisConfig, AnalysisResult, DefectType, Detection, DetectionMethod,
     QualityMetrics, Severity,
 };
-use crate::core::analysis::dynamic_range::DynamicRangeAnalyzer;
+use crate::core::analysis::dynamic_range::{DynamicRangeAnalyzer, DynamicRangeResult};
 use crate::core::dsp::{SpectralAnalyzer, WindowFunction};
 use anyhow::{Context, Result};
 use std::path::Path;
@@ -49,6 +49,9 @@ impl AudioDetector {
         
         // Calculate quality metrics
         let quality_metrics = self.calculate_quality_metrics(&samples, sample_rate);
+
+        // Dynamic range analysis — deinterleave and run
+        let dynamic_range = self.run_dynamic_range_analysis(&samples, sample_rate, channels);
         
         Ok(AnalysisResult {
             file_path: path.to_path_buf(),
@@ -61,7 +64,37 @@ impl AudioDetector {
             confidence,
             quality_metrics: Some(quality_metrics),
             analysis_timestamp: chrono::Utc::now().to_rfc3339(),
+            dynamic_range,
         })
+    }
+
+    /// Deinterleave samples and run dynamic range analysis.
+    fn run_dynamic_range_analysis(
+        &self,
+        samples: &[f32],
+        sample_rate: u32,
+        channels: u16,
+    ) -> Option<DynamicRangeResult> {
+        if samples.is_empty() {
+            return None;
+        }
+
+        let n_channels = channels as usize;
+
+        // Deinterleave: [L0, R0, L1, R1, ...] → [[L0, L1, ...], [R0, R1, ...]]
+        let samples_per_channel = samples.len() / n_channels;
+        let mut deinterleaved: Vec<Vec<f64>> = vec![Vec::with_capacity(samples_per_channel); n_channels];
+
+        for (i, &s) in samples.iter().enumerate() {
+            let ch = i % n_channels;
+            deinterleaved[ch].push(s as f64);
+        }
+
+        // Build slice references for the analyzer
+        let channel_refs: Vec<&[f64]> = deinterleaved.iter().map(|c| c.as_slice()).collect();
+
+        let analyzer = DynamicRangeAnalyzer::new(sample_rate);
+        Some(analyzer.analyze(&channel_refs))
     }
 
     /// Load audio samples from file
@@ -151,8 +184,6 @@ impl AudioDetector {
         // 1. Dithering Detection
         if let Some(detection) = self.detect_dithering(samples, bit_depth)? {
              detections.push(detection);
-             // If dithered, upsampling detection might need to be less strict or skipped?
-             // We'll let it run but inform logic
         }
 
         // 2. Resampling Detection
@@ -163,17 +194,13 @@ impl AudioDetector {
         }
 
         // 3. Spectral cutoff detection (transcode detection)
-        // If we found specific resampling evidence, we might skip generic transcode detection 
-        // to avoid duplicate/conflicting findings, but transcode usually implies LOSSY (MP3 cutoffs).
         if let Some(detection) = self.detect_spectral_cutoff(&samples_f64, sample_rate)? {
-            // Filter out if we already found resampling that explains the cutoff
             if !found_resampling {
                 detections.push(detection);
             }
         }
         
         // 4. Upsampling detection (generic)
-        // Avoid if we already identified it as specific Resampling
         if !found_resampling {
             if let Some(detection) = self.detect_upsampling(&samples_f64, sample_rate)? {
                 detections.push(detection);
@@ -198,13 +225,6 @@ impl AudioDetector {
                 detections.push(detection);
             }
         }
-        
-	// 8. Dynamic Range Calculation
-	let dr_analyzer = DynamicRangeAnalyzer::new(sample_rate);
-
-	// Build channel slices from your decoded audio
-	let channel_refs: Vec<&[f64]> = decoded_channels.iter().map(|c| c.as_slice()).collect();
-	let dr_result = dr_analyzer.analyze(&channel_refs);
 
         // Filter by minimum confidence
         detections.retain(|d| d.confidence >= self.config.min_confidence);
@@ -259,7 +279,7 @@ impl AudioDetector {
                     quality: quality.clone(),
                 },
                 confidence: result.confidence,
-                severity: Severity::Medium, // Resampling is usually a modification
+                severity: Severity::Medium,
                 method: DetectionMethod::SpectralShape,
                 evidence: Some(format!("Resampling signature detected: {}", quality)),
                 temporal: None,
@@ -282,18 +302,15 @@ impl AudioDetector {
         
         let nyquist = sample_rate as f64 / 2.0;
         
-        // Detect cutoff frequency
         let cutoff = analyzer.detect_cutoff(samples, sample_rate, 10.0);
         
         if let Some(cutoff_hz) = cutoff {
-            // Check if cutoff is suspiciously low
             let cutoff_ratio = cutoff_hz / nyquist;
             
             if cutoff_ratio < 0.95 {
-                // Estimate original format based on cutoff
                 let (codec, bitrate) = self.estimate_codec(cutoff_hz);
                 
-                let confidence = (0.95 - cutoff_ratio) / 0.3; // Scale confidence
+                let confidence = (0.95 - cutoff_ratio) / 0.3;
                 let confidence = confidence.clamp(0.0, 1.0);
                 
                 let severity = if cutoff_ratio < 0.5 {
@@ -330,7 +347,6 @@ impl AudioDetector {
 
     /// Estimate original codec based on cutoff frequency
     fn estimate_codec(&self, cutoff_hz: f64) -> (String, u32) {
-        // Common cutoff frequencies for various formats
         if cutoff_hz < 11025.0 {
             ("MP3".to_string(), 64)
         } else if cutoff_hz < 14000.0 {
@@ -352,7 +368,6 @@ impl AudioDetector {
         samples: &[f64],
         sample_rate: u32,
     ) -> Result<Option<Detection>> {
-        // Look for null energy at expected Nyquist frequencies
         let common_rates = [44100, 48000, 88200, 96000];
         
         for &original_rate in &common_rates {
@@ -362,7 +377,6 @@ impl AudioDetector {
             
             let original_nyquist = original_rate as f64 / 2.0;
             
-            // Check for null energy above original Nyquist
             let mut analyzer = SpectralAnalyzer::new(
                 self.config.fft_size,
                 self.config.hop_size,
@@ -379,7 +393,6 @@ impl AudioDetector {
                 continue;
             }
             
-            // Check energy above original Nyquist
             let high_freq_energy: f64 = spectrum[start_bin..end_bin]
                 .iter()
                 .map(|&x| 10.0_f64.powf(x / 10.0))
@@ -393,7 +406,6 @@ impl AudioDetector {
             let ratio = high_freq_energy / low_freq_energy.max(1e-10);
             
             if ratio < 0.01 {
-                // Very little energy above original Nyquist - likely upsampled
                 let confidence = (1.0 - ratio * 10.0).clamp(0.0, 1.0);
                 
                 return Ok(Some(Detection {
@@ -426,11 +438,9 @@ impl AudioDetector {
             return Ok(None);
         }
         
-        // Analyze LSB patterns to determine actual bit depth
         let mut bit_usage = vec![0u64; 32];
         
         for &sample in samples {
-            // Convert to integer representation
             let int_val = (sample * (1 << (claimed_bits - 1)) as f32) as i32;
             
             for bit in 0..32 {
@@ -440,13 +450,11 @@ impl AudioDetector {
             }
         }
         
-        // Find actual bit depth by looking at LSB usage
         let total = samples.len() as f64;
         let mut actual_bits = claimed_bits;
         
         for bit in 0..claimed_bits as usize {
             let usage_ratio = bit_usage[bit] as f64 / total;
-            // If LSBs have very low entropy, they're likely padding
             if usage_ratio < 0.01 || usage_ratio > 0.99 {
                 actual_bits = (claimed_bits as usize - bit - 1).max(8) as u16;
             } else {
@@ -481,11 +489,10 @@ impl AudioDetector {
         Ok(None)
     }
 
-    /// Detect MQA encoding - FIXED: Now uses proper MqaDetector with bit_depth parameter
+    /// Detect MQA encoding
     fn detect_mqa(&self, samples: &[f32], sample_rate: u32, bit_depth: u16) -> Result<Option<Detection>> {
         use crate::core::analysis::mqa_detection::MqaDetector;
         
-        // Use the comprehensive MQA detector with proper 24-bit handling
         let detector = MqaDetector::default();
         let result = detector.detect(samples, sample_rate, bit_depth as u32);
         
@@ -509,7 +516,7 @@ impl AudioDetector {
                     bit_depth,
                 },
                 confidence: result.confidence as f64,
-                severity: Severity::Info, // MQA is informational, not a defect
+                severity: Severity::Info,
                 method: DetectionMethod::MqaSignature,
                 evidence: Some(result.evidence.join("; ")),
                 temporal: None,
@@ -530,10 +537,9 @@ impl AudioDetector {
     /// Calculate overall confidence score
     fn calculate_confidence(&self, detections: &[Detection]) -> f64 {
         if detections.is_empty() {
-            return 1.0; // High confidence it's genuine
+            return 1.0;
         }
         
-        // Calculate weighted average of detection confidences
         let total_weight: f64 = detections
             .iter()
             .map(|d| match d.severity {
@@ -572,7 +578,6 @@ impl AudioDetector {
             return QualityMetrics::default();
         }
         
-        // Calculate basic metrics
         let max_sample = samples.iter().map(|&s| s.abs()).fold(0.0_f32, f32::max);
         let rms = (samples.iter().map(|&s| s * s).sum::<f32>() / samples.len() as f32).sqrt();
         
@@ -594,13 +599,11 @@ impl AudioDetector {
             0.0
         };
         
-        // Estimate dynamic range
-        let dynamic_range = true_peak - rms_db + 3.0; // Approximation
+        let dynamic_range = true_peak - rms_db + 3.0;
         
-        // Estimate noise floor (simplified - look at quiet sections)
         let mut sorted_samples: Vec<f32> = samples.iter().map(|&s| s.abs()).collect();
         sorted_samples.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        let noise_floor_sample = sorted_samples[sorted_samples.len() / 100]; // 1st percentile
+        let noise_floor_sample = sorted_samples[sorted_samples.len() / 100];
         let noise_floor = if noise_floor_sample > 0.0 {
             20.0 * (noise_floor_sample as f64).log10()
         } else {
@@ -610,10 +613,10 @@ impl AudioDetector {
         QualityMetrics {
             dynamic_range,
             noise_floor,
-            spectral_centroid: 0.0, // Would require FFT analysis
+            spectral_centroid: 0.0,
             crest_factor,
             true_peak,
-            lufs_integrated: rms_db, // Simplified - real LUFS requires more analysis
+            lufs_integrated: rms_db,
         }
     }
 }

@@ -128,6 +128,11 @@ pub enum DefectType {
         target_rate: u32,
         quality: String,
     },
+    LoudnessWarVictim {
+        tt_dr_score: f64,
+        integrated_lufs: f64,
+        plr_db: f64,
+    },
 }
 
 /// Severity levels for detections

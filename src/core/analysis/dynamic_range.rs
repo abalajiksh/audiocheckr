@@ -24,9 +24,10 @@
 //! | > 20     | Rare; unmastered or very dynamic recordings   |
 
 use std::f64::consts::PI;
+use serde::{Deserialize, Serialize};
 
 /// Complete dynamic range analysis result.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DynamicRangeResult {
     /// Number of audio channels analyzed
     pub channels: usize,
@@ -71,7 +72,7 @@ pub struct DynamicRangeResult {
 }
 
 /// Classification of dynamic range health.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum DynamicRangeVerdict {
     /// DR > 20 — exceptional dynamics
     Exceptional,
@@ -89,9 +90,9 @@ impl std::fmt::Display for DynamicRangeVerdict {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Exceptional => write!(f, "Exceptional (DR > 20)"),
-            Self::Excellent => write!(f, "Excellent (DR 14–20)"),
-            Self::Normal => write!(f, "Normal (DR 8–13)"),
-            Self::Compressed => write!(f, "Compressed (DR 5–7)"),
+            Self::Excellent => write!(f, "Excellent (DR 14-20)"),
+            Self::Normal => write!(f, "Normal (DR 8-13)"),
+            Self::Compressed => write!(f, "Compressed (DR 5-7)"),
             Self::Brickwalled => write!(f, "Brickwalled (DR < 5)"),
         }
     }
@@ -273,13 +274,9 @@ impl DynamicRangeAnalyzer {
         let fs = self.sample_rate as f64;
 
         // ── Stage 1: Pre-filter (high shelf) ───────────────────
-        // Derived from ITU-R BS.1770-4 reference coefficients.
-        // At 48kHz: ~+4 dB shelf above ~1.5 kHz.
-        // We re-derive via bilinear transform for arbitrary sample rates.
         let (b1, a1) = k_weight_prefilter_coefficients(fs);
 
         // ── Stage 2: High-pass (RLB) ───────────────────────────
-        // 2nd-order Butterworth high-pass, fc ≈ 38 Hz
         let (b2, a2) = k_weight_highpass_coefficients(fs);
 
         // Apply both biquads in sequence
@@ -355,12 +352,6 @@ impl DynamicRangeAnalyzer {
 // ════════════════════════════════════════════════════════════════════
 
 /// Pre-filter (high-shelf) coefficients for K-weighting.
-///
-/// This approximates the ITU-R BS.1770-4 Stage 1 filter via a
-/// high-shelf biquad designed with the bilinear transform.
-///
-/// At 48kHz, this matches the standard's reference coefficients.
-/// At other rates, it adapts to maintain the same analog prototype.
 fn k_weight_prefilter_coefficients(fs: f64) -> ([f64; 3], [f64; 3]) {
     // Reference coefficients at 48kHz from ITU-R BS.1770-4
     if (fs - 48000.0).abs() < 1.0 {
@@ -370,13 +361,11 @@ fn k_weight_prefilter_coefficients(fs: f64) -> ([f64; 3], [f64; 3]) {
         );
     }
 
-    // For other sample rates, use bilinear transform of the analog prototype.
-    // Analog prototype: high shelf with ~+4 dB gain, fc ~1681 Hz, Q ~0.71
     let fc = 1681.974450955533;
     let g_db = 3.999843853973347;
     let q = 0.7071752369554196;
 
-    let a = 10.0_f64.powf(g_db / 40.0); // sqrt of linear gain
+    let a = 10.0_f64.powf(g_db / 40.0);
     let w0 = 2.0 * PI * fc / fs;
     let cos_w0 = w0.cos();
     let sin_w0 = w0.sin();
@@ -393,10 +382,7 @@ fn k_weight_prefilter_coefficients(fs: f64) -> ([f64; 3], [f64; 3]) {
 }
 
 /// High-pass (RLB weighting) coefficients for K-weighting.
-///
-/// 2nd-order Butterworth high-pass at ~38.13547087602444 Hz.
 fn k_weight_highpass_coefficients(fs: f64) -> ([f64; 3], [f64; 3]) {
-    // Reference coefficients at 48kHz
     if (fs - 48000.0).abs() < 1.0 {
         return (
             [1.0, -2.0, 1.0],
@@ -408,7 +394,7 @@ fn k_weight_highpass_coefficients(fs: f64) -> ([f64; 3], [f64; 3]) {
     let w0 = 2.0 * PI * fc / fs;
     let cos_w0 = w0.cos();
     let sin_w0 = w0.sin();
-    let alpha = sin_w0 / (2.0 * 0.7071067811865476); // Q = 1/sqrt(2) for Butterworth
+    let alpha = sin_w0 / (2.0 * 0.7071067811865476);
 
     let b0 = (1.0 + cos_w0) / 2.0;
     let b1 = -(1.0 + cos_w0);
@@ -474,14 +460,12 @@ fn mean(values: &[f64]) -> f64 {
 
 fn to_dbfs(amplitude: f64) -> f64 {
     if amplitude <= 0.0 {
-        return -120.0; // floor
+        return -120.0;
     }
     20.0 * amplitude.log10()
 }
 
 fn to_lufs(rms: f64) -> f64 {
-    // LUFS = -0.691 + 10 * log10(mean_square)
-    // mean_square = rms^2
     if rms <= 0.0 {
         return -70.0;
     }
@@ -517,7 +501,6 @@ fn classify_dr(tt_dr: f64) -> DynamicRangeVerdict {
 mod tests {
     use super::*;
 
-    /// Generate a sine wave at a given frequency and amplitude.
     fn sine_wave(freq: f64, amplitude: f64, sample_rate: u32, duration_secs: f64) -> Vec<f64> {
         let n_samples = (sample_rate as f64 * duration_secs) as usize;
         (0..n_samples)
@@ -525,35 +508,11 @@ mod tests {
             .collect()
     }
 
-    /// Generate white noise at a given RMS amplitude.
-    fn white_noise(rms_amplitude: f64, sample_rate: u32, duration_secs: f64) -> Vec<f64> {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-
-        let n_samples = (sample_rate as f64 * duration_secs) as usize;
-        let mut samples = Vec::with_capacity(n_samples);
-
-        // Deterministic pseudo-random for reproducible tests
-        let mut state: u64 = 42;
-        for _ in 0..n_samples {
-            let mut hasher = DefaultHasher::new();
-            state.hash(&mut hasher);
-            state = hasher.finish();
-            // Map to [-1, 1]
-            let val = (state as f64 / u64::MAX as f64) * 2.0 - 1.0;
-            samples.push(val * rms_amplitude);
-        }
-        samples
-    }
-
     #[test]
     fn test_crest_factor_sine() {
-        // A pure sine wave has a crest factor of ~3.01 dB
         let samples = sine_wave(1000.0, 0.5, 48000, 5.0);
         let analyzer = DynamicRangeAnalyzer::new(48000);
         let result = analyzer.analyze(&[&samples]);
-
-        // Sine crest factor = 20*log10(sqrt(2)) ≈ 3.01 dB
         assert!(
             (result.crest_factor_db - 3.01).abs() < 0.1,
             "Sine crest factor should be ~3.01 dB, got {:.2}",
@@ -563,22 +522,15 @@ mod tests {
 
     #[test]
     fn test_tt_dr_high_dynamic_range() {
-        // Alternating loud and quiet blocks should yield a high DR
         let sr = 48000_u32;
-        let block_secs = 3.0;
-        let block_len = (sr as f64 * block_secs) as usize;
-
         let mut samples = Vec::new();
         for i in 0..10 {
             let amp = if i % 2 == 0 { 0.9 } else { 0.01 };
-            let block = sine_wave(440.0, amp, sr, block_secs);
+            let block = sine_wave(440.0, amp, sr, 3.0);
             samples.extend_from_slice(&block);
         }
-
         let analyzer = DynamicRangeAnalyzer::new(sr);
         let result = analyzer.analyze(&[&samples]);
-
-        // Should have a significant DR since blocks alternate between loud and quiet
         assert!(
             result.tt_dr_score > 10.0,
             "Alternating loud/quiet should give DR > 10, got {:.1}",
@@ -588,13 +540,9 @@ mod tests {
 
     #[test]
     fn test_tt_dr_brickwalled() {
-        // Constant-amplitude signal → very low DR
         let samples = sine_wave(440.0, 0.99, 48000, 15.0);
         let analyzer = DynamicRangeAnalyzer::new(48000);
         let result = analyzer.analyze(&[&samples]);
-
-        // Pure sine at constant amplitude: crest factor ≈ 3 dB
-        // TT DR should be very close to crest factor for a static signal
         assert!(
             result.tt_dr_score < 5.0,
             "Constant amplitude should give low DR, got {:.1}",
@@ -607,7 +555,6 @@ mod tests {
         let samples = vec![0.0; 48000 * 5];
         let analyzer = DynamicRangeAnalyzer::new(48000);
         let result = analyzer.analyze(&[&samples]);
-
         assert!(
             result.integrated_loudness_lufs <= -70.0,
             "Silence should be <= -70 LUFS, got {:.1}",
@@ -619,15 +566,11 @@ mod tests {
     fn test_stereo_analysis() {
         let left = sine_wave(440.0, 0.8, 48000, 5.0);
         let right = sine_wave(440.0, 0.4, 48000, 5.0);
-
         let analyzer = DynamicRangeAnalyzer::new(48000);
         let result = analyzer.analyze(&[&left, &right]);
-
         assert_eq!(result.channels, 2);
         assert_eq!(result.crest_factor_per_channel.len(), 2);
         assert_eq!(result.tt_dr_per_channel.len(), 2);
-
-        // Both channels should have similar crest factor (both are pure sine)
         assert!(
             (result.crest_factor_per_channel[0] - result.crest_factor_per_channel[1]).abs() < 0.5
         );
@@ -644,23 +587,14 @@ mod tests {
 
     #[test]
     fn test_k_weighting_boosts_high_freq() {
-        // K-weighting should boost high frequencies relative to low
         let sr = 48000;
         let low = sine_wave(100.0, 0.5, sr, 1.0);
         let high = sine_wave(4000.0, 0.5, sr, 1.0);
-
         let analyzer = DynamicRangeAnalyzer::new(sr);
-
         let low_filtered = analyzer.apply_k_weighting(&low);
         let high_filtered = analyzer.apply_k_weighting(&high);
-
-        let low_rms = rms_of(&low_filtered);
-        let high_rms = rms_of(&high_filtered);
-
-        // After K-weighting, 4kHz should be louder than 100Hz (relative to original)
-        let low_gain = low_rms / rms_of(&low);
-        let high_gain = high_rms / rms_of(&high);
-
+        let low_gain = rms_of(&low_filtered) / rms_of(&low);
+        let high_gain = rms_of(&high_filtered) / rms_of(&high);
         assert!(
             high_gain > low_gain,
             "K-weighting should boost high freq relative to low: low_gain={:.3}, high_gain={:.3}",
@@ -671,23 +605,13 @@ mod tests {
 
     #[test]
     fn test_biquad_stability() {
-        // Ensure biquad doesn't blow up with edge-case input
         let impulse: Vec<f64> = std::iter::once(1.0)
             .chain(std::iter::repeat(0.0).take(999))
             .collect();
-
         let (b, a) = k_weight_prefilter_coefficients(48000.0);
         let output = biquad_filter(&impulse, &b, &a);
-
-        // Output should decay, not explode
         let max_val = output.iter().map(|x| x.abs()).fold(0.0_f64, f64::max);
-        assert!(
-            max_val < 10.0,
-            "Biquad output should be bounded, got max {}",
-            max_val
-        );
-
-        // Tail should be near zero
+        assert!(max_val < 10.0, "Biquad output should be bounded, got max {}", max_val);
         let tail_energy: f64 = output[900..].iter().map(|x| x * x).sum();
         assert!(tail_energy < 1e-6, "Biquad tail should decay");
     }

@@ -189,7 +189,7 @@ fn format_defect(defect: &DefectType, confidence: f64) -> String {
             current_rate,
         } => {
             format!(
-                "Upsampled: {} Hz → {} Hz{}",
+                "Upsampled: {} Hz -> {} Hz{}",
                 original_rate, current_rate, conf_str
             )
         }
@@ -239,7 +239,7 @@ fn format_defect(defect: &DefectType, confidence: f64) -> String {
                 .map(|b| format!(" ~{}kbps", b))
                 .unwrap_or_default();
             format!(
-                "Upsampled lossy transcode: {}{} upsampled {} Hz → {} Hz (cutoff: {} Hz){}",
+                "Upsampled lossy transcode: {}{} upsampled {} Hz -> {} Hz (cutoff: {} Hz){}",
                 codec, bitrate_str, original_rate, current_rate, cutoff_hz, conf_str
             )
         }
@@ -260,20 +260,20 @@ fn format_defect(defect: &DefectType, confidence: f64) -> String {
             quality,
         } => {
             format!(
-                "Resampling detected: {} Hz → {} Hz ({}){}",
+                "Resampling detected: {} Hz -> {} Hz ({}){}",
                 original_rate, target_rate, quality, conf_str
             )
         }
-	DefectType::LoudnessWarVictim { 
-	    tt_dr_score, 
-	    integrated_lufs, 
-	    plr_db 
-	} => {
-    	    format!(
-        	"Loudness war victim: DR {:.0} dB, {:.1} LUFS, PLR {:.1} dB{}",
-        	tt_dr_score, integrated_lufs, plr_db, conf_str
-    	    )
-	}
+        DefectType::LoudnessWarVictim {
+            tt_dr_score,
+            integrated_lufs,
+            plr_db,
+        } => {
+            format!(
+                "Loudness war victim: DR {:.0} dB, {:.1} LUFS, PLR {:.1} dB{}",
+                tt_dr_score, integrated_lufs, plr_db, conf_str
+            )
+        }
     }
 }
 
@@ -289,6 +289,7 @@ fn get_severity_icon(defect: &DefectType) -> &'static str {
         DefectType::UpsampledLossyTranscode { .. } => "[!!!]",
         DefectType::DitheringDetected { .. } => "[i]",
         DefectType::ResamplingDetected { .. } => "[!]",
+        DefectType::LoudnessWarVictim { .. } => "[!!]",
     }
 }
 
@@ -318,6 +319,6 @@ mod tests {
             cutoff_hz: 16000,
         };
 
-        assert_eq!(get_severity_icon(&defect), "[!!!");
+        assert_eq!(get_severity_icon(&defect), "[!!!]");
     }
 }
