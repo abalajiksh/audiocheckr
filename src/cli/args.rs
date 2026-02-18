@@ -7,7 +7,7 @@ use std::path::PathBuf;
 #[derive(Parser, Debug, Clone)]
 #[command(name = "audiocheckr")]
 #[command(author = "Ashwin")]
-#[command(version = "0.12.0")]
+#[command(version)]
 #[command(about = "Detects fake lossless audio files", long_about = None)]
 pub struct Args {
     /// Input file or directory to analyze
