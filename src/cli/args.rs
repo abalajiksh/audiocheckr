@@ -46,6 +46,10 @@ pub struct Args {
     #[arg(long)]
     pub enf: bool,
 
+    /// Enable MFCC-based codec artifact / lossy transcode detection
+    #[arg(long)]
+    pub mfcc: bool,
+
     /// Show spectrogram visualization
     #[arg(long)]
     pub spectrogram: bool,
@@ -107,6 +111,7 @@ impl Default for Args {
             mqa: false,
             clipping: false,
             enf: false,
+	    mfcc: false,
             spectrogram: false,
             report: None,
             min_confidence: 0.5,
