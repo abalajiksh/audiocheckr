@@ -10,6 +10,7 @@ pub mod mfcc;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 pub use dynamic_range::{DynamicRangeAnalyzer, DynamicRangeResult, DynamicRangeVerdict};
+pub use mfcc::{MfccAnalyzer, MfccConfig, MfccResult, MfccFingerprint};
 
 /// Configuration for audio analysis
 #[derive(Debug, Clone)]
@@ -163,6 +164,7 @@ pub enum DetectionMethod {
     StatisticalAnalysis,
     MultiMethod,
     NoiseFloorAnalysis,
+    MfccAnalysis,
 }
 
 /// Quality metrics for the audio file
