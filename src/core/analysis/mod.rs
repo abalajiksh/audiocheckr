@@ -5,6 +5,7 @@ pub mod mqa_detection;
 pub mod resampling_detection;
 pub mod dithering_detection;
 pub mod dynamic_range;
+pub mod mfcc;
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
