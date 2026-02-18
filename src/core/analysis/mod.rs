@@ -22,6 +22,7 @@ pub struct AnalysisConfig {
     pub enable_enf: bool,
     pub genre_profile: Option<String>,
     pub sensitivity: AnalysisSensitivity,
+    pub enable_mfcc: bool,
 }
 
 impl Default for AnalysisConfig {
@@ -35,6 +36,7 @@ impl Default for AnalysisConfig {
             enable_enf: false,
             genre_profile: None,
             sensitivity: AnalysisSensitivity::Medium,
+	    enable_mfcc: false,
         }
     }
 }
@@ -60,6 +62,7 @@ pub struct AnalysisResult {
     pub quality_metrics: Option<QualityMetrics>,
     pub analysis_timestamp: String,
     pub dynamic_range: Option<DynamicRangeResult>,
+    pub mfcc: Option<MfccResult>,
 }
 
 impl AnalysisResult {

@@ -52,6 +52,17 @@ impl AudioDetector {
 
         // Dynamic range analysis — deinterleave and run
         let dynamic_range = self.run_dynamic_range_analysis(&samples, sample_rate, channels);
+	
+	// MFCC analysis (downmix interleaved f32 → mono f64 first)
+        let mfcc = if self.config.enable_mfcc {
+            let mono_f64: Vec<f64> = samples
+                .chunks(channels as usize)
+                .map(|frame| frame.iter().map(|&s| s as f64).sum::<f64>() / channels as f64)
+                .collect();
+            Some(self.run_mfcc_analysis(&mono_f64, sample_rate))
+        } else {
+            None
+        };
         
         Ok(AnalysisResult {
             file_path: path.to_path_buf(),
@@ -65,6 +76,7 @@ impl AudioDetector {
             quality_metrics: Some(quality_metrics),
             analysis_timestamp: chrono::Utc::now().to_rfc3339(),
             dynamic_range,
+	    mfcc,
         })
     }
 
@@ -95,6 +107,19 @@ impl AudioDetector {
 
         let analyzer = DynamicRangeAnalyzer::new(sample_rate);
         Some(analyzer.analyze(&channel_refs))
+    }
+
+    /// Compute MFCCs for the given mono f64 samples.
+    /// Constructed fresh per call; the filterbank/DCT are cheap to build.
+    fn run_mfcc_analysis(
+        &self,
+        samples: &[f64],
+        sample_rate: u32,
+    ) -> crate::core::analysis::mfcc::MfccResult {
+        use crate::core::analysis::mfcc::{MfccAnalyzer, MfccConfig};
+        let config = MfccConfig::for_codec_detection();
+        let analyzer = MfccAnalyzer::new(sample_rate, config);
+        analyzer.analyze(samples)
     }
 
     /// Load audio samples from file
@@ -223,6 +248,23 @@ impl AudioDetector {
         if self.config.enable_clipping {
             if let Some(detection) = self.detect_clipping(samples, sample_rate)? {
                 detections.push(detection);
+            }
+        }
+
+	// 8. MFCC-based transcode detection (if enabled)
+        //    samples_f64 is already computed above as interleaved mono-ish f64;
+        //    for pipeline use a quick mono downmix isn't needed since detector
+        //    already has it — just reuse samples_f64 directly (it's already mixed)
+        if self.config.enable_mfcc {
+            let mfcc_result = self.run_mfcc_analysis(&samples_f64, sample_rate);
+            if let Some(detection) = self.detect_lossy_via_mfcc(&mfcc_result) {
+                // Only add if spectral cutoff didn't already catch it
+                let already_detected = detections.iter().any(|d| {
+                    matches!(d.defect_type, DefectType::LossyTranscode { .. })
+                });
+                if !already_detected {
+                    detections.push(detection);
+                }
             }
         }
 
@@ -360,6 +402,80 @@ impl AudioDetector {
         } else {
             ("Unknown".to_string(), 0)
         }
+    }
+
+    /// Detect lossy transcode using MFCC cepstral envelope flatness.
+    ///
+    /// Genuine lossless: high variance in high-order MFCCs (spectral detail is preserved).
+    /// Lossy transcode:  low variance (psychoacoustic quantisation smooths the envelope).
+    fn detect_lossy_via_mfcc(
+        &self,
+        mfcc_result: &crate::core::analysis::mfcc::MfccResult,
+    ) -> Option<Detection> {
+        // Need at least a few frames to be meaningful
+        if mfcc_result.n_frames < 10 {
+            return None;
+        }
+
+        let std_dev = &mfcc_result.stats.std_dev;
+        let n = std_dev.len();
+
+        // Only look at coefficients 5..n — skip low-order ones (they track
+        // energy/broadband shape and are high-variance even in lossy audio)
+        if n <= 5 {
+            return None;
+        }
+
+        let high_order_std: f64 = std_dev[5..].iter().sum::<f64>() / (n - 5) as f64;
+
+        // Threshold: empirically, transcoded files sit below ~1.5 on a
+        // for_codec_detection() config (64 mel bands, 20 MFCCs, 4096 FFT).
+        // Genuine lossless tends to be 2.5–5.0+.
+        // You may need to tune this against your own test corpus.
+        let threshold = 1.5_f64;
+
+        if high_order_std < threshold {
+            // Scale confidence: 0.5 at threshold, 1.0 at 0.0
+            let confidence = ((threshold - high_order_std) / threshold).clamp(0.0, 1.0);
+
+            // Also check kurtosis: lossy audio has near-Gaussian cepstrum
+            // (excess kurtosis ≈ 0), genuine lossless is more leptokurtic
+            let high_order_kurt: f64 = mfcc_result.stats.kurtosis[5..]
+                .iter()
+                .map(|k| k.abs())
+                .sum::<f64>()
+                / (n - 5) as f64;
+
+            // Boost confidence if kurtosis also looks Gaussian-flat
+            let confidence = if high_order_kurt < 0.5 {
+                (confidence + 0.15).clamp(0.0, 1.0)
+            } else {
+                confidence
+            };
+
+            return Some(Detection {
+                defect_type: DefectType::LossyTranscode {
+                    codec: "Unknown (cepstral analysis)".to_string(),
+                    estimated_bitrate: None,
+                    cutoff_hz: 0,
+                },
+                confidence,
+                severity: if confidence > 0.75 {
+                    Severity::High
+                } else {
+                    Severity::Medium
+                },
+                method: DetectionMethod::MfccAnalysis,  // the new variant you add
+                evidence: Some(format!(
+                    "MFCC high-order std_dev={:.3} (threshold {:.1}), \
+                     mean |kurtosis|={:.3} — flat cepstrum indicates lossy history",
+                    high_order_std, threshold, high_order_kurt
+                )),
+                temporal: None,
+            });
+        }
+
+        None
     }
 
     /// Detect upsampling
