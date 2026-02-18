@@ -48,6 +48,7 @@ fn main() -> Result<()> {
         enable_mqa: args.mqa,
         enable_clipping: args.clipping,
         enable_enf: args.enf,
+	enable_mfcc: false,
         genre_profile: args.genre.map(|g| format!("{:?}", g)),
         sensitivity: match args.sensitivity {
             Sensitivity::Low => AnalysisSensitivity::Low,
