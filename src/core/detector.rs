@@ -42,7 +42,7 @@ impl AudioDetector {
         let file_hash = self.calculate_hash(path)?;
         
         // Run detection pipeline
-        let detections = self.run_detection_pipeline(&samples, sample_rate, bit_depth)?;
+        let detections = self.run_detection_pipeline(&samples, sample_rate, bit_depth, channels)?;
         
         // Calculate overall confidence
         let confidence = self.calculate_confidence(&detections);
@@ -200,6 +200,7 @@ impl AudioDetector {
         samples: &[f32],
         sample_rate: u32,
         bit_depth: u16,
+        channels: u16,
     ) -> Result<Vec<Detection>> {
         let mut detections = Vec::new();
         
@@ -251,14 +252,14 @@ impl AudioDetector {
             }
         }
 
-	// 8. MFCC-based transcode detection (if enabled)
-        //    samples_f64 is already computed above as interleaved mono-ish f64;
-        //    for pipeline use a quick mono downmix isn't needed since detector
-        //    already has it — just reuse samples_f64 directly (it's already mixed)
+        // 8. MFCC-based transcode detection (if enabled)
         if self.config.enable_mfcc {
-            let mfcc_result = self.run_mfcc_analysis(&samples_f64, sample_rate);
+            let mono: Vec<f64> = samples
+                .chunks(channels as usize)
+                .map(|frame| frame.iter().map(|&s| s as f64).sum::<f64>() / channels as f64)
+                .collect();
+            let mfcc_result = self.run_mfcc_analysis(&mono, sample_rate);
             if let Some(detection) = self.detect_lossy_via_mfcc(&mfcc_result) {
-                // Only add if spectral cutoff didn't already catch it
                 let already_detected = detections.iter().any(|d| {
                     matches!(d.defect_type, DefectType::LossyTranscode { .. })
                 });

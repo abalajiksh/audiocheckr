@@ -37,7 +37,7 @@ impl Default for AnalysisConfig {
             enable_enf: false,
             genre_profile: None,
             sensitivity: AnalysisSensitivity::Medium,
-	    enable_mfcc: false,
+	    enable_mfcc: true,
         }
     }
 }

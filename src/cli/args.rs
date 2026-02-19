@@ -47,7 +47,7 @@ pub struct Args {
     pub enf: bool,
 
     /// Enable MFCC-based codec artifact / lossy transcode detection
-    #[arg(long)]
+    #[arg(long, default_value_t = true)]
     pub mfcc: bool,
 
     /// Show spectrogram visualization
