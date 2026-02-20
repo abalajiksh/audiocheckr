@@ -96,7 +96,7 @@ fn test_mqa_detection() {
             //   text  → stderr  (attached to Allure as human-readable evidence)
             let output = Command::new(&binary_path)
                 .arg(path)
-                .arg("--mqa")      // <--- ADDED: Enable MQA detection explicitly
+                .arg("--mqa") // <--- ADDED: Enable MQA detection explicitly
                 .arg("--format")
                 .arg("both")
                 .output()
@@ -127,7 +127,11 @@ fn test_mqa_detection() {
                 **Actual:** {}\n\n\
                 **Result:** {}",
                 file_name,
-                if is_mqa { "MQA Encoded" } else { "Standard FLAC" },
+                if is_mqa {
+                    "MQA Encoded"
+                } else {
+                    "Standard FLAC"
+                },
                 if is_mqa { "PASS" } else { "FAIL" }
             );
             allure_builder = allure_builder.description(&description);
@@ -143,8 +147,8 @@ fn test_mqa_detection() {
             } else {
                 println!("{} {} - FAILED", "[FAIL]".bg_red(), file_name);
                 failed += 1;
-                allure_builder = allure_builder
-                    .failed("Failed to detect MQA encoding", Some(&text_stderr));
+                allure_builder =
+                    allure_builder.failed("Failed to detect MQA encoding", Some(&text_stderr));
             }
 
             allure_suite.add_result(allure_builder.build());

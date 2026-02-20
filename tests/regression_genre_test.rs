@@ -206,7 +206,10 @@ fn test_regression_genre_suite() {
             .parameter("genre", &result.genre)
             .parameter("expected_pass", &result.expected.to_string())
             .parameter("defects_found", &format!("{:?}", result.defects_found))
-            .parameter("expected_defects", &format!("{:?}", result.expected_defects))
+            .parameter(
+                "expected_defects",
+                &format!("{:?}", result.expected_defects),
+            )
             .parameter(
                 "validation_result",
                 &format!("{:?}", result.validation_result),
@@ -257,7 +260,10 @@ fn test_regression_genre_suite() {
                 passed += 1;
                 println!(
                     "⚠ PASS (partial match) [{}]: {} - Found {:?}, Missing {:?}",
-                    result.category, result.description, result.defects_found, result.missing_defects
+                    result.category,
+                    result.description,
+                    result.defects_found,
+                    result.missing_defects
                 );
                 allure_builder = allure_builder.passed();
             }
@@ -281,7 +287,10 @@ fn test_regression_genre_suite() {
                     "FALSE NEGATIVE: Expected defects {:?} but got CLEAN",
                     result.expected_defects
                 );
-                println!("✗ FALSE NEGATIVE [{}]: {}", result.category, result.description);
+                println!(
+                    "✗ FALSE NEGATIVE [{}]: {}",
+                    result.category, result.description
+                );
                 allure_builder = allure_builder.failed(&message, Some(&result.stdout));
             }
             ValidationResult::WrongDefectType => {

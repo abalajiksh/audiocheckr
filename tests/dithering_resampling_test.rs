@@ -985,7 +985,11 @@ fn analyze_and_report_results(
             } else {
                 format!("{:?}", test_case.primary_defect)
             },
-            if result.is_clean { "CLEAN" } else { "DEFECTIVE" },
+            if result.is_clean {
+                "CLEAN"
+            } else {
+                "DEFECTIVE"
+            },
             result.defects_found,
             result.primary_found,
             result.alternative_found,
@@ -1052,10 +1056,7 @@ fn analyze_and_report_results(
         "  - Clean passes: {}",
         stats.passed - stats.passed_with_extra - stats.passed_with_alternative
     );
-    println!(
-        "  - With extras: {} (tolerated)",
-        stats.passed_with_extra
-    );
+    println!("  - With extras: {} (tolerated)", stats.passed_with_extra);
     println!("  - Alternatives: {}", stats.passed_with_alternative);
     println!("Failed: {}", stats.failed);
     println!("  - False Positives: {}", stats.false_positives);

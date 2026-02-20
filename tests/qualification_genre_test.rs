@@ -916,4 +916,3 @@ fn test_binary_exists() {
         binary_path
     );
 }
-
