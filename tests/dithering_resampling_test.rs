@@ -1,6 +1,15 @@
 // tests/dithering_resampling_test.rs
 //
-// Dithering & Resampling Detection Test Suite v3
+// Dithering & Resampling Detection Test Suite v4
+//
+// Updates in v4:
+// - Switched from text-scraping to structured JSON parsing
+//   - `--format both`: text → stderr (Allure attachment), JSON → stdout (defect parsing)
+//   - Replaces fragile parse_defects_from_output string matching
+//   - Defects extracted directly from detections[].defect_type JSON field
+//   - is_clean driven by verdict.genuine from JSON
+//   - NOTE: info-severity detections (DitheringDetected) are NOT skipped here
+//     because they are the primary expected defects in this suite
 //
 // Updates in v3:
 // - More lenient validation: allows extra defects if primary detection works
@@ -9,13 +18,13 @@
 // - Separate pass criteria for algorithm issues vs detection issues
 //
 // Test Files Structure:
-//   dithering_tests/
-//     - input176.flac (control: 24-bit 176.4kHz original)
-//     - output_{algorithm}_scale{0.5|1.0|1.5}.flac
+// dithering_tests/
+//   - input176.flac (control: 24-bit 176.4kHz original)
+//   - output_{algorithm}_scale{0.5|1.0|1.5}.flac
 //
-//   resampling_tests/
-//     - input176.flac (control: 24-bit 176.4kHz original)
-//     - output_{samplerate}Hz_{engine}_{params}.flac
+// resampling_tests/
+//   - input176.flac (control: 24-bit 176.4kHz original)
+//   - output_{samplerate}Hz_{engine}_{params}.flac
 //
 // Expected Behavior:
 //   - Control files (input176.flac) → CLEAN (no defects)
@@ -30,6 +39,7 @@
 
 mod test_utils;
 
+use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs;
@@ -43,6 +53,36 @@ use test_utils::{
     default_audiocheckr_categories, get_binary_path, run_audiocheckr, write_categories,
     AllureEnvironment, AllureSeverity, AllureTestBuilder, AllureTestSuite,
 };
+
+// ── JSON deserialization structs ─────────────────────────────────────────────
+// Mirrors the enriched JSON written by audiocheckr to stdout in `--format both`.
+// Only the fields we need are declared; serde ignores the rest.
+
+#[derive(Deserialize)]
+struct JsonReport {
+    verdict: JsonVerdict,
+    detections: Vec<JsonDetection>,
+}
+
+#[derive(Deserialize)]
+struct JsonVerdict {
+    genuine: bool,
+}
+
+#[derive(Deserialize)]
+struct JsonDetection {
+    // Externally-tagged serde enum, e.g.:
+    // { "DitheringDetected": { "dither_type": "triangular", ... } }
+    // { "LossyTranscode": { "codec": "MP3", ... } }
+    defect_type: serde_json::Value,
+
+    // "critical" | "high" | "medium" | "low" | "info"
+    // NOTE: DitheringDetected may come back as "info" — we intentionally
+    // do NOT skip info-severity here (unlike the genre test suites) because
+    // DitheringDetected IS the primary expected defect in this suite.
+    #[allow(dead_code)]
+    severity: String,
+}
 
 // ============================================================================
 // Test Case Structures
@@ -108,7 +148,7 @@ struct TestResult {
     primary_found: bool,
     alternative_found: bool,
     intolerable_extras: Vec<String>,
-    stdout: String,
+    stdout: String, // v4: stores stderr text (human output) for Allure
     duration_ms: u64,
 }
 
@@ -235,8 +275,8 @@ fn test_dsp_full_suite() {
     let _ = std::io::stdout().flush();
 
     let results = run_tests_parallel(&binary_path, all_cases.clone(), 4);
-    let mut allure_suite = AllureTestSuite::new("DSP Full Tests", &allure_results_dir);
 
+    let mut allure_suite = AllureTestSuite::new("DSP Full Tests", &allure_results_dir);
     let stats =
         analyze_and_report_results(&results, &all_cases, &mut allure_suite, &allure_results_dir);
 
@@ -307,9 +347,9 @@ fn run_dsp_test_suite(test_dir_name: &str, _primary_type: DspTestType) {
     let _ = std::io::stdout().flush();
 
     let results = run_tests_parallel(&binary_path, test_cases.clone(), 4);
+
     let mut allure_suite =
         AllureTestSuite::new(&format!("{} Tests", suite_name), &allure_results_dir);
-
     let stats = analyze_and_report_results(
         &results,
         &test_cases,
@@ -408,7 +448,6 @@ fn scan_dithering_tests(base: &Path) -> Vec<DspTestCase> {
                 .unwrap_or(std::cmp::Ordering::Equal),
         )
     });
-
     cases
 }
 
@@ -458,7 +497,6 @@ fn scan_resampling_tests(base: &Path) -> Vec<DspTestCase> {
                 } else {
                     DspTestType::Downsampling
                 };
-
                 let direction = if is_upsampling { "↑" } else { "↓" };
 
                 // For resampling, we accept either ResamplingDetected or Upsampled
@@ -501,7 +539,6 @@ fn scan_resampling_tests(base: &Path) -> Vec<DspTestCase> {
             .cmp(&b.target_sample_rate)
             .then(a.resampler_engine.cmp(&b.resampler_engine))
     });
-
     cases
 }
 
@@ -542,7 +579,6 @@ fn run_tests_parallel(
 ) -> Vec<TestResult> {
     // Note: 'binary' path is passed for compatibility but we mostly use run_audiocheckr from utils now
     // We'll keep using it here just to check it exists or if we need specific manual execution
-
     let test_cases = Arc::new(test_cases);
     let results = Arc::new(Mutex::new(Vec::new()));
     let index = Arc::new(Mutex::new(0usize));
@@ -550,7 +586,6 @@ fn run_tests_parallel(
     let mut handles = Vec::new();
 
     let effective_threads = get_parallel_threads(num_threads);
-
     println!(
         "Running tests with {} parallel threads...\n",
         effective_threads
@@ -574,7 +609,6 @@ fn run_tests_parallel(
             };
 
             let test_case = &test_cases[current_idx];
-
             println!(
                 "[{}/{}] Testing: {}",
                 current_idx + 1,
@@ -617,7 +651,6 @@ fn run_tests_parallel(
         .expect("Arc still has multiple owners")
         .into_inner()
         .expect("Mutex poisoned");
-
     results_vec.sort_by_key(|(idx, _)| *idx);
     results_vec.into_iter().map(|(_, result)| result).collect()
 }
@@ -625,18 +658,25 @@ fn run_tests_parallel(
 fn run_single_test(test_case: &DspTestCase) -> TestResult {
     let start = std::time::Instant::now();
 
-    // Use shared helper to run with correct arguments (positional input, sensitivity)
+    // Use `--format both`:
+    //   text  → stderr (captured as text_stderr, stored in TestResult.stdout for Allure)
+    //   JSON  → stdout (parsed by parse_defects_from_json for defect detection)
+    // --verbose is kept so the Allure text attachment contains signal metrics.
     let output = run_audiocheckr(&test_case.file_path)
         .arg("--sensitivity")
         .arg("high") // High sensitivity for DSP tests
         .arg("--verbose")
+        .arg("--format")
+        .arg("both")
         .output()
         .expect("Failed to execute binary");
 
     let duration_ms = start.elapsed().as_millis() as u64;
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let defects_found = parse_defects_from_output(&stdout);
-    let is_clean = defects_found.is_empty();
+
+    let json_stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let text_stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    let (is_clean, defects_found) = parse_defects_from_json(&json_stdout);
 
     let (validation_result, primary_found, alternative_found, intolerable_extras) =
         validate_test_result_v3(test_case, is_clean, &defects_found);
@@ -649,50 +689,114 @@ fn run_single_test(test_case: &DspTestCase) -> TestResult {
         primary_found,
         alternative_found,
         intolerable_extras,
-        stdout,
+        stdout: text_stderr, // v4: stderr text stored here for Allure attachment
         duration_ms,
     }
 }
 
 // ============================================================================
-// Output Parser
+// JSON Output Parser (v4)
 // ============================================================================
 
-fn parse_defects_from_output(stdout: &str) -> Vec<String> {
-    let mut defects = Vec::new();
-    let stdout_lower = stdout.to_lowercase();
+/// Parse defects + genuine verdict from JSON stdout produced by `--format both`.
+///
+/// Returns (is_clean, defects_found) where:
+///   is_clean     = report.verdict.genuine
+///   defects_found = defect identifier strings matching the vocabulary used
+///                   by DspTestCase.primary_defect / alternative_defects / tolerated_extras
+///
+/// Defect type mapping table (externally-tagged serde JSON → string):
+///   LossyTranscode { codec: "MP3*"    }        → "Mp3Transcode"
+///   LossyTranscode { codec: "AAC*"    }        → "AacTranscode"
+///   LossyTranscode { codec: "VORBIS*" | "OGG*" } → "OggVorbisTranscode"
+///   LossyTranscode { codec: other     }        → "LossyTranscode"
+///   Upsampled / UpsampledLossyTranscode         → "Upsampled"  (+ codec label)
+///   ResamplingDetected                          → "ResamplingDetected"
+///   BitDepthInflated                            → "BitDepthMismatch"
+///   DitheringDetected                           → "DitheringDetected"
+///
+/// NOTE: Unlike the genre/regression tests, we do NOT skip "info" severity
+/// detections here, because DitheringDetected may carry severity "info" and
+/// is the primary defect we are looking for in this suite.
+fn parse_defects_from_json(json_str: &str) -> (bool, Vec<String>) {
+    let report: JsonReport = match serde_json::from_str(json_str) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("Warning: failed to parse JSON output: {}", e);
+            // Treat as clean so expected-defect cases surface as FalseNegative (loud failure)
+            return (true, vec![]);
+        }
+    };
 
-    if stdout_lower.contains("dithering detected") || stdout_lower.contains("ditheringdetected") {
-        defects.push("DitheringDetected".to_string());
-    }
+    let genuine = report.verdict.genuine;
 
-    if stdout_lower.contains("resampling detected") || stdout_lower.contains("resamplingdetected") {
-        defects.push("ResamplingDetected".to_string());
-    }
-
-    if stdout_lower.contains("upsampled") && !stdout_lower.contains("not upsampled") {
-        if !defects.contains(&"Upsampled".to_string()) {
-            defects.push("Upsampled".to_string());
+    fn push_unique(v: &mut Vec<String>, s: &str) {
+        if !v.iter().any(|x| x == s) {
+            v.push(s.to_string());
         }
     }
 
-    if stdout_lower.contains("bit depth mismatch") || stdout_lower.contains("bitdepthmismatch") {
-        defects.push("BitDepthMismatch".to_string());
+    let mut defects: Vec<String> = Vec::new();
+
+    for det in &report.detections {
+        // NOTE: We intentionally do NOT filter by severity here.
+        // DitheringDetected is the primary defect we detect in this suite,
+        // and it may come back with severity "info" from the badge system.
+        let dt = &det.defect_type;
+
+        if let Some(inner) = dt.get("LossyTranscode") {
+            let codec = inner
+                .get("codec")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_uppercase();
+
+            if codec.contains("MP3") {
+                push_unique(&mut defects, "Mp3Transcode");
+            } else if codec.contains("AAC") {
+                push_unique(&mut defects, "AacTranscode");
+            } else if codec.contains("OPUS") {
+                push_unique(&mut defects, "OpusTranscode");
+            } else if codec.contains("VORBIS") || codec.contains("OGG") {
+                push_unique(&mut defects, "OggVorbisTranscode");
+            } else {
+                push_unique(&mut defects, "LossyTranscode");
+            }
+        } else if dt.get("DitheringDetected").is_some() {
+            push_unique(&mut defects, "DitheringDetected");
+        } else if dt.get("ResamplingDetected").is_some() {
+            push_unique(&mut defects, "ResamplingDetected");
+        } else if dt.get("Upsampled").is_some() {
+            push_unique(&mut defects, "Upsampled");
+        } else if dt.get("BitDepthInflated").is_some() {
+            push_unique(&mut defects, "BitDepthMismatch");
+        } else if let Some(inner) = dt.get("UpsampledLossyTranscode") {
+            // Composite: emit both Upsampled + codec-specific transcode
+            push_unique(&mut defects, "Upsampled");
+
+            let codec = inner
+                .get("codec")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_uppercase();
+
+            if codec.contains("MP3") {
+                push_unique(&mut defects, "Mp3Transcode");
+            } else if codec.contains("AAC") {
+                push_unique(&mut defects, "AacTranscode");
+            } else if codec.contains("OPUS") {
+                push_unique(&mut defects, "OpusTranscode");
+            } else if codec.contains("VORBIS") || codec.contains("OGG") {
+                push_unique(&mut defects, "OggVorbisTranscode");
+            } else {
+                push_unique(&mut defects, "LossyTranscode");
+            }
+        }
+        // Clipping, LoudnessWarVictim, SilencePadding, MqaEncoded →
+        // not part of the DSP test vocabulary, intentionally omitted.
     }
 
-    if stdout_lower.contains("mp3") && stdout_lower.contains("transcode") {
-        defects.push("Mp3Transcode".to_string());
-    }
-
-    if stdout_lower.contains("aac") && stdout_lower.contains("transcode") {
-        defects.push("AacTranscode".to_string());
-    }
-
-    if stdout_lower.contains("vorbis") && stdout_lower.contains("transcode") {
-        defects.push("OggVorbisTranscode".to_string());
-    }
-
-    defects
+    (genuine, defects)
 }
 
 // ============================================================================
@@ -737,11 +841,13 @@ fn validate_test_result_v3(
         if is_clean {
             return (ValidationResult::Pass, false, false, vec![]);
         }
+
         // Check if all detected defects are tolerated
         let all_tolerated = defects_found.iter().all(|d| tolerated_set.contains(d));
         if all_tolerated {
             return (ValidationResult::PassWithExtra, false, false, vec![]);
         }
+
         return (ValidationResult::FalsePositive, false, false, intolerable);
     }
 
@@ -879,11 +985,7 @@ fn analyze_and_report_results(
             } else {
                 format!("{:?}", test_case.primary_defect)
             },
-            if result.is_clean {
-                "CLEAN"
-            } else {
-                "DEFECTIVE"
-            },
+            if result.is_clean { "CLEAN" } else { "DEFECTIVE" },
             result.defects_found,
             result.primary_found,
             result.alternative_found,
@@ -892,6 +994,7 @@ fn analyze_and_report_results(
         );
         builder = builder.description(&description);
 
+        // Attach human-readable text output (stderr in v4) as Allure evidence
         builder = builder.attach_text("Analysis Output", &result.stdout, allure_results_dir);
 
         match result.validation_result {
@@ -943,22 +1046,21 @@ fn analyze_and_report_results(
 
     // Print summary
     let pass_rate = (stats.passed as f32 / stats.total as f32) * 100.0;
-    println!("\nTotal Tests:     {}", stats.total);
-    println!("Passed:          {} ({:.1}%)", stats.passed, pass_rate);
+    println!("\nTotal Tests: {}", stats.total);
+    println!("Passed: {} ({:.1}%)", stats.passed, pass_rate);
     println!(
-        "  - Clean passes:    {}",
+        "  - Clean passes: {}",
         stats.passed - stats.passed_with_extra - stats.passed_with_alternative
     );
     println!(
-        "  - With extras:     {} (tolerated)",
+        "  - With extras: {} (tolerated)",
         stats.passed_with_extra
     );
-    println!("  - Alternatives:    {}", stats.passed_with_alternative);
-    println!("Failed:          {}", stats.failed);
+    println!("  - Alternatives: {}", stats.passed_with_alternative);
+    println!("Failed: {}", stats.failed);
     println!("  - False Positives: {}", stats.false_positives);
     println!("  - False Negatives: {}", stats.false_negatives);
-    println!("  - Wrong Defect:    {}", stats.wrong_defect_type);
-
+    println!("  - Wrong Defect: {}", stats.wrong_defect_type);
     println!("\n{}", "-".repeat(80));
     println!("Results by Test Type:");
     println!("{}", "-".repeat(80));

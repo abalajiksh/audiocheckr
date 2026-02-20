@@ -1,16 +1,63 @@
+// tests/mqa_test.rs
+//
+// v3: Added --mqa flag to actually enable MQA detection.
+// v2: Switched to structured JSON output parsing
+//   - `--json` flag replaced with `--format both`
+//   - text output → stderr (attached to Allure)
+//   - JSON output → stdout (parsed to find MqaEncoded in detections)
+//   - MqaEncoded may carry severity "info" — NOT filtered out
+
 use colorful::Colorful;
+use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use walkdir::WalkDir;
 
 mod test_utils;
+
 use test_utils::{
     default_audiocheckr_categories, write_categories, AllureEnvironment, AllureSeverity,
     AllureTestBuilder, AllureTestSuite,
 };
 
+// ── JSON deserialization structs ─────────────────────────────────────────────
+// Mirrors the enriched JSON written by audiocheckr to stdout in `--format both`.
+// Only the fields we need are declared; serde ignores the rest.
+
+#[derive(Deserialize)]
+struct JsonReport {
+    detections: Vec<JsonDetection>,
+}
+
+#[derive(Deserialize)]
+struct JsonDetection {
+    // Externally-tagged serde enum, e.g. { "MqaEncoded": { ... } }
+    defect_type: serde_json::Value,
+
+    // "critical" | "high" | "medium" | "low" | "info"
+    // NOTE: MqaEncoded may carry severity "info" — intentionally NOT filtered here.
+    #[allow(dead_code)]
+    severity: String,
+}
+
+/// Returns true if the JSON stdout from `--format both` contains a MqaEncoded detection.
+fn parse_is_mqa_from_json(json_str: &str) -> bool {
+    let report: JsonReport = match serde_json::from_str(json_str) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("Warning: failed to parse JSON output: {}", e);
+            return false;
+        }
+    };
+
+    report
+        .detections
+        .iter()
+        .any(|det| det.defect_type.get("MqaEncoded").is_some())
+}
+
 #[test]
-#[ignore]
+// #[ignore]  <-- Kept commented out so the test runs
 fn test_mqa_detection() {
     let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let mqa_dir = project_root.join("MQA");
@@ -44,14 +91,21 @@ fn test_mqa_detection() {
         if path.extension().map_or(false, |ext| ext == "flac") {
             let file_name = path.file_name().unwrap().to_string_lossy().to_string();
 
+            // Use `--format both` + `--mqa`:
+            //   JSON  → stdout  (parsed by parse_is_mqa_from_json)
+            //   text  → stderr  (attached to Allure as human-readable evidence)
             let output = Command::new(&binary_path)
                 .arg(path)
-                .arg("--json")
+                .arg("--mqa")      // <--- ADDED: Enable MQA detection explicitly
+                .arg("--format")
+                .arg("both")
                 .output()
                 .expect("Failed to execute command");
 
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let is_mqa = stdout.contains("MqaEncoded");
+            let json_stdout = String::from_utf8_lossy(&output.stdout);
+            let text_stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+            let is_mqa = parse_is_mqa_from_json(&json_stdout);
 
             // Build Allure test result
             let mut allure_builder = AllureTestBuilder::new(&format!("MQA: {}", file_name))
@@ -73,18 +127,14 @@ fn test_mqa_detection() {
                 **Actual:** {}\n\n\
                 **Result:** {}",
                 file_name,
-                if is_mqa {
-                    "MQA Encoded"
-                } else {
-                    "Standard FLAC"
-                },
+                if is_mqa { "MQA Encoded" } else { "Standard FLAC" },
                 if is_mqa { "PASS" } else { "FAIL" }
             );
             allure_builder = allure_builder.description(&description);
 
-            // Fix: Reassign the result of attach_text back to allure_builder
+            // Attach human-readable text output (stderr in v2) as Allure evidence
             allure_builder =
-                allure_builder.attach_text("Analysis Output", &stdout, &allure_results_dir);
+                allure_builder.attach_text("Analysis Output", &text_stderr, &allure_results_dir);
 
             if is_mqa {
                 println!("{} {} - PASSED", "[OK]".bg_green(), file_name);
@@ -94,7 +144,7 @@ fn test_mqa_detection() {
                 println!("{} {} - FAILED", "[FAIL]".bg_red(), file_name);
                 failed += 1;
                 allure_builder = allure_builder
-                    .failed("Failed to detect MQA encoding", Some(&stdout.to_string()));
+                    .failed("Failed to detect MQA encoding", Some(&text_stderr));
             }
 
             allure_suite.add_result(allure_builder.build());
