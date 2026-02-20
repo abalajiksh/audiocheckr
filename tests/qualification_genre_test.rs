@@ -21,9 +21,16 @@
 // v6: STRICTER validation logic
 //     - Extra/wrong defects detected → FAIL (not pass), reported as warning
 //     - Multiple expected defects with partial match → PASS with warning (acceptable)
+// v7: Migrated from text-scraping to --format both for structured defect extraction
+//     - Text output → stderr (captured as Allure "Analysis Output" attachment)
+//     - JSON output → stdout (parsed via serde_json for defect detection)
+//     - Replaces fragile parse_defects_from_output string matching
+//     - Defects extracted directly from detections[].defect_type JSON field
+//     - is_clean driven by verdict.genuine from JSON (matches app logic exactly)
 
 mod test_utils;
 
+use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs;
@@ -36,6 +43,36 @@ use test_utils::{
     default_audiocheckr_categories, get_binary_path, run_audiocheckr, write_categories,
     AllureEnvironment, AllureSeverity, AllureTestBuilder, AllureTestSuite,
 };
+
+// ── JSON deserialization structs ─────────────────────────────────────────────
+// Mirrors the EnrichedOutput that --format both / --format json writes to stdout.
+// Only the fields we actually need are declared; unknown fields are ignored by serde.
+
+/// Top-level JSON report shape from audiocheckr --format both (stdout)
+#[derive(Deserialize)]
+struct JsonReport {
+    verdict: JsonVerdict,
+    detections: Vec<JsonDetection>,
+}
+
+/// The verdict block: `{ "genuine": bool, "quality_score": f64, ... }`
+#[derive(Deserialize)]
+struct JsonVerdict {
+    genuine: bool,
+}
+
+/// One entry in the detections array.
+/// `defect_type` is an externally-tagged serde enum, e.g.
+///   `{ "LossyTranscode": { "codec": "MP3", "estimated_bitrate": 128, "cutoff_hz": 16000 } }`
+///   `{ "BitDepthInflated": { "actual_bits": 16, "claimed_bits": 24 } }`
+/// We keep it as a raw Value to avoid duplicating the entire DefectType enum here.
+#[derive(Deserialize)]
+struct JsonDetection {
+    defect_type: serde_json::Value,
+    severity: String,
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 #[derive(Clone)]
 struct GenreTestCase {
@@ -78,7 +115,7 @@ struct TestResult {
     category: String,
     file: String,
     genre: String,
-    stdout: String,
+    stdout: String, // Human-readable text from stderr (used for Allure attachment)
     duration_ms: u64,
 }
 
@@ -214,7 +251,7 @@ fn test_qualification_genre_suite() {
         );
         allure_builder = allure_builder.description(&description);
 
-        // Attach stdout as evidence (assigned to allure_builder)
+        // Attach text output (from stderr) as evidence
         allure_builder =
             allure_builder.attach_text("Analysis Output", &result.stdout, &allure_results_dir);
 
@@ -224,8 +261,6 @@ fn test_qualification_genre_suite() {
                 allure_builder = allure_builder.passed();
             }
             ValidationResult::PassWithWarning => {
-                // Partial match - some expected defects found but some missing
-                // This is acceptable (can fine-tune later), counts as pass
                 passed_with_warning += 1;
                 passed += 1;
                 println!(
@@ -280,7 +315,6 @@ fn test_qualification_genre_suite() {
                 allure_builder = allure_builder.failed(&message, Some(&result.stdout));
             }
             ValidationResult::ExtraDefects => {
-                // Extra/wrong defects detected - this is a FAILURE, not a pass
                 failed += 1;
                 extra_defects_count += 1;
                 let message = format!(
@@ -643,50 +677,106 @@ fn run_tests_parallel(test_cases: Vec<GenreTestCase>, num_threads: usize) -> Vec
     results_vec.into_iter().map(|(_, result)| result).collect()
 }
 
-fn parse_defects_from_output(stdout: &str) -> Vec<String> {
-    let mut defects_found = Vec::new();
-    let stdout_lower = stdout.to_lowercase();
+/// Parse defect identifiers and the genuine verdict from JSON stdout
+/// produced by `--format both` / `--format json`.
+///
+/// Maps each `DefectType` variant to the same string identifiers used by
+/// `categorize_expected_result` so the existing `validate_test_result` logic
+/// needs no changes.
+///
+/// Mapping table:
+///   LossyTranscode { codec: "MP3*"  }  → "Mp3Transcode"
+///   LossyTranscode { codec: "AAC*"  }  → "AacTranscode"
+///   LossyTranscode { codec: "OPUS*" }  → "OpusTranscode"
+///   LossyTranscode { codec: "VORBIS*" | "OGG*" } → "OggVorbisTranscode"
+///   LossyTranscode { codec: other   }  → "LossyTranscode"  (MFCC-only path)
+///   Upsampled / ResamplingDetected     → "Upsampled"
+///   BitDepthInflated                   → "BitDepthMismatch"
+///   UpsampledLossyTranscode            → "Upsampled" + codec-specific transcode
+///
+/// Info-tier variants (DitheringDetected, MqaEncoded, SilencePadding) and
+/// quality variants (Clipping, LoudnessWarVictim) are intentionally skipped —
+/// they do not affect the genuine/suspect classification under test.
+fn parse_defects_from_json(json_str: &str) -> (bool, Vec<String>) {
+    let report: JsonReport = match serde_json::from_str(json_str) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("Warning: failed to parse JSON output: {}", e);
+            // Treat as genuine/clean so the test surfaces as FalseNegative
+            // (if a defect was expected) rather than silently passing.
+            return (true, vec![]);
+        }
+    };
 
-    if (stdout_lower.contains("mp3") && stdout_lower.contains("transcode"))
-        || stdout_lower.contains("mp3transcode")
-    {
-        defects_found.push("Mp3Transcode".to_string());
-    }
-    if (stdout_lower.contains("aac") && stdout_lower.contains("transcode"))
-        || stdout_lower.contains("aactranscode")
-    {
-        defects_found.push("AacTranscode".to_string());
-    }
-    if (stdout_lower.contains("opus") && stdout_lower.contains("transcode"))
-        || stdout_lower.contains("opustranscode")
-    {
-        defects_found.push("OpusTranscode".to_string());
-    }
-    if ((stdout_lower.contains("vorbis") || stdout_lower.contains("ogg"))
-        && stdout_lower.contains("transcode"))
-        || stdout_lower.contains("oggvorbistranscode")
-    {
-        defects_found.push("OggVorbisTranscode".to_string());
+    let genuine = report.verdict.genuine;
+    let mut defects: Vec<String> = Vec::new();
+
+    for detection in &report.detections {
+        // Skip info-level detections — dithering, MQA, etc. are not defects
+        // under our qualification criteria.
+        if detection.severity == "info" {
+            continue;
+        }
+
+        let dt = &detection.defect_type;
+
+        // Helper: extract inner object for a named variant
+        // e.g. dt = { "LossyTranscode": { "codec": "MP3", ... } }
+        if let Some(inner) = dt.get("LossyTranscode") {
+            let codec = inner
+                .get("codec")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_uppercase();
+
+            let label = if codec.contains("MP3") {
+                "Mp3Transcode"
+            } else if codec.contains("AAC") {
+                "AacTranscode"
+            } else if codec.contains("OPUS") {
+                "OpusTranscode"
+            } else if codec.contains("VORBIS") || codec.contains("OGG") {
+                "OggVorbisTranscode"
+            } else {
+                // MFCC-based detection ("Unknown (cepstral analysis)")
+                "LossyTranscode"
+            };
+            defects.push(label.to_string());
+        } else if dt.get("Upsampled").is_some() || dt.get("ResamplingDetected").is_some() {
+            // Both map to the same expected-defect string
+            if !defects.contains(&"Upsampled".to_string()) {
+                defects.push("Upsampled".to_string());
+            }
+        } else if dt.get("BitDepthInflated").is_some() {
+            defects.push("BitDepthMismatch".to_string());
+        } else if let Some(inner) = dt.get("UpsampledLossyTranscode") {
+            // Composite: upsampled AND lossy — emit both defect strings
+            if !defects.contains(&"Upsampled".to_string()) {
+                defects.push("Upsampled".to_string());
+            }
+            let codec = inner
+                .get("codec")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_uppercase();
+            let label = if codec.contains("MP3") {
+                "Mp3Transcode"
+            } else if codec.contains("AAC") {
+                "AacTranscode"
+            } else if codec.contains("OPUS") {
+                "OpusTranscode"
+            } else if codec.contains("VORBIS") || codec.contains("OGG") {
+                "OggVorbisTranscode"
+            } else {
+                "LossyTranscode"
+            };
+            defects.push(label.to_string());
+        }
+        // Clipping, LoudnessWarVictim, SilencePadding, DitheringDetected, MqaEncoded
+        // → intentionally not mapped; not part of qualification defect vocabulary.
     }
 
-    if stdout_lower.contains("bit depth mismatch")
-        || stdout_lower.contains("bitdepthmismatch")
-        || (stdout_lower.contains("bit depth") && stdout_lower.contains("mismatch"))
-    {
-        defects_found.push("BitDepthMismatch".to_string());
-    }
-
-    if stdout_lower.contains("upsampled")
-        || (stdout_lower.contains("upsample") && !stdout_lower.contains("not upsampled"))
-    {
-        defects_found.push("Upsampled".to_string());
-    }
-
-    if stdout_lower.contains("spectral artifact") {
-        defects_found.push("SpectralArtifacts".to_string());
-    }
-
-    defects_found
+    (genuine, defects)
 }
 
 /// Validate test results with STRICT defect type matching
@@ -723,17 +813,14 @@ fn validate_test_result(
     // Case 1: Expected CLEAN
     if should_pass {
         if is_clean {
-            // Expected clean, got clean -> PASS
             return (ValidationResult::Pass, missing, extra);
         } else {
-            // Expected clean, got defective -> FALSE POSITIVE
             return (ValidationResult::FalsePositive, missing, extra);
         }
     }
 
     // Case 2: Expected DEFECTIVE
     if is_clean {
-        // Expected defective, got clean -> FALSE NEGATIVE
         return (ValidationResult::FalseNegative, missing, extra);
     }
 
@@ -741,7 +828,6 @@ fn validate_test_result(
 
     // If no specific defects expected (just "should be defective"), any defect is OK
     if expected_defects.is_empty() {
-        // No specific defects expected, any detection is fine
         return (ValidationResult::Pass, missing, extra);
     }
 
@@ -749,24 +835,17 @@ fn validate_test_result(
     let any_expected_found = expected_defects.iter().any(|d| found_set.contains(d));
 
     if !any_expected_found {
-        // None of the expected defects were found -> WRONG DEFECT TYPE
         return (ValidationResult::WrongDefectType, missing, extra);
     }
 
     // At least one expected defect was found
-    // Now check for extra defects (wrong additional detections)
     if !extra.is_empty() {
-        // Expected defects found BUT also extra wrong defects -> FAIL (ExtraDefects)
         return (ValidationResult::ExtraDefects, missing, extra);
     }
 
-    // No extra defects, check if all expected were found
     if missing.is_empty() {
-        // All expected defects found, no extras -> PASS
         return (ValidationResult::Pass, missing, extra);
     } else {
-        // Some expected defects found, some missing, no extras -> PASS WITH WARNING
-        // This is acceptable for fine-tuning later
         return (ValidationResult::PassWithWarning, missing, extra);
     }
 }
@@ -774,20 +853,24 @@ fn validate_test_result(
 fn run_single_test(test_case: &GenreTestCase) -> TestResult {
     let start = std::time::Instant::now();
 
-    // Use the shared run_audiocheckr helper via positional args
-    // Use high sensitivity for testing to ensure strict checking
+    // --format both: Text → stderr (human-readable, captured for Allure)
+    //                JSON → stdout (structured, parsed for defect extraction)
     let output = run_audiocheckr(&test_case.file_path)
         .arg("--sensitivity")
         .arg("high")
+        .arg("--format")
+        .arg("both")
         .output()
         .expect("Failed to execute binary");
 
     let duration_ms = start.elapsed().as_millis() as u64;
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let defects_found = parse_defects_from_output(&stdout);
-    let is_clean = defects_found.is_empty();
 
-    // Use new validation logic
+    let json_stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let text_stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    // Parse defects and genuine verdict from structured JSON
+    let (is_clean, defects_found) = parse_defects_from_json(&json_stdout);
+
     let (validation_result, missing_defects, extra_defects) = validate_test_result(
         is_clean,
         test_case.should_pass,
@@ -807,7 +890,7 @@ fn run_single_test(test_case: &GenreTestCase) -> TestResult {
         category: test_case.defect_category.clone(),
         file: test_case.file_path.clone(),
         genre: test_case.genre.clone(),
-        stdout,
+        stdout: text_stderr, // Human-readable text (stderr) — used by Allure attachment
         duration_ms,
     }
 }
@@ -833,3 +916,4 @@ fn test_binary_exists() {
         binary_path
     );
 }
+
