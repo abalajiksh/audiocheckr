@@ -299,8 +299,8 @@ fn build_enriched<'a>(result: &'a AnalysisResult) -> EnrichedOutput<'a> {
         format: FileFormat {
             sample_rate: result.sample_rate,
             sample_rate_display: format_sample_rate(result.sample_rate),
-            bit_depth: result.bit_depth,
-            channels: result.channels,
+            bit_depth: result.bit_depth as u32,
+            channels: result.channels as u32,
             extension: ext,
         },
         verdict: VerdictInfo {
@@ -415,7 +415,7 @@ impl OutputHandler {
         if let Some(ref dr) = result.dynamic_range {
             writeln!(w, "   {}", dim("│"))?;
             writeln!(w, "   {}  {}", dim("│"), dim("Dynamic Range"))?;
-            writeln!(w, "   {}  TT DR         {:.1} dB  {}", dim("│"), dr.tt_dr_score, dr_verdict_colored(&dr.verdict))?;
+            writeln!(w, "   {}  TT DR         {:.1} dB  {}", dim("│"), dr.tt_dr_score, dr_verdict_colored(&format!("{}", dr.verdict)))?;
             writeln!(w, "   {}  LUFS          {:.1}", dim("│"), dr.integrated_loudness_lufs)?;
             writeln!(w, "   {}  Crest Factor  {:.1} dB", dim("│"), dr.crest_factor_db)?;
             writeln!(w, "   {}  PLR           {:.1} dB", dim("│"), dr.plr_db)?;
@@ -446,7 +446,7 @@ impl OutputHandler {
     /// Enriched JSON to a writer
     pub fn write_json(&self, result: &AnalysisResult, w: &mut dyn Write) -> Result<()> {
         let enriched = build_enriched(result);
-        serde_json::to_writer_pretty(w, &enriched)?;
+        serde_json::to_writer_pretty(&mut *w, &enriched)?;
         writeln!(w)?;
         Ok(())
     }
