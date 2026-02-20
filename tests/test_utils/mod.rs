@@ -133,12 +133,23 @@ pub struct AllureResult {
     start: u64,
     stop: u64,
     labels: Vec<Label>,
+    parameters: Vec<Parameter>,
     status_details: Option<StatusDetails>,
     attachments: Vec<Attachment>,
 }
 
 #[derive(Serialize)]
 struct Label {
+    name: String,
+    value: String,
+}
+
+/// Allure parameter — rendered in the "Parameters" table in reports,
+/// separate from labels. This gives you a clean key/value table per test
+/// (file, genre, duration, algorithm settings, etc.) rather than mixing
+/// them into the label cloud.
+#[derive(Serialize)]
+struct Parameter {
     name: String,
     value: String,
 }
@@ -172,6 +183,7 @@ impl AllureTestBuilder {
                 start: chrono::Utc::now().timestamp_millis() as u64,
                 stop: 0,
                 labels: Vec::new(),
+                parameters: Vec::new(),
                 status_details: None,
                 attachments: Vec::new(),
             }
@@ -218,8 +230,10 @@ impl AllureTestBuilder {
         self 
     }
 
+    /// Add a test parameter — shows up in Allure's dedicated "Parameters"
+    /// table rather than the labels section.
     pub fn parameter(mut self, k: &str, v: &str) -> Self { 
-        self.result.labels.push(Label { name: k.to_string(), value: v.to_string() }); // Parameter as label for now, or use specific param struct if needed
+        self.result.parameters.push(Parameter { name: k.to_string(), value: v.to_string() });
         self 
     }
 
