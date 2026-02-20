@@ -48,7 +48,7 @@ fn main() -> Result<()> {
         enable_mqa: args.mqa,
         enable_clipping: args.clipping,
         enable_enf: args.enf,
-	enable_mfcc: args.mfcc,
+        enable_mfcc: args.mfcc,
         genre_profile: args.genre.map(|g| format!("{:?}", g)),
         sensitivity: match args.sensitivity {
             Sensitivity::Low => AnalysisSensitivity::Low,
@@ -77,13 +77,14 @@ fn main() -> Result<()> {
         })
         .collect();
 
-    progress.finish_with_message("Analysis complete");
+    progress.finish_and_clear();
 
     // Output results
     let output_handler = OutputHandler::new(args.verbose);
     let mut success_count = 0;
     let mut genuine_count = 0;
     let mut suspect_count = 0;
+    let mut error_count = 0;
 
     for result in results {
         match result {
@@ -105,18 +106,16 @@ fn main() -> Result<()> {
                 }
             }
             Err(e) => {
-                eprintln!("Error analyzing file: {}", e);
+                error_count += 1;
+                eprintln!("Error: {}", e);
             }
         }
     }
 
-    // Print summary
-    println!("\n{}", "=".repeat(60));
-    println!("SUMMARY");
-    println!("{}", "=".repeat(60));
-    println!("Files analyzed: {}", success_count);
-    println!("Genuine lossless: {}", genuine_count);
-    println!("Potentially fake: {}", suspect_count);
+    // Print summary (skip for single-file JSON)
+    if !(args.format == OutputFormat::Json && success_count <= 1) {
+        output_handler.print_summary(success_count, genuine_count, suspect_count, error_count);
+    }
 
     // Export report if requested
     if let Some(report_path) = args.report {
@@ -130,7 +129,9 @@ fn main() -> Result<()> {
 fn collect_files(path: &PathBuf, recursive: bool) -> Result<Vec<PathBuf>> {
     let mut files = Vec::new();
 
-    let supported_extensions = ["flac", "wav", "aiff", "aif", "alac", "m4a", "ape", "wv", "dsf", "dff"];
+    let supported_extensions = [
+        "flac", "wav", "aiff", "aif", "alac", "m4a", "ape", "wv", "dsf", "dff",
+    ];
 
     if path.is_file() {
         if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
@@ -162,164 +163,6 @@ fn collect_files(path: &PathBuf, recursive: bool) -> Result<Vec<PathBuf>> {
 
 /// Export detailed report to file
 fn export_report(path: &PathBuf) -> Result<()> {
-    // Placeholder for report export functionality
-    println!("Report export to {} - not yet implemented", path.display());
+    println!("Report export to {} — not yet implemented", path.display());
     Ok(())
-}
-
-/// Format a defect type for display
-fn format_defect(defect: &DefectType, confidence: f64) -> String {
-    let conf_str = format!(" [{:.0}%]", confidence * 100.0);
-
-    match defect {
-        DefectType::LossyTranscode {
-            codec,
-            estimated_bitrate,
-            cutoff_hz,
-        } => {
-            let bitrate_str = estimated_bitrate
-                .map(|b| format!(" ~{}kbps", b))
-                .unwrap_or_default();
-            format!(
-                "Lossy transcode: {}{} (cutoff: {} Hz){}",
-                codec, bitrate_str, cutoff_hz, conf_str
-            )
-        }
-        DefectType::Upsampled {
-            original_rate,
-            current_rate,
-        } => {
-            format!(
-                "Upsampled: {} Hz -> {} Hz{}",
-                original_rate, current_rate, conf_str
-            )
-        }
-        DefectType::BitDepthInflated {
-            actual_bits,
-            claimed_bits,
-        } => {
-            format!(
-                "Bit depth inflation: {} bits claimed, {} bits actual{}",
-                claimed_bits, actual_bits, conf_str
-            )
-        }
-        DefectType::Clipping {
-            peak_level,
-            clipped_samples,
-        } => {
-            format!(
-                "Clipping: peak {:.2} dB, {} samples{}",
-                peak_level, clipped_samples, conf_str
-            )
-        }
-        DefectType::SilencePadding { padding_duration } => {
-            format!("Silence padding: {:.2} seconds{}", padding_duration, conf_str)
-        }
-        DefectType::MqaEncoded {
-            original_rate,
-            mqa_type,
-            lsb_entropy,
-            ..
-        } => {
-            let orig_str = original_rate
-                .map(|r| format!(" (original: {} Hz)", r))
-                .unwrap_or_default();
-            format!(
-                "MQA encoded: {}{} - LSB entropy: {:.2}{}",
-                mqa_type, orig_str, lsb_entropy, conf_str
-            )
-        }
-        DefectType::UpsampledLossyTranscode {
-            original_rate,
-            current_rate,
-            codec,
-            estimated_bitrate,
-            cutoff_hz,
-        } => {
-            let bitrate_str = estimated_bitrate
-                .map(|b| format!(" ~{}kbps", b))
-                .unwrap_or_default();
-            format!(
-                "Upsampled lossy transcode: {}{} upsampled {} Hz -> {} Hz (cutoff: {} Hz){}",
-                codec, bitrate_str, original_rate, current_rate, cutoff_hz, conf_str
-            )
-        }
-        DefectType::DitheringDetected {
-            dither_type,
-            bit_depth,
-            noise_shaping,
-        } => {
-            let shaping_str = if *noise_shaping { " (shaped)" } else { "" };
-            format!(
-                "Dithering detected: {} {}-bit{}{}",
-                dither_type, bit_depth, shaping_str, conf_str
-            )
-        }
-        DefectType::ResamplingDetected {
-            original_rate,
-            target_rate,
-            quality,
-        } => {
-            format!(
-                "Resampling detected: {} Hz -> {} Hz ({}){}",
-                original_rate, target_rate, quality, conf_str
-            )
-        }
-        DefectType::LoudnessWarVictim {
-            tt_dr_score,
-            integrated_lufs,
-            plr_db,
-        } => {
-            format!(
-                "Loudness war victim: DR {:.0} dB, {:.1} LUFS, PLR {:.1} dB{}",
-                tt_dr_score, integrated_lufs, plr_db, conf_str
-            )
-        }
-    }
-}
-
-/// Get severity indicator icon
-fn get_severity_icon(defect: &DefectType) -> &'static str {
-    match defect {
-        DefectType::LossyTranscode { .. } => "[!!!]",
-        DefectType::Upsampled { .. } => "[!!]",
-        DefectType::BitDepthInflated { .. } => "[!!]",
-        DefectType::Clipping { .. } => "[!]",
-        DefectType::SilencePadding { .. } => "[.]",
-        DefectType::MqaEncoded { .. } => "[i]",
-        DefectType::UpsampledLossyTranscode { .. } => "[!!!]",
-        DefectType::DitheringDetected { .. } => "[i]",
-        DefectType::ResamplingDetected { .. } => "[!]",
-        DefectType::LoudnessWarVictim { .. } => "[!!]",
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_format_defect() {
-        let defect = DefectType::LossyTranscode {
-            codec: "MP3".to_string(),
-            estimated_bitrate: Some(128),
-            cutoff_hz: 16000,
-        };
-
-        let formatted = format_defect(&defect, 0.95);
-        assert!(formatted.contains("MP3"));
-        assert!(formatted.contains("128kbps"));
-        assert!(formatted.contains("16000"));
-    }
-
-    #[test]
-    fn test_severity_icon() {
-        let defect = DefectType::LossyTranscode {
-            codec: "MP3".to_string(),
-            estimated_bitrate: Some(128),
-            cutoff_hz: 16000,
-        };
-
-        assert_eq!(get_severity_icon(&defect), "[!!!]");
-    }
 }

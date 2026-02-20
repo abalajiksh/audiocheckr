@@ -843,7 +843,7 @@ fn analyze_and_report_results(
         );
         builder = builder.description(&description);
 
-        let _ = builder.attach_text("Analysis Output", &result.stdout, allure_results_dir);
+        builder = builder.attach_text("Analysis Output", &result.stdout, allure_results_dir);
 
         match result.validation_result {
             ValidationResult::Pass => {
