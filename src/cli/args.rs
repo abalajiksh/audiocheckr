@@ -14,7 +14,7 @@ pub struct Args {
     #[arg(required = true)]
     pub input: PathBuf,
 
-    /// Output format (text, json, or detailed)
+    /// Output format: text, json, detailed, or both (text to stderr + json to stdout)
     #[arg(short, long, default_value = "text")]
     pub format: OutputFormat,
 
@@ -73,9 +73,14 @@ pub struct Args {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum OutputFormat {
+    /// Human-readable terminal output
     Text,
+    /// Enriched JSON (with badge metadata)
     Json,
+    /// Verbose text with all sections expanded
     Detailed,
+    /// Text to stderr + JSON to stdout (for piping)
+    Both,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
@@ -111,7 +116,7 @@ impl Default for Args {
             mqa: false,
             clipping: false,
             enf: false,
-	    mfcc: false,
+            mfcc: true,
             spectrogram: false,
             report: None,
             min_confidence: 0.5,

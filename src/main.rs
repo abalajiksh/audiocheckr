@@ -15,16 +15,14 @@ mod core;
 
 use cli::args::{Args, OutputFormat, Sensitivity};
 use cli::output::OutputHandler;
-use core::analysis::{AnalysisConfig, AnalysisResult, AnalysisSensitivity, DefectType};
+use core::analysis::{AnalysisConfig, AnalysisResult, AnalysisSensitivity};
 use core::detector::AudioDetector;
 
 fn main() -> Result<()> {
-    // Initialize logger
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
 
     let args = Args::parse();
 
-    // Set up thread pool
     if args.threads > 0 {
         rayon::ThreadPoolBuilder::new()
             .num_threads(args.threads)
@@ -32,7 +30,6 @@ fn main() -> Result<()> {
             .context("Failed to configure thread pool")?;
     }
 
-    // Collect files to analyze
     let files = collect_files(&args.input, args.recursive)?;
 
     if files.is_empty() {
@@ -40,7 +37,6 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    // Create analysis config
     let config = AnalysisConfig {
         fft_size: 8192,
         hop_size: 2048,
@@ -57,16 +53,20 @@ fn main() -> Result<()> {
         },
     };
 
-    // Set up progress bar
+    // Progress bar (hidden in JSON-only mode to keep stdout clean)
+    let show_progress = !matches!(args.format, OutputFormat::Json);
     let progress = ProgressBar::new(files.len() as u64);
-    progress.set_style(
-        ProgressStyle::default_bar()
-            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})")
-            .unwrap()
-            .progress_chars("#>-"),
-    );
+    if show_progress {
+        progress.set_style(
+            ProgressStyle::default_bar()
+                .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})")
+                .unwrap()
+                .progress_chars("#>-"),
+        );
+    } else {
+        progress.set_draw_target(indicatif::ProgressDrawTarget::hidden());
+    }
 
-    // Analyze files
     let results: Vec<Result<AnalysisResult>> = files
         .par_iter()
         .map(|file| {
@@ -79,8 +79,10 @@ fn main() -> Result<()> {
 
     progress.finish_and_clear();
 
-    // Output results
-    let output_handler = OutputHandler::new(args.verbose);
+    // For "detailed" mode, force verbose on the handler
+    let verbose = args.verbose || matches!(args.format, OutputFormat::Detailed);
+    let output_handler = OutputHandler::new(verbose);
+
     let mut success_count = 0;
     let mut genuine_count = 0;
     let mut suspect_count = 0;
@@ -103,6 +105,9 @@ fn main() -> Result<()> {
                     OutputFormat::Json => {
                         output_handler.print_json(&analysis)?;
                     }
+                    OutputFormat::Both => {
+                        output_handler.print_both(&analysis)?;
+                    }
                 }
             }
             Err(e) => {
@@ -112,12 +117,19 @@ fn main() -> Result<()> {
         }
     }
 
-    // Print summary (skip for single-file JSON)
-    if !(args.format == OutputFormat::Json && success_count <= 1) {
-        output_handler.print_summary(success_count, genuine_count, suspect_count, error_count);
+    // Summary
+    match args.format {
+        // Skip summary for single-file JSON (already self-contained)
+        OutputFormat::Json if success_count <= 1 => {}
+        // In "both" mode, summary goes to stderr to keep stdout as pure JSON
+        OutputFormat::Both => {
+            output_handler.print_summary_stderr(success_count, genuine_count, suspect_count, error_count);
+        }
+        _ => {
+            output_handler.print_summary(success_count, genuine_count, suspect_count, error_count);
+        }
     }
 
-    // Export report if requested
     if let Some(report_path) = args.report {
         export_report(&report_path)?;
     }
@@ -161,8 +173,7 @@ fn collect_files(path: &PathBuf, recursive: bool) -> Result<Vec<PathBuf>> {
     Ok(files)
 }
 
-/// Export detailed report to file
 fn export_report(path: &PathBuf) -> Result<()> {
-    println!("Report export to {} — not yet implemented", path.display());
+    eprintln!("Report export to {} — not yet implemented", path.display());
     Ok(())
 }
