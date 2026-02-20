@@ -199,7 +199,9 @@ impl MfccFingerprint {
             return 0.0;
         }
 
-        let dot: f64 = self.features.iter()
+        let dot: f64 = self
+            .features
+            .iter()
             .zip(other.features.iter())
             .map(|(a, b)| a * b)
             .sum();
@@ -220,7 +222,8 @@ impl MfccFingerprint {
             return f64::INFINITY;
         }
 
-        self.features.iter()
+        self.features
+            .iter()
             .zip(other.features.iter())
             .map(|(a, b)| (a - b).powi(2))
             .sum::<f64>()
@@ -336,7 +339,10 @@ impl MfccAnalyzer {
 
             // Extract frame and apply window
             let mut frame = vec![0.0f64; self.config.fft_size];
-            let copy_len = self.config.fft_size.min(emphasized.len().saturating_sub(start));
+            let copy_len = self
+                .config
+                .fft_size
+                .min(emphasized.len().saturating_sub(start));
             for i in 0..copy_len {
                 frame[i] = emphasized[start + i] * self.window[i];
             }
@@ -348,9 +354,7 @@ impl MfccAnalyzer {
             let mel_energies = apply_filterbank(&power_spectrum, &self.mel_filterbank);
 
             // Log compression (floor to avoid log(0))
-            let log_mel: Vec<f64> = mel_energies.iter()
-                .map(|&e| (e.max(1e-10)).ln())
-                .collect();
+            let log_mel: Vec<f64> = mel_energies.iter().map(|&e| (e.max(1e-10)).ln()).collect();
 
             // DCT → MFCCs
             let mut mfcc_frame = apply_dct(&log_mel, &self.dct_matrix);
@@ -424,19 +428,18 @@ fn hann_window(size: usize) -> Vec<f64> {
 
 /// Compute power spectrum |FFT(x)|² using rustfft (already in project deps).
 fn compute_power_spectrum(frame: &[f64], n_bins: usize) -> Vec<f64> {
-    use rustfft::{FftPlanner, num_complex::Complex};
+    use rustfft::{num_complex::Complex, FftPlanner};
 
     let n = frame.len();
     let mut planner = FftPlanner::<f64>::new();
     let fft = planner.plan_fft_forward(n);
 
-    let mut buffer: Vec<Complex<f64>> = frame.iter()
-        .map(|&x| Complex::new(x, 0.0))
-        .collect();
+    let mut buffer: Vec<Complex<f64>> = frame.iter().map(|&x| Complex::new(x, 0.0)).collect();
 
     fft.process(&mut buffer);
 
-    buffer[..n_bins].iter()
+    buffer[..n_bins]
+        .iter()
         .map(|c| c.re * c.re + c.im * c.im)
         .collect()
 }
@@ -480,7 +483,8 @@ fn build_mel_filterbank(
     let hz_points: Vec<f64> = mel_points.iter().map(|&m| mel_to_hz(m)).collect();
 
     // Convert Hz to FFT bin indices (floating point for sub-bin precision)
-    let bin_points: Vec<f64> = hz_points.iter()
+    let bin_points: Vec<f64> = hz_points
+        .iter()
         .map(|&f| f * fft_size as f64 / sample_rate)
         .collect();
 
@@ -507,9 +511,11 @@ fn build_mel_filterbank(
 
 /// Apply mel filterbank to power spectrum.
 fn apply_filterbank(power_spectrum: &[f64], filterbank: &[Vec<f64>]) -> Vec<f64> {
-    filterbank.iter()
+    filterbank
+        .iter()
         .map(|filter| {
-            filter.iter()
+            filter
+                .iter()
                 .zip(power_spectrum.iter())
                 .map(|(&f, &p)| f * p)
                 .sum()
@@ -532,9 +538,7 @@ fn build_dct_matrix(n_mfcc: usize, n_mels: usize) -> Vec<Vec<f64>> {
 
     for k in 0..n_mfcc {
         for n in 0..n_mels {
-            matrix[k][n] = (PI * k as f64 * (2.0 * n as f64 + 1.0)
-                / (2.0 * n_mels as f64))
-                .cos();
+            matrix[k][n] = (PI * k as f64 * (2.0 * n as f64 + 1.0) / (2.0 * n_mels as f64)).cos();
         }
     }
 
@@ -556,13 +560,9 @@ fn build_dct_matrix(n_mfcc: usize, n_mels: usize) -> Vec<Vec<f64>> {
 
 /// Apply DCT to log-mel energies.
 fn apply_dct(log_mel: &[f64], dct_matrix: &[Vec<f64>]) -> Vec<f64> {
-    dct_matrix.iter()
-        .map(|row| {
-            row.iter()
-                .zip(log_mel.iter())
-                .map(|(&c, &e)| c * e)
-                .sum()
-        })
+    dct_matrix
+        .iter()
+        .map(|row| row.iter().zip(log_mel.iter()).map(|(&c, &e)| c * e).sum())
         .collect()
 }
 
@@ -609,8 +609,7 @@ fn compute_deltas(features: &[Vec<f64>], n: usize) -> Vec<Vec<f64>> {
             let t_minus = if t >= lag { t - lag } else { 0 };
 
             for c in 0..n_coeffs {
-                delta_frame[c] += lag as f64
-                    * (features[t_plus][c] - features[t_minus][c]);
+                delta_frame[c] += lag as f64 * (features[t_plus][c] - features[t_minus][c]);
             }
         }
 
@@ -664,21 +663,27 @@ fn compute_stats(mfcc: &[Vec<f64>], deltas: &Option<Vec<Vec<f64>>>) -> MfccStats
         }
     }
 
-    let std_dev: Vec<f64> = variance.iter()
-        .map(|&v| (v / nf).sqrt())
-        .collect();
+    let std_dev: Vec<f64> = variance.iter().map(|&v| (v / nf).sqrt()).collect();
 
     let skewness: Vec<f64> = (0..n_coeffs)
         .map(|c| {
             let s3 = std_dev[c].powi(3);
-            if s3 < 1e-15 { 0.0 } else { (skew_acc[c] / nf) / s3 }
+            if s3 < 1e-15 {
+                0.0
+            } else {
+                (skew_acc[c] / nf) / s3
+            }
         })
         .collect();
 
     let kurtosis: Vec<f64> = (0..n_coeffs)
         .map(|c| {
             let s4 = std_dev[c].powi(4);
-            if s4 < 1e-15 { 0.0 } else { (kurt_acc[c] / nf) / s4 - 3.0 }
+            if s4 < 1e-15 {
+                0.0
+            } else {
+                (kurt_acc[c] / nf) / s4 - 3.0
+            }
         })
         .collect();
 
@@ -771,7 +776,11 @@ mod tests {
         assert_eq!(fb.len(), 40);
         assert_eq!(fb[0].len(), 1025);
         for (i, filter) in fb.iter().enumerate() {
-            assert!(filter.iter().sum::<f64>() > 0.0, "Filter {} has zero energy", i);
+            assert!(
+                filter.iter().sum::<f64>() > 0.0,
+                "Filter {} has zero energy",
+                i
+            );
         }
     }
 
@@ -782,7 +791,10 @@ mod tests {
         assert_eq!(dct[0].len(), 40);
         let first_val = dct[0][0];
         for &v in &dct[0] {
-            assert!((v - first_val).abs() < 1e-10, "DCT row 0 should be constant");
+            assert!(
+                (v - first_val).abs() < 1e-10,
+                "DCT row 0 should be constant"
+            );
         }
     }
 
@@ -822,7 +834,9 @@ mod tests {
         let noise: Vec<f64> = (0..88200)
             .map(|i| ((i as f64 * 0.123456).sin() * 7.919).sin() * 0.3)
             .collect();
-        let sim = analyzer.analyze(&tone).fingerprint
+        let sim = analyzer
+            .analyze(&tone)
+            .fingerprint
             .cosine_similarity(&analyzer.analyze(&noise).fingerprint);
         assert!(sim < 0.95, "Different signals should differ, got {}", sim);
     }

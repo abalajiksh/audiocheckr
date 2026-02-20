@@ -1,12 +1,12 @@
-use std::path::{Path, PathBuf};
 use colorful::Colorful;
-use walkdir::WalkDir;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+use walkdir::WalkDir;
 
 mod test_utils;
 use test_utils::{
-    AllureTestBuilder, AllureTestSuite, AllureEnvironment, AllureSeverity,
-    default_audiocheckr_categories, write_categories
+    default_audiocheckr_categories, write_categories, AllureEnvironment, AllureSeverity,
+    AllureTestBuilder, AllureTestSuite,
 };
 
 #[test]
@@ -15,7 +15,7 @@ fn test_mqa_detection() {
     let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let mqa_dir = project_root.join("MQA");
     let allure_results_dir = project_root.join("target").join("allure-results");
-    
+
     if !mqa_dir.exists() {
         println!("MQA directory not found, skipping tests");
         return;
@@ -23,7 +23,10 @@ fn test_mqa_detection() {
 
     let binary_path = test_utils::get_binary_path();
     if !binary_path.exists() {
-        panic!("Binary not found at {:?}. Run 'cargo build --release' first.", binary_path);
+        panic!(
+            "Binary not found at {:?}. Run 'cargo build --release' first.",
+            binary_path
+        );
     }
 
     // Setup Allure environment
@@ -32,7 +35,7 @@ fn test_mqa_detection() {
 
     let mut passed = 0;
     let mut failed = 0;
-    
+
     // Create Allure test suite
     let mut allure_suite = AllureTestSuite::new("MQA Detection Tests", &allure_results_dir);
 
@@ -40,7 +43,7 @@ fn test_mqa_detection() {
         let path = entry.path();
         if path.extension().map_or(false, |ext| ext == "flac") {
             let file_name = path.file_name().unwrap().to_string_lossy().to_string();
-            
+
             let output = Command::new(&binary_path)
                 .arg(path)
                 .arg("--json")
@@ -52,7 +55,10 @@ fn test_mqa_detection() {
 
             // Build Allure test result
             let mut allure_builder = AllureTestBuilder::new(&format!("MQA: {}", file_name))
-                .full_name(&format!("mqa_test::detection::{}", sanitize_name(&file_name)))
+                .full_name(&format!(
+                    "mqa_test::detection::{}",
+                    sanitize_name(&file_name)
+                ))
                 .severity(AllureSeverity::Critical)
                 .epic("AudioCheckr")
                 .feature("MQA Detection")
@@ -60,20 +66,25 @@ fn test_mqa_detection() {
                 .suite("MQA Detection")
                 .tag("mqa")
                 .parameter("file", &file_name);
-            
+
             let description = format!(
                 "**File:** `{}`\n\n\
                 **Expected:** MQA Encoded\n\n\
                 **Actual:** {}\n\n\
                 **Result:** {}",
                 file_name,
-                if is_mqa { "MQA Encoded" } else { "Standard FLAC" },
+                if is_mqa {
+                    "MQA Encoded"
+                } else {
+                    "Standard FLAC"
+                },
                 if is_mqa { "PASS" } else { "FAIL" }
             );
             allure_builder = allure_builder.description(&description);
-            
+
             // Fix: Reassign the result of attach_text back to allure_builder
-            allure_builder = allure_builder.attach_text("Analysis Output", &stdout, &allure_results_dir);
+            allure_builder =
+                allure_builder.attach_text("Analysis Output", &stdout, &allure_results_dir);
 
             if is_mqa {
                 println!("{} {} - PASSED", "[OK]".bg_green(), file_name);
@@ -82,9 +93,10 @@ fn test_mqa_detection() {
             } else {
                 println!("{} {} - FAILED", "[FAIL]".bg_red(), file_name);
                 failed += 1;
-                allure_builder = allure_builder.failed("Failed to detect MQA encoding", Some(&stdout.to_string()));
+                allure_builder = allure_builder
+                    .failed("Failed to detect MQA encoding", Some(&stdout.to_string()));
             }
-            
+
             allure_suite.add_result(allure_builder.build());
         }
     }
@@ -95,8 +107,11 @@ fn test_mqa_detection() {
     }
 
     println!("\nResults: {} passed, {} failed", passed, failed);
-    println!("Allure results written to: {}", allure_results_dir.display());
-    
+    println!(
+        "Allure results written to: {}",
+        allure_results_dir.display()
+    );
+
     assert_eq!(failed, 0, "Some MQA files were not detected");
 }
 
@@ -111,6 +126,12 @@ fn setup_allure_environment(results_dir: &Path, suite_name: &str) {
 
 fn sanitize_name(s: &str) -> String {
     s.chars()
-        .map(|c| if c.is_alphanumeric() || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
 }

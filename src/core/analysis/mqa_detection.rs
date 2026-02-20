@@ -16,8 +16,8 @@
 //! - Different noise shaping characteristics
 //! - Less aggressive HF noise injection
 
+use rustfft::{num_complex::Complex, FftPlanner};
 use serde::{Deserialize, Serialize};
-use rustfft::{FftPlanner, num_complex::Complex};
 use std::f32::consts::PI;
 
 /// MQA detection result
@@ -110,13 +110,13 @@ pub struct MqaDetector {
 impl Default for MqaDetector {
     fn default() -> Self {
         Self {
-            lsb_entropy_threshold: 0.75,           // Lowered from 0.85 - current encoders
-            lsb_entropy_threshold_early: 0.40,     // Lowered from 0.45 - early encoders
-            noise_floor_threshold: 6.0,            // Lowered from 8.0
-            noise_floor_threshold_early: 2.0,      // Lowered from 3.0
+            lsb_entropy_threshold: 0.75,       // Lowered from 0.85 - current encoders
+            lsb_entropy_threshold_early: 0.40, // Lowered from 0.45 - early encoders
+            noise_floor_threshold: 6.0,        // Lowered from 8.0
+            noise_floor_threshold_early: 2.0,  // Lowered from 3.0
             hf_analysis_freq: 18000.0,
             analysis_window: 262144,
-            bit_pattern_threshold: 0.20,           // Lowered from 0.25
+            bit_pattern_threshold: 0.20, // Lowered from 0.25
             detect_early_encoders: true,
         }
     }
@@ -130,8 +130,8 @@ impl MqaDetector {
     /// Create detector optimized for early encoder versions
     pub fn for_early_encoders() -> Self {
         Self {
-            lsb_entropy_threshold: 0.50,           // Lower for any MQA detection
-            lsb_entropy_threshold_early: 0.30,     // Very low for old encoders
+            lsb_entropy_threshold: 0.50,       // Lower for any MQA detection
+            lsb_entropy_threshold_early: 0.30, // Very low for old encoders
             noise_floor_threshold: 4.0,
             noise_floor_threshold_early: 1.5,
             bit_pattern_threshold: 0.15,
@@ -171,7 +171,9 @@ impl MqaDetector {
         // Check for silence before processing
         let rms = Self::calculate_rms(samples);
         if rms < 1e-6 {
-            result.evidence.push("Audio appears to be silence or near-silent".to_string());
+            result
+                .evidence
+                .push("Audio appears to be silence or near-silent".to_string());
             return result;
         }
 
@@ -307,7 +309,11 @@ impl MqaDetector {
         }
 
         // High-frequency noise characteristic of MQA
-        let hf_threshold = if is_likely_early_encoder { -75.0 } else { -70.0 };
+        let hf_threshold = if is_likely_early_encoder {
+            -75.0
+        } else {
+            -70.0
+        };
         if result.hf_noise_level > hf_threshold {
             let factor = (result.hf_noise_level + 90.0) / 30.0;
             confidence_factors.push(factor.min(1.0) * 0.10);
@@ -321,9 +327,10 @@ impl MqaDetector {
         if result.bit_pattern_score > self.bit_pattern_threshold {
             let factor = (result.bit_pattern_score - self.bit_pattern_threshold) / 0.5;
             confidence_factors.push(factor.min(1.0) * 0.10);
-            result
-                .evidence
-                .push(format!("MQA bit pattern detected (score: {:.2})", result.bit_pattern_score));
+            result.evidence.push(format!(
+                "MQA bit pattern detected (score: {:.2})",
+                result.bit_pattern_score
+            ));
         }
 
         // Spectral folding artifacts
@@ -427,38 +434,56 @@ impl MqaDetector {
     }
 
     /// Check for indicators of early MQA encoder (v2.3.x)
-    fn check_early_encoder_indicators(&self, result: &MqaDetectionResult) -> EarlyEncoderIndicators {
+    fn check_early_encoder_indicators(
+        &self,
+        result: &MqaDetectionResult,
+    ) -> EarlyEncoderIndicators {
         let mut score = 0.0f32;
         let mut reasons = Vec::new();
 
         // Early encoders have moderate entropy (0.30-0.75 range, not as high as current)
         if result.lsb_entropy > 0.30 && result.lsb_entropy < 0.80 {
             score += 0.35;
-            reasons.push(format!("entropy in early range ({:.2})", result.lsb_entropy));
+            reasons.push(format!(
+                "entropy in early range ({:.2})",
+                result.lsb_entropy
+            ));
         }
 
         // Early encoders have higher periodicity in LSBs
         if result.lsb_periodicity_score > 0.10 {
             score += 0.30;
-            reasons.push(format!("LSB periodicity ({:.2})", result.lsb_periodicity_score));
+            reasons.push(format!(
+                "LSB periodicity ({:.2})",
+                result.lsb_periodicity_score
+            ));
         }
 
         // Early encoders have more clustered LSB values
         if result.lsb_value_clustering > 0.20 {
             score += 0.25;
-            reasons.push(format!("value clustering ({:.2})", result.lsb_value_clustering));
+            reasons.push(format!(
+                "value clustering ({:.2})",
+                result.lsb_value_clustering
+            ));
         }
 
         // Early encoders have specific bit transition rates
         if result.bit_transition_rate > 0.35 && result.bit_transition_rate < 0.60 {
             score += 0.20;
-            reasons.push(format!("transition rate ({:.2})", result.bit_transition_rate));
+            reasons.push(format!(
+                "transition rate ({:.2})",
+                result.bit_transition_rate
+            ));
         }
 
         // Early encoders have lower HF noise injection
         if result.noise_floor_elevation > 1.0 && result.noise_floor_elevation < 20.0 {
             score += 0.25;
-            reasons.push(format!("moderate HF noise (+{:.1}dB)", result.noise_floor_elevation));
+            reasons.push(format!(
+                "moderate HF noise (+{:.1}dB)",
+                result.noise_floor_elevation
+            ));
         }
 
         EarlyEncoderIndicators { score, reasons }
@@ -1008,9 +1033,6 @@ mod tests {
         let samples = vec![0.01f32; 10000];
         let result = detector.detect(&samples, 44100, 16);
         // It may or may not detect MQA, but it should not early-return due to bit depth.
-        assert!(!result
-            .evidence
-            .iter()
-            .any(|e| e.contains("Not 16/24-bit")));
+        assert!(!result.evidence.iter().any(|e| e.contains("Not 16/24-bit")));
     }
 }

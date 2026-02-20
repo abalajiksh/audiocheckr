@@ -19,16 +19,16 @@
 
 mod test_utils;
 
+use std::collections::{HashMap, HashSet};
 use std::env;
-use std::process::Command;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::collections::{HashMap, HashSet};
 
 use test_utils::{
-    AllureTestBuilder, AllureTestSuite, AllureEnvironment, AllureSeverity,
-    write_categories, default_audiocheckr_categories,
+    default_audiocheckr_categories, write_categories, AllureEnvironment, AllureSeverity,
+    AllureTestBuilder, AllureTestSuite,
 };
 
 #[derive(Clone)]
@@ -102,7 +102,8 @@ fn test_regression_suite() {
     let mut skipped = 0;
 
     // Filter to only existing files
-    let existing_cases: Vec<_> = test_cases.iter()
+    let existing_cases: Vec<_> = test_cases
+        .iter()
         .filter(|tc| {
             let exists = PathBuf::from(&tc.file_path).exists();
             if !exists {
@@ -114,7 +115,10 @@ fn test_regression_suite() {
         .collect();
 
     let run_count = existing_cases.len();
-    println!("Running {} regression tests in parallel (4 threads)...\n", run_count);
+    println!(
+        "Running {} regression tests in parallel (4 threads)...\n",
+        run_count
+    );
 
     // Run tests in parallel
     let results = run_tests_parallel(&binary_path, existing_cases.clone(), 4);
@@ -135,7 +139,9 @@ fn test_regression_suite() {
         let test_case = &existing_cases[idx];
 
         // Track category results
-        let entry = category_results.entry(test_case.category.clone()).or_insert((0, 0, 0, 0));
+        let entry = category_results
+            .entry(test_case.category.clone())
+            .or_insert((0, 0, 0, 0));
         entry.3 += 1; // total
 
         // Build Allure test result
@@ -152,7 +158,10 @@ fn test_regression_suite() {
         };
 
         let mut allure_builder = AllureTestBuilder::new(&test_case.description)
-            .full_name(&format!("regression_test::{}", sanitize_name(&test_case.description)))
+            .full_name(&format!(
+                "regression_test::{}",
+                sanitize_name(&test_case.description)
+            ))
             .severity(severity)
             .epic("AudioCheckr")
             .feature("Regression")
@@ -163,8 +172,14 @@ fn test_regression_suite() {
             .parameter("file", &result.file)
             .parameter("expected_pass", &result.expected.to_string())
             .parameter("defects_found", &format!("{:?}", result.defects_found))
-            .parameter("expected_defects", &format!("{:?}", result.expected_defects))
-            .parameter("validation_result", &format!("{:?}", result.validation_result));
+            .parameter(
+                "expected_defects",
+                &format!("{:?}", result.expected_defects),
+            )
+            .parameter(
+                "validation_result",
+                &format!("{:?}", result.validation_result),
+            );
 
         let description = format!(
             "**File:** `{}`\n\n\
@@ -195,7 +210,12 @@ fn test_regression_suite() {
             ValidationResult::Pass => {
                 passed += 1;
                 entry.0 += 1;
-                println!("[{:3}/{}] ✓ PASS: {}", idx + 1, run_count, test_case.description);
+                println!(
+                    "[{:3}/{}] ✓ PASS: {}",
+                    idx + 1,
+                    run_count,
+                    test_case.description
+                );
                 allure_builder = allure_builder.passed();
             }
             ValidationResult::PassWithWarning => {
@@ -204,7 +224,10 @@ fn test_regression_suite() {
                 entry.0 += 1;
                 println!(
                     "[{:3}/{}] ⚠ PASS (partial): {} - Missing {:?}",
-                    idx + 1, run_count, test_case.description, result.missing_defects
+                    idx + 1,
+                    run_count,
+                    test_case.description,
+                    result.missing_defects
                 );
                 allure_builder = allure_builder.passed();
             }
@@ -212,8 +235,10 @@ fn test_regression_suite() {
                 failed += 1;
                 false_positives += 1;
                 entry.1 += 1;
-                let message = format!("FALSE POSITIVE: Expected CLEAN but detected defects: {:?}",
-                    result.defects_found);
+                let message = format!(
+                    "FALSE POSITIVE: Expected CLEAN but detected defects: {:?}",
+                    result.defects_found
+                );
                 println!(
                     "[{:3}/{}] ✗ FALSE POSITIVE: {}\n        Expected CLEAN but detected defects: {:?}",
                     idx + 1, run_count, test_case.description, result.defects_found
@@ -224,11 +249,15 @@ fn test_regression_suite() {
                 failed += 1;
                 false_negatives += 1;
                 entry.1 += 1;
-                let message = format!("FALSE NEGATIVE: Expected defects {:?} but got CLEAN",
-                    result.expected_defects);
+                let message = format!(
+                    "FALSE NEGATIVE: Expected defects {:?} but got CLEAN",
+                    result.expected_defects
+                );
                 println!(
                     "[{:3}/{}] ✗ FALSE NEGATIVE: {}\n        Expected defects but got CLEAN",
-                    idx + 1, run_count, test_case.description
+                    idx + 1,
+                    run_count,
+                    test_case.description
                 );
                 allure_builder = allure_builder.failed(&message, Some(&result.stdout));
             }
@@ -242,7 +271,11 @@ fn test_regression_suite() {
                 );
                 println!(
                     "[{:3}/{}] ✗ WRONG DEFECT: {} - Expected {:?}, Got {:?}",
-                    idx + 1, run_count, test_case.description, result.expected_defects, result.defects_found
+                    idx + 1,
+                    run_count,
+                    test_case.description,
+                    result.expected_defects,
+                    result.defects_found
                 );
                 allure_builder = allure_builder.failed(&message, Some(&result.stdout));
             }
@@ -256,7 +289,11 @@ fn test_regression_suite() {
                 );
                 println!(
                     "[{:3}/{}] ✗ EXTRA DEFECTS: {} - Expected {:?}, Extra {:?}",
-                    idx + 1, run_count, test_case.description, result.expected_defects, result.extra_defects
+                    idx + 1,
+                    run_count,
+                    test_case.description,
+                    result.expected_defects,
+                    result.extra_defects
                 );
                 allure_builder = allure_builder.failed(&message, Some(&result.stdout));
             }
@@ -276,12 +313,26 @@ fn test_regression_suite() {
     println!("Total Tests:       {}", total);
     println!("Skipped:           {} (files not found)", skipped);
     println!("Run:               {}", run_count);
-    println!("Passed:            {} ({:.1}%)", passed, if run_count > 0 { (passed as f32 / run_count as f32) * 100.0 } else { 0.0 });
+    println!(
+        "Passed:            {} ({:.1}%)",
+        passed,
+        if run_count > 0 {
+            (passed as f32 / run_count as f32) * 100.0
+        } else {
+            0.0
+        }
+    );
     println!("  - Clean passes: {}", passed - passed_with_warning);
     println!("  - Partial match: {}", passed_with_warning);
     println!("Failed:            {}", failed);
-    println!("  - False Positives: {} (clean files marked as defective)", false_positives);
-    println!("  - False Negatives: {} (defective files marked as clean)", false_negatives);
+    println!(
+        "  - False Positives: {} (clean files marked as defective)",
+        false_positives
+    );
+    println!(
+        "  - False Negatives: {} (defective files marked as clean)",
+        false_negatives
+    );
     println!("  - Wrong Defect Type: {}", wrong_defect_type);
     println!("  - Extra Defects: {}", extra_defects_count);
     println!("{}", "=".repeat(70));
@@ -291,15 +342,25 @@ fn test_regression_suite() {
     let mut categories: Vec<_> = category_results.iter().collect();
     categories.sort_by_key(|(k, _)| k.as_str());
     for (category, (pass, fail, wrong, total)) in categories {
-        let pct = if *total > 0 { (*pass as f32 / *total as f32) * 100.0 } else { 0.0 };
+        let pct = if *total > 0 {
+            (*pass as f32 / *total as f32) * 100.0
+        } else {
+            0.0
+        };
         let mut status = String::new();
         if *wrong > 0 {
             status.push_str(&format!(" [⚠ {} wrong/extra]", wrong));
         }
-        println!("  {}: {}/{} passed ({:.1}%){}", category, pass, total, pct, status);
+        println!(
+            "  {}: {}/{} passed ({:.1}%){}",
+            category, pass, total, pct, status
+        );
     }
 
-    println!("\nAllure results written to: {}", allure_results_dir.display());
+    println!(
+        "\nAllure results written to: {}",
+        allure_results_dir.display()
+    );
 
     if failed > 0 {
         println!("\n⚠️  Detector needs improvement in {} areas", failed);
@@ -336,7 +397,10 @@ fn define_regression_tests(base: &Path) -> Vec<TestCase> {
 
     // === CleanOrigin - should pass ===
     tests.push(TestCase {
-        file_path: base.join("CleanOrigin/input96.flac").to_string_lossy().to_string(),
+        file_path: base
+            .join("CleanOrigin/input96.flac")
+            .to_string_lossy()
+            .to_string(),
         should_pass: true,
         expected_defects: vec![],
         category: "CleanOrigin".to_string(),
@@ -344,8 +408,11 @@ fn define_regression_tests(base: &Path) -> Vec<TestCase> {
     });
 
     tests.push(TestCase {
-        file_path: base.join("CleanOrigin/input192.flac").to_string_lossy().to_string(),
-        should_pass: true,  // 16-bit source but honestly labeled
+        file_path: base
+            .join("CleanOrigin/input192.flac")
+            .to_string_lossy()
+            .to_string(),
+        should_pass: true, // 16-bit source but honestly labeled
         expected_defects: vec![],
         category: "CleanOrigin".to_string(),
         description: "CleanOrigin: 192kHz (16-bit source)".to_string(),
@@ -353,7 +420,10 @@ fn define_regression_tests(base: &Path) -> Vec<TestCase> {
 
     // === CleanTranscoded - should pass ===
     tests.push(TestCase {
-        file_path: base.join("CleanTranscoded/input96_16bit.flac").to_string_lossy().to_string(),
+        file_path: base
+            .join("CleanTranscoded/input96_16bit.flac")
+            .to_string_lossy()
+            .to_string(),
         should_pass: true,
         expected_defects: vec![],
         category: "CleanTranscoded".to_string(),
@@ -361,7 +431,10 @@ fn define_regression_tests(base: &Path) -> Vec<TestCase> {
     });
 
     tests.push(TestCase {
-        file_path: base.join("CleanTranscoded/input192_16bit.flac").to_string_lossy().to_string(),
+        file_path: base
+            .join("CleanTranscoded/input192_16bit.flac")
+            .to_string_lossy()
+            .to_string(),
         should_pass: true,
         expected_defects: vec![],
         category: "CleanTranscoded".to_string(),
@@ -372,7 +445,10 @@ fn define_regression_tests(base: &Path) -> Vec<TestCase> {
     // Downsamples should pass
     for rate in &["44", "48", "88"] {
         tests.push(TestCase {
-            file_path: base.join(format!("Resample96/input96_{}.flac", rate)).to_string_lossy().to_string(),
+            file_path: base
+                .join(format!("Resample96/input96_{}.flac", rate))
+                .to_string_lossy()
+                .to_string(),
             should_pass: true,
             expected_defects: vec![],
             category: "Resample96".to_string(),
@@ -382,7 +458,10 @@ fn define_regression_tests(base: &Path) -> Vec<TestCase> {
     // Upsamples should fail
     for rate in &["176", "192"] {
         tests.push(TestCase {
-            file_path: base.join(format!("Resample96/input96_{}.flac", rate)).to_string_lossy().to_string(),
+            file_path: base
+                .join(format!("Resample96/input96_{}.flac", rate))
+                .to_string_lossy()
+                .to_string(),
             should_pass: false,
             expected_defects: vec!["Upsampled".to_string()],
             category: "Resample96".to_string(),
@@ -393,7 +472,10 @@ fn define_regression_tests(base: &Path) -> Vec<TestCase> {
     // === Resample192 - all from 16-bit source ===
     for rate in &["44", "48", "88", "96", "176"] {
         tests.push(TestCase {
-            file_path: base.join(format!("Resample192/input192_{}.flac", rate)).to_string_lossy().to_string(),
+            file_path: base
+                .join(format!("Resample192/input192_{}.flac", rate))
+                .to_string_lossy()
+                .to_string(),
             should_pass: false,
             expected_defects: vec!["BitDepthMismatch".to_string()],
             category: "Resample192".to_string(),
@@ -403,7 +485,10 @@ fn define_regression_tests(base: &Path) -> Vec<TestCase> {
 
     // === Upscale16 - bit depth padding ===
     tests.push(TestCase {
-        file_path: base.join("Upscale16/input96_16to24.flac").to_string_lossy().to_string(),
+        file_path: base
+            .join("Upscale16/input96_16to24.flac")
+            .to_string_lossy()
+            .to_string(),
         should_pass: false,
         expected_defects: vec!["BitDepthMismatch".to_string()],
         category: "Upscale16".to_string(),
@@ -411,7 +496,10 @@ fn define_regression_tests(base: &Path) -> Vec<TestCase> {
     });
 
     tests.push(TestCase {
-        file_path: base.join("Upscale16/input192_16to24.flac").to_string_lossy().to_string(),
+        file_path: base
+            .join("Upscale16/input192_16to24.flac")
+            .to_string_lossy()
+            .to_string(),
         should_pass: false,
         expected_defects: vec!["BitDepthMismatch".to_string()],
         category: "Upscale16".to_string(),
@@ -420,9 +508,17 @@ fn define_regression_tests(base: &Path) -> Vec<TestCase> {
 
     // === Upscaled - lossy transcodes ===
     // 96kHz variants
-    for (codec, defect) in &[("mp3", "Mp3Transcode"), ("aac", "AacTranscode"), ("opus", "OpusTranscode"), ("ogg", "OggVorbisTranscode")] {
+    for (codec, defect) in &[
+        ("mp3", "Mp3Transcode"),
+        ("aac", "AacTranscode"),
+        ("opus", "OpusTranscode"),
+        ("ogg", "OggVorbisTranscode"),
+    ] {
         tests.push(TestCase {
-            file_path: base.join(format!("Upscaled/input96_{}.flac", codec)).to_string_lossy().to_string(),
+            file_path: base
+                .join(format!("Upscaled/input96_{}.flac", codec))
+                .to_string_lossy()
+                .to_string(),
             should_pass: false,
             expected_defects: vec![defect.to_string()],
             category: "Upscaled".to_string(),
@@ -431,13 +527,24 @@ fn define_regression_tests(base: &Path) -> Vec<TestCase> {
     }
 
     // 192kHz variants
-    for (codec, defect) in &[("mp3", "Mp3Transcode"), ("aac", "AacTranscode"), ("opus", "OpusTranscode"), ("ogg", "OggVorbisTranscode")] {
+    for (codec, defect) in &[
+        ("mp3", "Mp3Transcode"),
+        ("aac", "AacTranscode"),
+        ("opus", "OpusTranscode"),
+        ("ogg", "OggVorbisTranscode"),
+    ] {
         tests.push(TestCase {
-            file_path: base.join(format!("Upscaled/input192_{}.flac", codec)).to_string_lossy().to_string(),
+            file_path: base
+                .join(format!("Upscaled/input192_{}.flac", codec))
+                .to_string_lossy()
+                .to_string(),
             should_pass: false,
             expected_defects: vec![defect.to_string()],
             category: "Upscaled".to_string(),
-            description: format!("Upscaled: 192kHz from {} (16-bit source)", codec.to_uppercase()),
+            description: format!(
+                "Upscaled: 192kHz from {} (16-bit source)",
+                codec.to_uppercase()
+            ),
         });
     }
 
@@ -453,7 +560,10 @@ fn add_masterscript_tests(tests: &mut Vec<TestCase>, base: &Path) {
     // test96 variants
     let test96 = ms_base.join("test96");
     tests.push(TestCase {
-        file_path: test96.join("test96_original.flac").to_string_lossy().to_string(),
+        file_path: test96
+            .join("test96_original.flac")
+            .to_string_lossy()
+            .to_string(),
         should_pass: true,
         expected_defects: vec![],
         category: "MasterScript-96".to_string(),
@@ -462,7 +572,10 @@ fn add_masterscript_tests(tests: &mut Vec<TestCase>, base: &Path) {
 
     // Bit depth upscales
     tests.push(TestCase {
-        file_path: test96.join("test96_16to24.flac").to_string_lossy().to_string(),
+        file_path: test96
+            .join("test96_16to24.flac")
+            .to_string_lossy()
+            .to_string(),
         should_pass: false,
         expected_defects: vec!["BitDepthMismatch".to_string()],
         category: "MasterScript-96".to_string(),
@@ -470,7 +583,10 @@ fn add_masterscript_tests(tests: &mut Vec<TestCase>, base: &Path) {
     });
 
     tests.push(TestCase {
-        file_path: test96.join("test96_16bit_44khz.flac").to_string_lossy().to_string(),
+        file_path: test96
+            .join("test96_16bit_44khz.flac")
+            .to_string_lossy()
+            .to_string(),
         should_pass: false,
         expected_defects: vec!["BitDepthMismatch".to_string()],
         category: "MasterScript-96".to_string(),
@@ -478,7 +594,10 @@ fn add_masterscript_tests(tests: &mut Vec<TestCase>, base: &Path) {
     });
 
     tests.push(TestCase {
-        file_path: test96.join("test96_16bit_44khz_mp3_128k.flac").to_string_lossy().to_string(),
+        file_path: test96
+            .join("test96_16bit_44khz_mp3_128k.flac")
+            .to_string_lossy()
+            .to_string(),
         should_pass: false,
         expected_defects: vec!["Mp3Transcode".to_string()],
         category: "MasterScript-96".to_string(),
@@ -488,18 +607,36 @@ fn add_masterscript_tests(tests: &mut Vec<TestCase>, base: &Path) {
     // Sample rate upsampling
     for rate in &["44_192", "48_192"] {
         tests.push(TestCase {
-            file_path: test96.join(format!("test96_{}.flac", rate)).to_string_lossy().to_string(),
+            file_path: test96
+                .join(format!("test96_{}.flac", rate))
+                .to_string_lossy()
+                .to_string(),
             should_pass: false,
             expected_defects: vec!["Upsampled".to_string()],
             category: "MasterScript-96".to_string(),
-            description: format!("MasterScript: test96 {}kHz→192kHz upsampled", rate.split('_').next().unwrap()),
+            description: format!(
+                "MasterScript: test96 {}kHz→192kHz upsampled",
+                rate.split('_').next().unwrap()
+            ),
         });
     }
 
     // MP3 variants
-    for bitrate in &["128k", "192k", "256k", "320k", "v0", "v2", "v4", "320k_320k"] {
+    for bitrate in &[
+        "128k",
+        "192k",
+        "256k",
+        "320k",
+        "v0",
+        "v2",
+        "v4",
+        "320k_320k",
+    ] {
         tests.push(TestCase {
-            file_path: test96.join(format!("test96_mp3_{}.flac", bitrate)).to_string_lossy().to_string(),
+            file_path: test96
+                .join(format!("test96_mp3_{}.flac", bitrate))
+                .to_string_lossy()
+                .to_string(),
             should_pass: false,
             expected_defects: vec!["Mp3Transcode".to_string()],
             category: "MasterScript-96".to_string(),
@@ -510,7 +647,10 @@ fn add_masterscript_tests(tests: &mut Vec<TestCase>, base: &Path) {
     // AAC variants
     for bitrate in &["128k", "192k", "256k", "320k"] {
         tests.push(TestCase {
-            file_path: test96.join(format!("test96_aac_{}.flac", bitrate)).to_string_lossy().to_string(),
+            file_path: test96
+                .join(format!("test96_aac_{}.flac", bitrate))
+                .to_string_lossy()
+                .to_string(),
             should_pass: false,
             expected_defects: vec!["AacTranscode".to_string()],
             category: "MasterScript-96".to_string(),
@@ -521,7 +661,10 @@ fn add_masterscript_tests(tests: &mut Vec<TestCase>, base: &Path) {
     // Opus variants
     for bitrate in &["64k", "96k", "128k", "160k", "192k"] {
         tests.push(TestCase {
-            file_path: test96.join(format!("test96_opus_{}.flac", bitrate)).to_string_lossy().to_string(),
+            file_path: test96
+                .join(format!("test96_opus_{}.flac", bitrate))
+                .to_string_lossy()
+                .to_string(),
             should_pass: false,
             expected_defects: vec!["OpusTranscode".to_string()],
             category: "MasterScript-96".to_string(),
@@ -532,7 +675,10 @@ fn add_masterscript_tests(tests: &mut Vec<TestCase>, base: &Path) {
     // Vorbis variants
     for quality in &["q3", "q5", "q7", "q9"] {
         tests.push(TestCase {
-            file_path: test96.join(format!("test96_vorbis_{}.flac", quality)).to_string_lossy().to_string(),
+            file_path: test96
+                .join(format!("test96_vorbis_{}.flac", quality))
+                .to_string_lossy()
+                .to_string(),
             should_pass: false,
             expected_defects: vec!["OggVorbisTranscode".to_string()],
             category: "MasterScript-96".to_string(),
@@ -542,7 +688,10 @@ fn add_masterscript_tests(tests: &mut Vec<TestCase>, base: &Path) {
 
     // Cross-codec
     tests.push(TestCase {
-        file_path: test96.join("test96_mp3_aac.flac").to_string_lossy().to_string(),
+        file_path: test96
+            .join("test96_mp3_aac.flac")
+            .to_string_lossy()
+            .to_string(),
         should_pass: false,
         expected_defects: vec!["Mp3Transcode".to_string(), "AacTranscode".to_string()],
         category: "MasterScript-96".to_string(),
@@ -550,7 +699,10 @@ fn add_masterscript_tests(tests: &mut Vec<TestCase>, base: &Path) {
     });
 
     tests.push(TestCase {
-        file_path: test96.join("test96_opus_mp3.flac").to_string_lossy().to_string(),
+        file_path: test96
+            .join("test96_opus_mp3.flac")
+            .to_string_lossy()
+            .to_string(),
         should_pass: false,
         expected_defects: vec!["OpusTranscode".to_string(), "Mp3Transcode".to_string()],
         category: "MasterScript-96".to_string(),
@@ -560,15 +712,21 @@ fn add_masterscript_tests(tests: &mut Vec<TestCase>, base: &Path) {
     // test192 variants (16-bit source)
     let test192 = ms_base.join("test192");
     tests.push(TestCase {
-        file_path: test192.join("test192_original.flac").to_string_lossy().to_string(),
-        should_pass: false,  // 16-bit source
+        file_path: test192
+            .join("test192_original.flac")
+            .to_string_lossy()
+            .to_string(),
+        should_pass: false, // 16-bit source
         expected_defects: vec!["BitDepthMismatch".to_string()],
         category: "MasterScript-192".to_string(),
         description: "MasterScript: test192 original (16-bit source)".to_string(),
     });
 
     tests.push(TestCase {
-        file_path: test192.join("test192_16to24.flac").to_string_lossy().to_string(),
+        file_path: test192
+            .join("test192_16to24.flac")
+            .to_string_lossy()
+            .to_string(),
         should_pass: false,
         expected_defects: vec!["BitDepthMismatch".to_string()],
         category: "MasterScript-192".to_string(),
@@ -576,7 +734,10 @@ fn add_masterscript_tests(tests: &mut Vec<TestCase>, base: &Path) {
     });
 
     tests.push(TestCase {
-        file_path: test192.join("test192_16bit_44khz.flac").to_string_lossy().to_string(),
+        file_path: test192
+            .join("test192_16bit_44khz.flac")
+            .to_string_lossy()
+            .to_string(),
         should_pass: false,
         expected_defects: vec!["BitDepthMismatch".to_string()],
         category: "MasterScript-192".to_string(),
@@ -584,7 +745,10 @@ fn add_masterscript_tests(tests: &mut Vec<TestCase>, base: &Path) {
     });
 
     tests.push(TestCase {
-        file_path: test192.join("test192_16bit_44khz_mp3_128k.flac").to_string_lossy().to_string(),
+        file_path: test192
+            .join("test192_16bit_44khz_mp3_128k.flac")
+            .to_string_lossy()
+            .to_string(),
         should_pass: false,
         expected_defects: vec!["Mp3Transcode".to_string()],
         category: "MasterScript-192".to_string(),
@@ -593,18 +757,36 @@ fn add_masterscript_tests(tests: &mut Vec<TestCase>, base: &Path) {
 
     for rate in &["44_192", "48_192"] {
         tests.push(TestCase {
-            file_path: test192.join(format!("test192_{}.flac", rate)).to_string_lossy().to_string(),
+            file_path: test192
+                .join(format!("test192_{}.flac", rate))
+                .to_string_lossy()
+                .to_string(),
             should_pass: false,
             expected_defects: vec!["Upsampled".to_string()],
             category: "MasterScript-192".to_string(),
-            description: format!("MasterScript: test192 {}kHz→192kHz (16-bit source)", rate.split('_').next().unwrap()),
+            description: format!(
+                "MasterScript: test192 {}kHz→192kHz (16-bit source)",
+                rate.split('_').next().unwrap()
+            ),
         });
     }
 
     // MP3 variants
-    for bitrate in &["128k", "192k", "256k", "320k", "v0", "v2", "v4", "320k_320k"] {
+    for bitrate in &[
+        "128k",
+        "192k",
+        "256k",
+        "320k",
+        "v0",
+        "v2",
+        "v4",
+        "320k_320k",
+    ] {
         tests.push(TestCase {
-            file_path: test192.join(format!("test192_mp3_{}.flac", bitrate)).to_string_lossy().to_string(),
+            file_path: test192
+                .join(format!("test192_mp3_{}.flac", bitrate))
+                .to_string_lossy()
+                .to_string(),
             should_pass: false,
             expected_defects: vec!["Mp3Transcode".to_string()],
             category: "MasterScript-192".to_string(),
@@ -615,7 +797,10 @@ fn add_masterscript_tests(tests: &mut Vec<TestCase>, base: &Path) {
     // AAC variants
     for bitrate in &["128k", "192k", "256k", "320k"] {
         tests.push(TestCase {
-            file_path: test192.join(format!("test192_aac_{}.flac", bitrate)).to_string_lossy().to_string(),
+            file_path: test192
+                .join(format!("test192_aac_{}.flac", bitrate))
+                .to_string_lossy()
+                .to_string(),
             should_pass: false,
             expected_defects: vec!["AacTranscode".to_string()],
             category: "MasterScript-192".to_string(),
@@ -626,7 +811,10 @@ fn add_masterscript_tests(tests: &mut Vec<TestCase>, base: &Path) {
     // Opus variants
     for bitrate in &["64k", "96k", "128k", "160k", "192k"] {
         tests.push(TestCase {
-            file_path: test192.join(format!("test192_opus_{}.flac", bitrate)).to_string_lossy().to_string(),
+            file_path: test192
+                .join(format!("test192_opus_{}.flac", bitrate))
+                .to_string_lossy()
+                .to_string(),
             should_pass: false,
             expected_defects: vec!["OpusTranscode".to_string()],
             category: "MasterScript-192".to_string(),
@@ -637,7 +825,10 @@ fn add_masterscript_tests(tests: &mut Vec<TestCase>, base: &Path) {
     // Vorbis variants
     for quality in &["q3", "q5", "q7", "q9"] {
         tests.push(TestCase {
-            file_path: test192.join(format!("test192_vorbis_{}.flac", quality)).to_string_lossy().to_string(),
+            file_path: test192
+                .join(format!("test192_vorbis_{}.flac", quality))
+                .to_string_lossy()
+                .to_string(),
             should_pass: false,
             expected_defects: vec!["OggVorbisTranscode".to_string()],
             category: "MasterScript-192".to_string(),
@@ -647,7 +838,10 @@ fn add_masterscript_tests(tests: &mut Vec<TestCase>, base: &Path) {
 
     // Cross-codec
     tests.push(TestCase {
-        file_path: test192.join("test192_mp3_aac.flac").to_string_lossy().to_string(),
+        file_path: test192
+            .join("test192_mp3_aac.flac")
+            .to_string_lossy()
+            .to_string(),
         should_pass: false,
         expected_defects: vec!["Mp3Transcode".to_string(), "AacTranscode".to_string()],
         category: "MasterScript-192".to_string(),
@@ -655,7 +849,10 @@ fn add_masterscript_tests(tests: &mut Vec<TestCase>, base: &Path) {
     });
 
     tests.push(TestCase {
-        file_path: test192.join("test192_opus_mp3.flac").to_string_lossy().to_string(),
+        file_path: test192
+            .join("test192_opus_mp3.flac")
+            .to_string_lossy()
+            .to_string(),
         should_pass: false,
         expected_defects: vec!["OpusTranscode".to_string(), "Mp3Transcode".to_string()],
         category: "MasterScript-192".to_string(),
@@ -663,7 +860,11 @@ fn add_masterscript_tests(tests: &mut Vec<TestCase>, base: &Path) {
     });
 }
 
-fn run_tests_parallel(binary: &Path, test_cases: Vec<TestCase>, num_threads: usize) -> Vec<TestResult> {
+fn run_tests_parallel(
+    binary: &Path,
+    test_cases: Vec<TestCase>,
+    num_threads: usize,
+) -> Vec<TestResult> {
     let binary = binary.to_path_buf();
     let test_cases = Arc::new(test_cases);
     let results = Arc::new(Mutex::new(Vec::new()));
@@ -676,24 +877,22 @@ fn run_tests_parallel(binary: &Path, test_cases: Vec<TestCase>, num_threads: usi
         let results = Arc::clone(&results);
         let index = Arc::clone(&index);
 
-        let handle = thread::spawn(move || {
-            loop {
-                let current_idx = {
-                    let mut idx = index.lock().unwrap();
-                    if *idx >= test_cases.len() {
-                        return;
-                    }
-                    let current = *idx;
-                    *idx += 1;
-                    current
-                };
+        let handle = thread::spawn(move || loop {
+            let current_idx = {
+                let mut idx = index.lock().unwrap();
+                if *idx >= test_cases.len() {
+                    return;
+                }
+                let current = *idx;
+                *idx += 1;
+                current
+            };
 
-                let test_case = &test_cases[current_idx];
-                let result = run_single_test(&binary, test_case);
+            let test_case = &test_cases[current_idx];
+            let result = run_single_test(&binary, test_case);
 
-                let mut results_guard = results.lock().unwrap();
-                results_guard.push((current_idx, result));
-            }
+            let mut results_guard = results.lock().unwrap();
+            results_guard.push((current_idx, result));
         });
         handles.push(handle);
     }
@@ -766,12 +965,14 @@ fn validate_test_result(
     let expected_set: HashSet<&String> = expected_defects.iter().collect();
     let found_set: HashSet<&String> = defects_found.iter().collect();
 
-    let missing: Vec<String> = expected_defects.iter()
+    let missing: Vec<String> = expected_defects
+        .iter()
         .filter(|d| !found_set.contains(d))
         .cloned()
         .collect();
 
-    let extra: Vec<String> = defects_found.iter()
+    let extra: Vec<String> = defects_found
+        .iter()
         .filter(|d| !expected_set.contains(d))
         .cloned()
         .collect();
@@ -853,7 +1054,13 @@ fn run_single_test(binary: &Path, test_case: &TestCase) -> TestResult {
 
 fn sanitize_name(s: &str) -> String {
     s.chars()
-        .map(|c| if c.is_alphanumeric() || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 
@@ -890,7 +1097,11 @@ fn get_binary_path() -> PathBuf {
 #[test]
 fn test_binary_exists() {
     let binary_path = get_binary_path();
-    assert!(binary_path.exists(), "Binary not found at {:?}", binary_path);
+    assert!(
+        binary_path.exists(),
+        "Binary not found at {:?}",
+        binary_path
+    );
 }
 
 #[test]

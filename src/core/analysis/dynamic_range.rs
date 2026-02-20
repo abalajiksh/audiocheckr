@@ -23,8 +23,8 @@
 //! | 14–20    | Audiophile / classical mastering               |
 //! | > 20     | Rare; unmastered or very dynamic recordings   |
 
-use std::f64::consts::PI;
 use serde::{Deserialize, Serialize};
+use std::f64::consts::PI;
 
 /// Complete dynamic range analysis result.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -384,10 +384,7 @@ fn k_weight_prefilter_coefficients(fs: f64) -> ([f64; 3], [f64; 3]) {
 /// High-pass (RLB weighting) coefficients for K-weighting.
 fn k_weight_highpass_coefficients(fs: f64) -> ([f64; 3], [f64; 3]) {
     if (fs - 48000.0).abs() < 1.0 {
-        return (
-            [1.0, -2.0, 1.0],
-            [1.0, -1.99004745483398, 0.99007225036621],
-        );
+        return ([1.0, -2.0, 1.0], [1.0, -1.99004745483398, 0.99007225036621]);
     }
 
     let fc = 38.13547087602444;
@@ -427,10 +424,7 @@ fn biquad_filter(input: &[f64], b: &[f64; 3], a: &[f64; 3]) -> Vec<f64> {
 // ════════════════════════════════════════════════════════════════════
 
 fn peak_of(samples: &[f64]) -> f64 {
-    samples
-        .iter()
-        .map(|s| s.abs())
-        .fold(0.0_f64, f64::max)
+    samples.iter().map(|s| s.abs()).fold(0.0_f64, f64::max)
 }
 
 fn rms_of(samples: &[f64]) -> f64 {
@@ -611,7 +605,11 @@ mod tests {
         let (b, a) = k_weight_prefilter_coefficients(48000.0);
         let output = biquad_filter(&impulse, &b, &a);
         let max_val = output.iter().map(|x| x.abs()).fold(0.0_f64, f64::max);
-        assert!(max_val < 10.0, "Biquad output should be bounded, got max {}", max_val);
+        assert!(
+            max_val < 10.0,
+            "Biquad output should be bounded, got max {}",
+            max_val
+        );
         let tail_energy: f64 = output[900..].iter().map(|x| x * x).sum();
         assert!(tail_energy < 1e-6, "Biquad tail should decay");
     }

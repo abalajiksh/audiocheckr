@@ -1,16 +1,16 @@
 //! Analysis types and result structures
 
 pub mod clipping_detection;
-pub mod mqa_detection;
-pub mod resampling_detection;
 pub mod dithering_detection;
 pub mod dynamic_range;
 pub mod mfcc;
+pub mod mqa_detection;
+pub mod resampling_detection;
 
+pub use dynamic_range::{DynamicRangeAnalyzer, DynamicRangeResult, DynamicRangeVerdict};
+pub use mfcc::{MfccAnalyzer, MfccConfig, MfccFingerprint, MfccResult};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-pub use dynamic_range::{DynamicRangeAnalyzer, DynamicRangeResult, DynamicRangeVerdict};
-pub use mfcc::{MfccAnalyzer, MfccConfig, MfccResult, MfccFingerprint};
 
 /// Configuration for audio analysis
 #[derive(Debug, Clone)]
@@ -37,7 +37,7 @@ impl Default for AnalysisConfig {
             enable_enf: false,
             genre_profile: None,
             sensitivity: AnalysisSensitivity::Medium,
-	    enable_mfcc: true,
+            enable_mfcc: true,
         }
     }
 }
@@ -69,8 +69,11 @@ pub struct AnalysisResult {
 impl AnalysisResult {
     /// Returns true if the file appears to be genuine lossless
     pub fn is_genuine(&self) -> bool {
-        self.detections.is_empty() || 
-        self.detections.iter().all(|d| d.severity == Severity::Info || d.severity == Severity::Low)
+        self.detections.is_empty()
+            || self
+                .detections
+                .iter()
+                .all(|d| d.severity == Severity::Info || d.severity == Severity::Low)
     }
 }
 

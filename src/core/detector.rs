@@ -1,10 +1,10 @@
 //! Main audio detector implementation
 
-use crate::core::analysis::{
-    AnalysisConfig, AnalysisResult, DefectType, Detection, DetectionMethod,
-    QualityMetrics, Severity,
-};
 use crate::core::analysis::dynamic_range::{DynamicRangeAnalyzer, DynamicRangeResult};
+use crate::core::analysis::{
+    AnalysisConfig, AnalysisResult, DefectType, Detection, DetectionMethod, QualityMetrics,
+    Severity,
+};
 use crate::core::dsp::{SpectralAnalyzer, WindowFunction};
 use anyhow::{Context, Result};
 use std::path::Path;
@@ -32,28 +32,28 @@ impl AudioDetector {
     /// Analyze an audio file
     pub fn analyze<P: AsRef<Path>>(&self, path: P) -> Result<AnalysisResult> {
         let path = path.as_ref();
-        
+
         // Load audio file
         let (samples, sample_rate, channels, bit_depth) = self.load_audio(path)?;
-        
+
         let duration = samples.len() as f64 / (sample_rate as f64 * channels as f64);
-        
+
         // Calculate file hash
         let file_hash = self.calculate_hash(path)?;
-        
+
         // Run detection pipeline
         let detections = self.run_detection_pipeline(&samples, sample_rate, bit_depth, channels)?;
-        
+
         // Calculate overall confidence
         let confidence = self.calculate_confidence(&detections);
-        
+
         // Calculate quality metrics
         let quality_metrics = self.calculate_quality_metrics(&samples, sample_rate);
 
         // Dynamic range analysis — deinterleave and run
         let dynamic_range = self.run_dynamic_range_analysis(&samples, sample_rate, channels);
-	
-	// MFCC analysis (downmix interleaved f32 → mono f64 first)
+
+        // MFCC analysis (downmix interleaved f32 → mono f64 first)
         let mfcc = if self.config.enable_mfcc {
             let mono_f64: Vec<f64> = samples
                 .chunks(channels as usize)
@@ -63,7 +63,7 @@ impl AudioDetector {
         } else {
             None
         };
-        
+
         Ok(AnalysisResult {
             file_path: path.to_path_buf(),
             file_hash,
@@ -76,7 +76,7 @@ impl AudioDetector {
             quality_metrics: Some(quality_metrics),
             analysis_timestamp: chrono::Utc::now().to_rfc3339(),
             dynamic_range,
-	    mfcc,
+            mfcc,
         })
     }
 
@@ -95,7 +95,8 @@ impl AudioDetector {
 
         // Deinterleave: [L0, R0, L1, R1, ...] → [[L0, L1, ...], [R0, R1, ...]]
         let samples_per_channel = samples.len() / n_channels;
-        let mut deinterleaved: Vec<Vec<f64>> = vec![Vec::with_capacity(samples_per_channel); n_channels];
+        let mut deinterleaved: Vec<Vec<f64>> =
+            vec![Vec::with_capacity(samples_per_channel); n_channels];
 
         for (i, &s) in samples.iter().enumerate() {
             let ch = i % n_channels;
@@ -127,63 +128,70 @@ impl AudioDetector {
         let path = path.as_ref();
         let file = std::fs::File::open(path)
             .with_context(|| format!("Failed to open file: {}", path.display()))?;
-        
+
         let mss = MediaSourceStream::new(Box::new(file), Default::default());
-        
+
         let mut hint = Hint::new();
         if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
             hint.with_extension(ext);
         }
-        
+
         let format_opts = FormatOptions::default();
         let metadata_opts = MetadataOptions::default();
         let decoder_opts = DecoderOptions::default();
-        
+
         let probed = symphonia::default::get_probe()
             .format(&hint, mss, &format_opts, &metadata_opts)
             .context("Failed to probe audio format")?;
-        
+
         let mut format = probed.format;
-        
+
         let track = format
             .tracks()
             .iter()
             .find(|t| t.codec_params.codec != symphonia::core::codecs::CODEC_TYPE_NULL)
             .context("No audio track found")?;
-        
+
         let sample_rate = track.codec_params.sample_rate.unwrap_or(44100);
-        let channels = track.codec_params.channels.map(|c| c.count() as u16).unwrap_or(2);
+        let channels = track
+            .codec_params
+            .channels
+            .map(|c| c.count() as u16)
+            .unwrap_or(2);
         let bit_depth = track.codec_params.bits_per_sample.unwrap_or(16) as u16;
-        
+
         let mut decoder = symphonia::default::get_codecs()
             .make(&track.codec_params, &decoder_opts)
             .context("Failed to create decoder")?;
-        
+
         let track_id = track.id;
         let mut samples = Vec::new();
-        
+
         loop {
             let packet = match format.next_packet() {
                 Ok(p) => p,
-                Err(symphonia::core::errors::Error::IoError(e)) 
-                    if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+                Err(symphonia::core::errors::Error::IoError(e))
+                    if e.kind() == std::io::ErrorKind::UnexpectedEof =>
+                {
+                    break
+                }
                 Err(e) => return Err(e.into()),
             };
-            
+
             if packet.track_id() != track_id {
                 continue;
             }
-            
+
             let decoded = decoder.decode(&packet)?;
             let spec = *decoded.spec();
             let duration = decoded.capacity() as u64;
-            
+
             let mut sample_buf = SampleBuffer::<f32>::new(duration, spec);
             sample_buf.copy_interleaved_ref(decoded);
-            
+
             samples.extend(sample_buf.samples());
         }
-        
+
         Ok((samples, sample_rate, channels, bit_depth))
     }
 
@@ -203,20 +211,20 @@ impl AudioDetector {
         channels: u16,
     ) -> Result<Vec<Detection>> {
         let mut detections = Vec::new();
-        
+
         // Convert to f64 for analysis
         let samples_f64: Vec<f64> = samples.iter().map(|&s| s as f64).collect();
-        
+
         // 1. Dithering Detection
         if let Some(detection) = self.detect_dithering(samples, bit_depth)? {
-             detections.push(detection);
+            detections.push(detection);
         }
 
         // 2. Resampling Detection
         let mut found_resampling = false;
         if let Some(detection) = self.detect_resampling(samples, sample_rate)? {
-             detections.push(detection);
-             found_resampling = true;
+            detections.push(detection);
+            found_resampling = true;
         }
 
         // 3. Spectral cutoff detection (transcode detection)
@@ -225,26 +233,26 @@ impl AudioDetector {
                 detections.push(detection);
             }
         }
-        
+
         // 4. Upsampling detection (generic)
         if !found_resampling {
             if let Some(detection) = self.detect_upsampling(&samples_f64, sample_rate)? {
                 detections.push(detection);
             }
         }
-        
+
         // 5. Bit depth analysis
         if let Some(detection) = self.detect_bit_depth_inflation(samples, bit_depth)? {
             detections.push(detection);
         }
-        
+
         // 6. MQA detection (if enabled)
         if self.config.enable_mqa {
             if let Some(detection) = self.detect_mqa(samples, sample_rate, bit_depth)? {
                 detections.push(detection);
             }
         }
-        
+
         // 7. Clipping detection (if enabled)
         if self.config.enable_clipping {
             if let Some(detection) = self.detect_clipping(samples, sample_rate)? {
@@ -260,9 +268,9 @@ impl AudioDetector {
                 .collect();
             let mfcc_result = self.run_mfcc_analysis(&mono, sample_rate);
             if let Some(detection) = self.detect_lossy_via_mfcc(&mfcc_result) {
-                let already_detected = detections.iter().any(|d| {
-                    matches!(d.defect_type, DefectType::LossyTranscode { .. })
-                });
+                let already_detected = detections
+                    .iter()
+                    .any(|d| matches!(d.defect_type, DefectType::LossyTranscode { .. }));
                 if !already_detected {
                     detections.push(detection);
                 }
@@ -271,15 +279,15 @@ impl AudioDetector {
 
         // Filter by minimum confidence
         detections.retain(|d| d.confidence >= self.config.min_confidence);
-        
+
         Ok(detections)
     }
 
     fn detect_dithering(&self, samples: &[f32], bit_depth: u16) -> Result<Option<Detection>> {
-        use crate::core::analysis::dithering_detection::{DitheringDetector, DitherType};
+        use crate::core::analysis::dithering_detection::{DitherType, DitheringDetector};
         let detector = DitheringDetector::new();
         let result = detector.detect(samples, bit_depth);
-        
+
         if result.is_dithered {
             let type_str = match result.dither_type {
                 DitherType::TPDF => "TPDF",
@@ -288,7 +296,7 @@ impl AudioDetector {
                 DitherType::Gaussian => "Gaussian",
                 _ => "Unknown",
             };
-            
+
             return Ok(Some(Detection {
                 defect_type: DefectType::DitheringDetected {
                     dither_type: type_str.to_string(),
@@ -298,7 +306,10 @@ impl AudioDetector {
                 confidence: result.confidence,
                 severity: Severity::Info,
                 method: DetectionMethod::NoiseFloorAnalysis,
-                evidence: Some(format!("{} dither detected at {} bits", type_str, result.bit_depth)),
+                evidence: Some(format!(
+                    "{} dither detected at {} bits",
+                    type_str, result.bit_depth
+                )),
                 temporal: None,
             }));
         }
@@ -309,12 +320,12 @@ impl AudioDetector {
         use crate::core::analysis::resampling_detection::ResamplingDetector;
         let detector = ResamplingDetector::new();
         let result = detector.detect(samples, sample_rate);
-        
+
         if result.is_resampled {
             let quality = result.quality;
             let target = result.target_rate;
             let orig = result.original_rate.unwrap_or(0);
-            
+
             return Ok(Some(Detection {
                 defect_type: DefectType::ResamplingDetected {
                     original_rate: orig,
@@ -342,20 +353,20 @@ impl AudioDetector {
             self.config.hop_size,
             WindowFunction::BlackmanHarris,
         );
-        
+
         let nyquist = sample_rate as f64 / 2.0;
-        
+
         let cutoff = analyzer.detect_cutoff(samples, sample_rate, 10.0);
-        
+
         if let Some(cutoff_hz) = cutoff {
             let cutoff_ratio = cutoff_hz / nyquist;
-            
+
             if cutoff_ratio < 0.95 {
                 let (codec, bitrate) = self.estimate_codec(cutoff_hz);
-                
+
                 let confidence = (0.95 - cutoff_ratio) / 0.3;
                 let confidence = confidence.clamp(0.0, 1.0);
-                
+
                 let severity = if cutoff_ratio < 0.5 {
                     Severity::Critical
                 } else if cutoff_ratio < 0.7 {
@@ -365,7 +376,7 @@ impl AudioDetector {
                 } else {
                     Severity::Low
                 };
-                
+
                 return Ok(Some(Detection {
                     defect_type: DefectType::LossyTranscode {
                         codec,
@@ -384,7 +395,7 @@ impl AudioDetector {
                 }));
             }
         }
-        
+
         Ok(None)
     }
 
@@ -466,7 +477,7 @@ impl AudioDetector {
                 } else {
                     Severity::Medium
                 },
-                method: DetectionMethod::MfccAnalysis,  // the new variant you add
+                method: DetectionMethod::MfccAnalysis, // the new variant you add
                 evidence: Some(format!(
                     "MFCC high-order std_dev={:.3} (threshold {:.1}), \
                      mean |kurtosis|={:.3} — flat cepstrum indicates lossy history",
@@ -480,51 +491,49 @@ impl AudioDetector {
     }
 
     /// Detect upsampling
-    fn detect_upsampling(
-        &self,
-        samples: &[f64],
-        sample_rate: u32,
-    ) -> Result<Option<Detection>> {
+    fn detect_upsampling(&self, samples: &[f64], sample_rate: u32) -> Result<Option<Detection>> {
         let common_rates = [44100, 48000, 88200, 96000];
-        
+
         for &original_rate in &common_rates {
             if original_rate >= sample_rate {
                 continue;
             }
-            
+
             let original_nyquist = original_rate as f64 / 2.0;
-            
+
             let mut analyzer = SpectralAnalyzer::new(
                 self.config.fft_size,
                 self.config.hop_size,
                 WindowFunction::BlackmanHarris,
             );
-            
+
             let spectrum = analyzer.compute_power_spectrum_db(samples);
             let freq_resolution = sample_rate as f64 / self.config.fft_size as f64;
-            
+
             let start_bin = (original_nyquist / freq_resolution) as usize;
             let end_bin = spectrum.len();
-            
+
             if start_bin >= end_bin {
                 continue;
             }
-            
+
             let high_freq_energy: f64 = spectrum[start_bin..end_bin]
                 .iter()
                 .map(|&x| 10.0_f64.powf(x / 10.0))
-                .sum::<f64>() / (end_bin - start_bin) as f64;
-            
+                .sum::<f64>()
+                / (end_bin - start_bin) as f64;
+
             let low_freq_energy: f64 = spectrum[..start_bin]
                 .iter()
                 .map(|&x| 10.0_f64.powf(x / 10.0))
-                .sum::<f64>() / start_bin.max(1) as f64;
-            
+                .sum::<f64>()
+                / start_bin.max(1) as f64;
+
             let ratio = high_freq_energy / low_freq_energy.max(1e-10);
-            
+
             if ratio < 0.01 {
                 let confidence = (1.0 - ratio * 10.0).clamp(0.0, 1.0);
-                
+
                 return Ok(Some(Detection {
                     defect_type: DefectType::Upsampled {
                         original_rate,
@@ -541,7 +550,7 @@ impl AudioDetector {
                 }));
             }
         }
-        
+
         Ok(None)
     }
 
@@ -554,22 +563,22 @@ impl AudioDetector {
         if samples.is_empty() {
             return Ok(None);
         }
-        
+
         let mut bit_usage = vec![0u64; 32];
-        
+
         for &sample in samples {
             let int_val = (sample * (1 << (claimed_bits - 1)) as f32) as i32;
-            
+
             for bit in 0..32 {
                 if (int_val >> bit) & 1 != 0 {
                     bit_usage[bit] += 1;
                 }
             }
         }
-        
+
         let total = samples.len() as f64;
         let mut actual_bits = claimed_bits;
-        
+
         for bit in 0..claimed_bits as usize {
             let usage_ratio = bit_usage[bit] as f64 / total;
             if usage_ratio < 0.01 || usage_ratio > 0.99 {
@@ -578,11 +587,11 @@ impl AudioDetector {
                 break;
             }
         }
-        
+
         if actual_bits < claimed_bits - 1 {
             let confidence = (claimed_bits - actual_bits) as f64 / 8.0;
             let confidence = confidence.clamp(0.0, 1.0);
-            
+
             return Ok(Some(Detection {
                 defect_type: DefectType::BitDepthInflated {
                     actual_bits,
@@ -602,28 +611,33 @@ impl AudioDetector {
                 temporal: None,
             }));
         }
-        
+
         Ok(None)
     }
 
     /// Detect MQA encoding
-    fn detect_mqa(&self, samples: &[f32], sample_rate: u32, bit_depth: u16) -> Result<Option<Detection>> {
+    fn detect_mqa(
+        &self,
+        samples: &[f32],
+        sample_rate: u32,
+        bit_depth: u16,
+    ) -> Result<Option<Detection>> {
         use crate::core::analysis::mqa_detection::MqaDetector;
-        
+
         let detector = MqaDetector::default();
         let result = detector.detect(samples, sample_rate, bit_depth as u32);
-        
+
         if result.is_mqa_encoded {
             let mqa_type = match result.mqa_type {
                 Some(ref t) => format!("{:?}", t),
                 None => "Unknown".to_string(),
             };
-            
+
             let encoder_version = match result.encoder_version {
                 Some(ref v) => format!("{:?}", v),
                 None => "Unknown".to_string(),
             };
-            
+
             return Ok(Some(Detection {
                 defect_type: DefectType::MqaEncoded {
                     original_rate: result.original_sample_rate,
@@ -639,14 +653,14 @@ impl AudioDetector {
                 temporal: None,
             }));
         }
-        
+
         Ok(None)
     }
 
     /// Detect clipping
     fn detect_clipping(&self, samples: &[f32], sample_rate: u32) -> Result<Option<Detection>> {
         use crate::core::analysis::clipping_detection::ClippingDetector;
-        
+
         let detector = ClippingDetector::new();
         Ok(detector.analyze(samples, sample_rate))
     }
@@ -656,7 +670,7 @@ impl AudioDetector {
         if detections.is_empty() {
             return 1.0;
         }
-        
+
         let total_weight: f64 = detections
             .iter()
             .map(|d| match d.severity {
@@ -667,7 +681,7 @@ impl AudioDetector {
                 Severity::Info => 0.1,
             })
             .sum();
-        
+
         let weighted_confidence: f64 = detections
             .iter()
             .map(|d| {
@@ -681,7 +695,7 @@ impl AudioDetector {
                 d.confidence * weight
             })
             .sum();
-        
+
         if total_weight > 0.0 {
             1.0 - (weighted_confidence / total_weight)
         } else {
@@ -694,30 +708,30 @@ impl AudioDetector {
         if samples.is_empty() {
             return QualityMetrics::default();
         }
-        
+
         let max_sample = samples.iter().map(|&s| s.abs()).fold(0.0_f32, f32::max);
         let rms = (samples.iter().map(|&s| s * s).sum::<f32>() / samples.len() as f32).sqrt();
-        
+
         let true_peak = if max_sample > 0.0 {
             20.0 * (max_sample as f64).log10()
         } else {
             -f64::INFINITY
         };
-        
+
         let rms_db = if rms > 0.0 {
             20.0 * (rms as f64).log10()
         } else {
             -f64::INFINITY
         };
-        
+
         let crest_factor = if rms > 0.0 {
             20.0 * ((max_sample / rms) as f64).log10()
         } else {
             0.0
         };
-        
+
         let dynamic_range = true_peak - rms_db + 3.0;
-        
+
         let mut sorted_samples: Vec<f32> = samples.iter().map(|&s| s.abs()).collect();
         sorted_samples.sort_by(|a, b| a.partial_cmp(b).unwrap());
         let noise_floor_sample = sorted_samples[sorted_samples.len() / 100];
@@ -726,7 +740,7 @@ impl AudioDetector {
         } else {
             -96.0
         };
-        
+
         QualityMetrics {
             dynamic_range,
             noise_floor,
@@ -751,11 +765,11 @@ mod tests {
     #[test]
     fn test_codec_estimation() {
         let detector = AudioDetector::with_default_config();
-        
+
         let (codec, bitrate) = detector.estimate_codec(11000.0);
         assert_eq!(codec, "MP3");
         assert_eq!(bitrate, 64);
-        
+
         let (codec, bitrate) = detector.estimate_codec(15000.0);
         assert_eq!(codec, "MP3");
         assert_eq!(bitrate, 192);

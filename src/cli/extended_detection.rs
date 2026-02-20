@@ -18,7 +18,12 @@ pub struct ExtendedDetectionArgs {
     pub enf_sensitive: bool,
 
     /// Expected ENF base frequency (auto-detect if not specified)
-    #[arg(long, requires = "enf", value_enum, help = "Expected power grid frequency")]
+    #[arg(
+        long,
+        requires = "enf",
+        value_enum,
+        help = "Expected power grid frequency"
+    )]
     pub enf_frequency: Option<EnfFrequencyArg>,
 
     /// Disable clipping detection (enabled by default)
@@ -247,18 +252,24 @@ pub struct AuthenticityAnomaly {
 pub fn print_text_report(result: &ExtendedAnalysisResult) {
     println!("\n[Extended Analysis - Stub Implementation]");
     println!("Quality Grade: {:?}", result.quality_assessment.grade);
-    println!("Quality Score: {:.1}/100", result.quality_assessment.score * 100.0);
-    
+    println!(
+        "Quality Score: {:.1}/100",
+        result.quality_assessment.score * 100.0
+    );
+
     if let Some(ref clip) = result.clipping_result {
-        println!("\nClipping: {}", if clip.has_clipping { "YES" } else { "NO" });
+        println!(
+            "\nClipping: {}",
+            if clip.has_clipping { "YES" } else { "NO" }
+        );
         println!("Severity: {:.2}", clip.severity);
     }
-    
+
     if let Some(ref auth) = result.authenticity_assessment {
         println!("\nAuthenticity: {:?}", auth.result);
         println!("Confidence: {:.1}%", auth.confidence * 100.0);
     }
-    
+
     println!("\n[Note: Full implementation pending]\n");
 }
 
@@ -276,9 +287,9 @@ pub fn print_detailed_report(result: &ExtendedAnalysisResult) {
     println!("                     AUDIOCHECKR EXTENDED ANALYSIS REPORT                       ");
     println!("================================================================================");
     println!();
-    
+
     print_text_report(result);
-    
+
     println!("================================================================================");
     println!("                              END OF REPORT                                     ");
     println!("================================================================================");

@@ -59,7 +59,9 @@ fn main() -> Result<()> {
     if show_progress {
         progress.set_style(
             ProgressStyle::default_bar()
-                .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})")
+                .template(
+                    "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta})",
+                )
                 .unwrap()
                 .progress_chars("#>-"),
         );
@@ -123,7 +125,12 @@ fn main() -> Result<()> {
         OutputFormat::Json if success_count <= 1 => {}
         // In "both" mode, summary goes to stderr to keep stdout as pure JSON
         OutputFormat::Both => {
-            output_handler.print_summary_stderr(success_count, genuine_count, suspect_count, error_count);
+            output_handler.print_summary_stderr(
+                success_count,
+                genuine_count,
+                suspect_count,
+                error_count,
+            );
         }
         _ => {
             output_handler.print_summary(success_count, genuine_count, suspect_count, error_count);

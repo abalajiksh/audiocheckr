@@ -1,6 +1,6 @@
 //! Digital Signal Processing utilities
 
-use rustfft::{FftPlanner, num_complex::Complex};
+use rustfft::{num_complex::Complex, FftPlanner};
 use std::f64::consts::PI;
 
 /// Window functions for spectral analysis
@@ -79,7 +79,7 @@ fn bessel_i0(x: f64) -> f64 {
     let mut sum = 1.0;
     let mut term = 1.0;
     let x_half = x / 2.0;
-    
+
     for k in 1..50 {
         term *= (x_half / k as f64).powi(2);
         sum += term;
@@ -87,7 +87,7 @@ fn bessel_i0(x: f64) -> f64 {
             break;
         }
     }
-    
+
     sum
 }
 
@@ -112,20 +112,20 @@ impl SpectralAnalyzer {
     /// Compute magnitude spectrum for a frame
     pub fn compute_spectrum(&mut self, samples: &[f64]) -> Vec<f64> {
         let fft = self.planner.plan_fft_forward(self.fft_size);
-        
+
         // Apply window and convert to complex
         let mut buffer: Vec<Complex<f64>> = samples
             .iter()
             .zip(self.window.iter())
             .map(|(&s, &w)| Complex::new(s * w, 0.0))
             .collect();
-        
+
         // Pad if necessary
         buffer.resize(self.fft_size, Complex::new(0.0, 0.0));
-        
+
         // Perform FFT
         fft.process(&mut buffer);
-        
+
         // Compute magnitude spectrum (only positive frequencies)
         buffer[..self.fft_size / 2 + 1]
             .iter()
@@ -152,40 +152,46 @@ impl SpectralAnalyzer {
     pub fn compute_spectrogram(&mut self, samples: &[f64]) -> Vec<Vec<f64>> {
         let num_frames = (samples.len().saturating_sub(self.fft_size)) / self.hop_size + 1;
         let mut spectrogram = Vec::with_capacity(num_frames);
-        
+
         for i in 0..num_frames {
             let start = i * self.hop_size;
             let end = (start + self.fft_size).min(samples.len());
             let frame = &samples[start..end];
-            
+
             let spectrum = self.compute_power_spectrum_db(frame);
             spectrogram.push(spectrum);
         }
-        
+
         spectrogram
     }
 
     /// Detect spectral cutoff frequency
-    pub fn detect_cutoff(&mut self, samples: &[f64], sample_rate: u32, threshold_db: f64) -> Option<f64> {
+    pub fn detect_cutoff(
+        &mut self,
+        samples: &[f64],
+        sample_rate: u32,
+        threshold_db: f64,
+    ) -> Option<f64> {
         let spectrum = self.compute_power_spectrum_db(samples);
         let freq_resolution = sample_rate as f64 / self.fft_size as f64;
-        
+
         // Find noise floor (average of bottom 10% of spectrum)
         let mut sorted_spectrum = spectrum.clone();
         sorted_spectrum.sort_by(|a, b| a.partial_cmp(b).unwrap());
         let noise_floor = sorted_spectrum[..sorted_spectrum.len() / 10]
             .iter()
-            .sum::<f64>() / (sorted_spectrum.len() / 10) as f64;
-        
+            .sum::<f64>()
+            / (sorted_spectrum.len() / 10) as f64;
+
         // Find cutoff (where signal drops to threshold above noise floor)
         let cutoff_level = noise_floor + threshold_db;
-        
+
         for (i, &level) in spectrum.iter().enumerate().rev() {
             if level > cutoff_level {
                 return Some(i as f64 * freq_resolution);
             }
         }
-        
+
         None
     }
 
@@ -213,8 +219,10 @@ mod tests {
     #[test]
     fn test_spectral_analyzer() {
         let mut analyzer = SpectralAnalyzer::new(1024, 512, WindowFunction::Hann);
-        let samples: Vec<f64> = (0..1024).map(|i| (2.0 * PI * 440.0 * i as f64 / 44100.0).sin()).collect();
-        
+        let samples: Vec<f64> = (0..1024)
+            .map(|i| (2.0 * PI * 440.0 * i as f64 / 44100.0).sin())
+            .collect();
+
         let spectrum = analyzer.compute_spectrum(&samples);
         assert_eq!(spectrum.len(), 513); // fft_size/2 + 1
     }

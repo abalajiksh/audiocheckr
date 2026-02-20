@@ -1,7 +1,7 @@
 // tests/dithering_resampling_test.rs
 //
 // Dithering & Resampling Detection Test Suite v3
-// 
+//
 // Updates in v3:
 // - More lenient validation: allows extra defects if primary detection works
 // - Better diagnostic output showing what went wrong
@@ -40,8 +40,8 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 
 use test_utils::{
+    default_audiocheckr_categories, get_binary_path, run_audiocheckr, write_categories,
     AllureEnvironment, AllureSeverity, AllureTestBuilder, AllureTestSuite,
-    default_audiocheckr_categories, write_categories, get_binary_path, run_audiocheckr
 };
 
 // ============================================================================
@@ -80,20 +80,21 @@ enum DspTestType {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum ValidationResult {
-    Pass,                    // Perfect match
-    PassWithExtra,           // Primary found but extra defects detected
-    PassWithAlternative,     // Alternative defect found instead of primary
-    FalsePositive,           // Expected clean but got defects
-    FalseNegative,           // Expected defects but got none
-    WrongDefectType,         // Got defects but not the expected ones
+    Pass,                // Perfect match
+    PassWithExtra,       // Primary found but extra defects detected
+    PassWithAlternative, // Alternative defect found instead of primary
+    FalsePositive,       // Expected clean but got defects
+    FalseNegative,       // Expected defects but got none
+    WrongDefectType,     // Got defects but not the expected ones
 }
 
 impl ValidationResult {
     fn is_pass(&self) -> bool {
-        matches!(self, 
-            ValidationResult::Pass | 
-            ValidationResult::PassWithExtra | 
-            ValidationResult::PassWithAlternative
+        matches!(
+            self,
+            ValidationResult::Pass
+                | ValidationResult::PassWithExtra
+                | ValidationResult::PassWithAlternative
         )
     }
 }
@@ -117,7 +118,10 @@ struct TestResult {
 
 fn get_dither_algorithm_info(algorithm: &str) -> (&'static str, &'static str) {
     match algorithm {
-        "rectangular" => ("Rectangular (RPDF)", "Uniform distribution, no noise shaping"),
+        "rectangular" => (
+            "Rectangular (RPDF)",
+            "Uniform distribution, no noise shaping",
+        ),
         "triangular" => ("Triangular (TPDF)", "Standard triangular PDF dither"),
         "triangular_hp" => ("Triangular High-Pass", "TPDF with high-pass filtering"),
         "shibata" => ("Shibata", "Psychoacoustic noise shaping"),
@@ -149,7 +153,7 @@ fn get_resampler_info(engine: &str, params: &str) -> (&'static str, &'static str
 // ============================================================================
 
 fn is_ci_environment() -> bool {
-    std::env::var("JENKINS_HOME").is_ok() 
+    std::env::var("JENKINS_HOME").is_ok()
         || std::env::var("CI").is_ok()
         || std::env::var("BUILD_NUMBER").is_ok()
         || std::env::var("GITHUB_ACTIONS").is_ok()
@@ -233,13 +237,17 @@ fn test_dsp_full_suite() {
     let results = run_tests_parallel(&binary_path, all_cases.clone(), 4);
     let mut allure_suite = AllureTestSuite::new("DSP Full Tests", &allure_results_dir);
 
-    let stats = analyze_and_report_results(&results, &all_cases, &mut allure_suite, &allure_results_dir);
+    let stats =
+        analyze_and_report_results(&results, &all_cases, &mut allure_suite, &allure_results_dir);
 
     if let Err(e) = allure_suite.write_all() {
         eprintln!("Warning: Failed to write Allure results: {}", e);
     }
 
-    println!("\nAllure results written to: {}", allure_results_dir.display());
+    println!(
+        "\nAllure results written to: {}",
+        allure_results_dir.display()
+    );
 
     // Use lenient criteria - only fail on critical issues
     let critical_failures = stats.false_positives + stats.false_negatives + stats.wrong_defect_type;
@@ -299,15 +307,24 @@ fn run_dsp_test_suite(test_dir_name: &str, _primary_type: DspTestType) {
     let _ = std::io::stdout().flush();
 
     let results = run_tests_parallel(&binary_path, test_cases.clone(), 4);
-    let mut allure_suite = AllureTestSuite::new(&format!("{} Tests", suite_name), &allure_results_dir);
+    let mut allure_suite =
+        AllureTestSuite::new(&format!("{} Tests", suite_name), &allure_results_dir);
 
-    let stats = analyze_and_report_results(&results, &test_cases, &mut allure_suite, &allure_results_dir);
+    let stats = analyze_and_report_results(
+        &results,
+        &test_cases,
+        &mut allure_suite,
+        &allure_results_dir,
+    );
 
     if let Err(e) = allure_suite.write_all() {
         eprintln!("Warning: Failed to write Allure results: {}", e);
     }
 
-    println!("\nAllure results written to: {}", allure_results_dir.display());
+    println!(
+        "\nAllure results written to: {}",
+        allure_results_dir.display()
+    );
 
     // Use lenient criteria
     let critical_failures = stats.false_positives + stats.false_negatives + stats.wrong_defect_type;
@@ -385,9 +402,11 @@ fn scan_dithering_tests(base: &Path) -> Vec<DspTestCase> {
     }
 
     cases.sort_by(|a, b| {
-        a.dither_algorithm
-            .cmp(&b.dither_algorithm)
-            .then(a.dither_scale.partial_cmp(&b.dither_scale).unwrap_or(std::cmp::Ordering::Equal))
+        a.dither_algorithm.cmp(&b.dither_algorithm).then(
+            a.dither_scale
+                .partial_cmp(&b.dither_scale)
+                .unwrap_or(std::cmp::Ordering::Equal),
+        )
     });
 
     cases
@@ -441,20 +460,20 @@ fn scan_resampling_tests(base: &Path) -> Vec<DspTestCase> {
                 };
 
                 let direction = if is_upsampling { "↑" } else { "↓" };
-                
+
                 // For resampling, we accept either ResamplingDetected or Upsampled
                 let (primary, alternatives) = if is_upsampling {
                     (
                         Some("Upsampled".to_string()),
-                        vec!["ResamplingDetected".to_string()]
+                        vec!["ResamplingDetected".to_string()],
                     )
                 } else {
                     (
                         Some("ResamplingDetected".to_string()),
-                        vec![]  // Downsampling should detect resampling
+                        vec![], // Downsampling should detect resampling
                     )
                 };
-                
+
                 cases.push(DspTestCase {
                     file_path: path.to_string_lossy().to_string(),
                     filename: filename.clone(),
@@ -516,10 +535,14 @@ fn parse_resample_filename(filename: &str) -> Option<(u32, String, String)> {
 // Parallel Test Executor
 // ============================================================================
 
-fn run_tests_parallel(binary: &Path, test_cases: Vec<DspTestCase>, num_threads: usize) -> Vec<TestResult> {
+fn run_tests_parallel(
+    binary: &Path,
+    test_cases: Vec<DspTestCase>,
+    num_threads: usize,
+) -> Vec<TestResult> {
     // Note: 'binary' path is passed for compatibility but we mostly use run_audiocheckr from utils now
     // We'll keep using it here just to check it exists or if we need specific manual execution
-    
+
     let test_cases = Arc::new(test_cases);
     let results = Arc::new(Mutex::new(Vec::new()));
     let index = Arc::new(Mutex::new(0usize));
@@ -528,7 +551,10 @@ fn run_tests_parallel(binary: &Path, test_cases: Vec<DspTestCase>, num_threads: 
 
     let effective_threads = get_parallel_threads(num_threads);
 
-    println!("Running tests with {} parallel threads...\n", effective_threads);
+    println!(
+        "Running tests with {} parallel threads...\n",
+        effective_threads
+    );
     let _ = std::io::stdout().flush();
 
     for _ in 0..effective_threads {
@@ -536,40 +562,49 @@ fn run_tests_parallel(binary: &Path, test_cases: Vec<DspTestCase>, num_threads: 
         let results = Arc::clone(&results);
         let index = Arc::clone(&index);
 
-        let handle = thread::spawn(move || {
-            loop {
-                let current_idx = {
-                    let mut idx = index.lock().unwrap();
-                    if *idx >= test_cases.len() {
-                        return;
-                    }
-                    let current = *idx;
-                    *idx += 1;
-                    current
-                };
+        let handle = thread::spawn(move || loop {
+            let current_idx = {
+                let mut idx = index.lock().unwrap();
+                if *idx >= test_cases.len() {
+                    return;
+                }
+                let current = *idx;
+                *idx += 1;
+                current
+            };
 
-                let test_case = &test_cases[current_idx];
-                
-                println!("[{}/{}] Testing: {}", current_idx + 1, total, test_case.filename);
-                let _ = std::io::stdout().flush();
-                
-                let result = run_single_test(test_case);
+            let test_case = &test_cases[current_idx];
 
-                let status = match result.validation_result {
-                    ValidationResult::Pass => "✓ PASS",
-                    ValidationResult::PassWithExtra => "✓ PASS (extras tolerated)",
-                    ValidationResult::PassWithAlternative => "✓ PASS (alternative)",
-                    ValidationResult::FalsePositive => "✗ FALSE POSITIVE",
-                    ValidationResult::FalseNegative => "✗ FALSE NEGATIVE", 
-                    ValidationResult::WrongDefectType => "✗ WRONG DEFECT",
-                };
-                println!("[{}/{}] {} - {} ({}ms)", 
-                    current_idx + 1, total, status, test_case.filename, result.duration_ms);
-                let _ = std::io::stdout().flush();
+            println!(
+                "[{}/{}] Testing: {}",
+                current_idx + 1,
+                total,
+                test_case.filename
+            );
+            let _ = std::io::stdout().flush();
 
-                let mut results_guard = results.lock().unwrap();
-                results_guard.push((current_idx, result));
-            }
+            let result = run_single_test(test_case);
+
+            let status = match result.validation_result {
+                ValidationResult::Pass => "✓ PASS",
+                ValidationResult::PassWithExtra => "✓ PASS (extras tolerated)",
+                ValidationResult::PassWithAlternative => "✓ PASS (alternative)",
+                ValidationResult::FalsePositive => "✗ FALSE POSITIVE",
+                ValidationResult::FalseNegative => "✗ FALSE NEGATIVE",
+                ValidationResult::WrongDefectType => "✗ WRONG DEFECT",
+            };
+            println!(
+                "[{}/{}] {} - {} ({}ms)",
+                current_idx + 1,
+                total,
+                status,
+                test_case.filename,
+                result.duration_ms
+            );
+            let _ = std::io::stdout().flush();
+
+            let mut results_guard = results.lock().unwrap();
+            results_guard.push((current_idx, result));
         });
         handles.push(handle);
     }
@@ -593,7 +628,7 @@ fn run_single_test(test_case: &DspTestCase) -> TestResult {
     // Use shared helper to run with correct arguments (positional input, sensitivity)
     let output = run_audiocheckr(&test_case.file_path)
         .arg("--sensitivity")
-        .arg("high")  // High sensitivity for DSP tests
+        .arg("high") // High sensitivity for DSP tests
         .arg("--verbose")
         .output()
         .expect("Failed to execute binary");
@@ -603,7 +638,7 @@ fn run_single_test(test_case: &DspTestCase) -> TestResult {
     let defects_found = parse_defects_from_output(&stdout);
     let is_clean = defects_found.is_empty();
 
-    let (validation_result, primary_found, alternative_found, intolerable_extras) = 
+    let (validation_result, primary_found, alternative_found, intolerable_extras) =
         validate_test_result_v3(test_case, is_clean, &defects_found);
 
     TestResult {
@@ -648,11 +683,11 @@ fn parse_defects_from_output(stdout: &str) -> Vec<String> {
     if stdout_lower.contains("mp3") && stdout_lower.contains("transcode") {
         defects.push("Mp3Transcode".to_string());
     }
-    
+
     if stdout_lower.contains("aac") && stdout_lower.contains("transcode") {
         defects.push("AacTranscode".to_string());
     }
-    
+
     if stdout_lower.contains("vorbis") && stdout_lower.contains("transcode") {
         defects.push("OggVorbisTranscode".to_string());
     }
@@ -671,25 +706,32 @@ fn validate_test_result_v3(
 ) -> (ValidationResult, bool, bool, Vec<String>) {
     let found_set: HashSet<&String> = defects_found.iter().collect();
     let tolerated_set: HashSet<&String> = test_case.tolerated_extras.iter().collect();
-    
+
     // Check if primary or alternative defects were found
-    let primary_found = test_case.primary_defect.as_ref()
+    let primary_found = test_case
+        .primary_defect
+        .as_ref()
         .map(|p| found_set.contains(p))
         .unwrap_or(false);
-    
-    let alternative_found = test_case.alternative_defects.iter()
+
+    let alternative_found = test_case
+        .alternative_defects
+        .iter()
         .any(|alt| found_set.contains(alt));
-    
+
     // Find intolerable extras (defects found that aren't expected or tolerated)
-    let expected_set: HashSet<&String> = test_case.primary_defect.iter()
+    let expected_set: HashSet<&String> = test_case
+        .primary_defect
+        .iter()
         .chain(test_case.alternative_defects.iter())
         .collect();
-    
-    let intolerable: Vec<String> = defects_found.iter()
+
+    let intolerable: Vec<String> = defects_found
+        .iter()
         .filter(|d| !expected_set.contains(d) && !tolerated_set.contains(d))
         .cloned()
         .collect();
-    
+
     // Case 1: Expected CLEAN
     if test_case.should_be_clean {
         if is_clean {
@@ -702,12 +744,12 @@ fn validate_test_result_v3(
         }
         return (ValidationResult::FalsePositive, false, false, intolerable);
     }
-    
+
     // Case 2: Expected DEFECTIVE
     if is_clean {
         return (ValidationResult::FalseNegative, false, false, vec![]);
     }
-    
+
     // Primary defect found
     if primary_found {
         if intolerable.is_empty() {
@@ -715,7 +757,7 @@ fn validate_test_result_v3(
         }
         return (ValidationResult::PassWithExtra, true, false, intolerable);
     }
-    
+
     // Alternative defect found
     if alternative_found {
         if intolerable.is_empty() {
@@ -723,7 +765,7 @@ fn validate_test_result_v3(
         }
         return (ValidationResult::PassWithExtra, false, true, intolerable);
     }
-    
+
     // No expected defects found
     (ValidationResult::WrongDefectType, false, false, intolerable)
 }
@@ -832,9 +874,16 @@ fn analyze_and_report_results(
             **Result:** {:?}",
             test_case.filename,
             test_case.description,
-            if test_case.should_be_clean { "CLEAN".to_string() } 
-            else { format!("{:?}", test_case.primary_defect) },
-            if result.is_clean { "CLEAN" } else { "DEFECTIVE" },
+            if test_case.should_be_clean {
+                "CLEAN".to_string()
+            } else {
+                format!("{:?}", test_case.primary_defect)
+            },
+            if result.is_clean {
+                "CLEAN"
+            } else {
+                "DEFECTIVE"
+            },
             result.defects_found,
             result.primary_found,
             result.alternative_found,
@@ -896,8 +945,14 @@ fn analyze_and_report_results(
     let pass_rate = (stats.passed as f32 / stats.total as f32) * 100.0;
     println!("\nTotal Tests:     {}", stats.total);
     println!("Passed:          {} ({:.1}%)", stats.passed, pass_rate);
-    println!("  - Clean passes:    {}", stats.passed - stats.passed_with_extra - stats.passed_with_alternative);
-    println!("  - With extras:     {} (tolerated)", stats.passed_with_extra);
+    println!(
+        "  - Clean passes:    {}",
+        stats.passed - stats.passed_with_extra - stats.passed_with_alternative
+    );
+    println!(
+        "  - With extras:     {} (tolerated)",
+        stats.passed_with_extra
+    );
     println!("  - Alternatives:    {}", stats.passed_with_alternative);
     println!("Failed:          {}", stats.failed);
     println!("  - False Positives: {}", stats.false_positives);
@@ -908,9 +963,15 @@ fn analyze_and_report_results(
     println!("Results by Test Type:");
     println!("{}", "-".repeat(80));
 
-    for test_type in &[DspTestType::Control, DspTestType::Dithering, DspTestType::Downsampling, DspTestType::Upsampling] {
+    for test_type in &[
+        DspTestType::Control,
+        DspTestType::Dithering,
+        DspTestType::Downsampling,
+        DspTestType::Upsampling,
+    ] {
         if let Some(type_results) = results_by_type.get(test_type) {
-            let type_passed = type_results.iter()
+            let type_passed = type_results
+                .iter()
                 .filter(|r| r.validation_result.is_pass())
                 .count();
             let type_total = type_results.len();
@@ -919,7 +980,11 @@ fn analyze_and_report_results(
                 format!("{:?}", test_type),
                 type_passed,
                 type_total,
-                if type_total > 0 { (type_passed as f32 / type_total as f32) * 100.0 } else { 0.0 }
+                if type_total > 0 {
+                    (type_passed as f32 / type_total as f32) * 100.0
+                } else {
+                    0.0
+                }
             );
         }
     }
@@ -939,13 +1004,22 @@ fn setup_allure_environment(results_dir: &Path, suite_name: &str) {
     env.add("Architecture", std::env::consts::ARCH);
     env.add("Rust Version", env!("CARGO_PKG_VERSION"));
     env.add("Test Suite", suite_name);
-    env.add("CI Environment", if is_ci_environment() { "Yes" } else { "No" });
+    env.add(
+        "CI Environment",
+        if is_ci_environment() { "Yes" } else { "No" },
+    );
     let _ = env.write(results_dir);
 }
 
 fn sanitize_name(s: &str) -> String {
     s.chars()
-        .map(|c| if c.is_alphanumeric() || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 
@@ -956,7 +1030,11 @@ fn sanitize_name(s: &str) -> String {
 #[test]
 fn test_binary_exists() {
     let binary_path = get_binary_path();
-    assert!(binary_path.exists(), "Binary not found at {:?}", binary_path);
+    assert!(
+        binary_path.exists(),
+        "Binary not found at {:?}",
+        binary_path
+    );
 }
 
 #[test]

@@ -8,10 +8,9 @@ pub mod core;
 
 // Re-export commonly used types
 pub use core::analysis::{
-    AnalysisConfig, AnalysisResult, DefectType, Detection, DetectionMethod,
+    AnalysisConfig, AnalysisResult, DefectType, Detection, DetectionMethod, DynamicRangeAnalyzer,
+    DynamicRangeResult, DynamicRangeVerdict, MfccAnalyzer, MfccConfig, MfccFingerprint, MfccResult,
     QualityMetrics, QualityScore, Severity, TemporalDistribution,
-    DynamicRangeAnalyzer, DynamicRangeResult, DynamicRangeVerdict,
-    MfccAnalyzer, MfccConfig, MfccResult, MfccFingerprint,
 };
 pub use core::detector::AudioDetector;
 pub use core::dsp::{SpectralAnalyzer, WindowFunction};

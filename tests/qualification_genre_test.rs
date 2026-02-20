@@ -24,17 +24,17 @@
 
 mod test_utils;
 
+use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs;
-use std::process::Command;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::collections::{HashMap, HashSet};
 
 use test_utils::{
-    AllureTestBuilder, AllureTestSuite, AllureEnvironment, AllureSeverity,
-    write_categories, default_audiocheckr_categories, get_binary_path, run_audiocheckr
+    default_audiocheckr_categories, get_binary_path, run_audiocheckr, write_categories,
+    AllureEnvironment, AllureSeverity, AllureTestBuilder, AllureTestSuite,
 };
 
 #[derive(Clone)]
@@ -67,13 +67,13 @@ enum ValidationResult {
 
 #[derive(Debug)]
 struct TestResult {
-    passed: bool,                    // Whether file was detected as clean
-    expected: bool,                  // Whether file should be clean
+    passed: bool,   // Whether file was detected as clean
+    expected: bool, // Whether file should be clean
     defects_found: Vec<String>,
-    expected_defects: Vec<String>,   // Store expected defects for validation
-    validation_result: ValidationResult,  // Detailed validation result
-    extra_defects: Vec<String>,      // Defects detected beyond expected
-    missing_defects: Vec<String>,    // Expected defects not detected
+    expected_defects: Vec<String>, // Store expected defects for validation
+    validation_result: ValidationResult, // Detailed validation result
+    extra_defects: Vec<String>,    // Defects detected beyond expected
+    missing_defects: Vec<String>,  // Expected defects not detected
     description: String,
     category: String,
     file: String,
@@ -86,7 +86,7 @@ struct TestResult {
 fn test_qualification_genre_suite() {
     let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let allure_results_dir = project_root.join("target").join("allure-results");
-    
+
     // Try GenreTestSuiteLite first, then TestSuite as fallback
     let test_base = if project_root.join("GenreTestSuiteLite").exists() {
         project_root.join("GenreTestSuiteLite")
@@ -119,7 +119,11 @@ fn test_qualification_genre_suite() {
         return;
     }
 
-    println!("Found {} files across {} categories\n", total_tests, count_categories(&test_cases));
+    println!(
+        "Found {} files across {} categories\n",
+        total_tests,
+        count_categories(&test_cases)
+    );
 
     // Run tests in parallel with 4 threads
     let results = run_tests_parallel(test_cases.clone(), 4);
@@ -139,7 +143,7 @@ fn test_qualification_genre_suite() {
 
     for (idx, result) in results.iter().enumerate() {
         let test_case = &test_cases[idx];
-        
+
         results_by_category
             .entry(result.category.clone())
             .or_insert_with(Vec::new)
@@ -152,15 +156,18 @@ fn test_qualification_genre_suite() {
             cat if cat.contains("BitDepth") => AllureSeverity::Critical,
             _ => AllureSeverity::Normal,
         };
-        
-        let expected_str = if result.expected { 
-            "CLEAN (should pass)".to_string() 
-        } else { 
-            format!("DEFECTIVE with {:?}", result.expected_defects) 
+
+        let expected_str = if result.expected {
+            "CLEAN (should pass)".to_string()
+        } else {
+            format!("DEFECTIVE with {:?}", result.expected_defects)
         };
-        
+
         let mut allure_builder = AllureTestBuilder::new(&result.description)
-            .full_name(&format!("qualification_genre_test::{}", sanitize_name(&result.description)))
+            .full_name(&format!(
+                "qualification_genre_test::{}",
+                sanitize_name(&result.description)
+            ))
             .severity(severity)
             .epic("AudioCheckr")
             .feature("Genre-Based Detection")
@@ -174,9 +181,15 @@ fn test_qualification_genre_suite() {
             .parameter("genre", &result.genre)
             .parameter("expected_pass", &result.expected.to_string())
             .parameter("defects_found", &format!("{:?}", result.defects_found))
-            .parameter("expected_defects", &format!("{:?}", result.expected_defects))
-            .parameter("validation_result", &format!("{:?}", result.validation_result));
-        
+            .parameter(
+                "expected_defects",
+                &format!("{:?}", result.expected_defects),
+            )
+            .parameter(
+                "validation_result",
+                &format!("{:?}", result.validation_result),
+            );
+
         let description = format!(
             "**File:** `{}`\n\n\
             **Genre:** {}\n\n\
@@ -200,9 +213,10 @@ fn test_qualification_genre_suite() {
             result.validation_result
         );
         allure_builder = allure_builder.description(&description);
-        
+
         // Attach stdout as evidence (assigned to allure_builder)
-        allure_builder = allure_builder.attach_text("Analysis Output", &result.stdout, &allure_results_dir);
+        allure_builder =
+            allure_builder.attach_text("Analysis Output", &result.stdout, &allure_results_dir);
 
         match result.validation_result {
             ValidationResult::Pass => {
@@ -216,15 +230,20 @@ fn test_qualification_genre_suite() {
                 passed += 1;
                 println!(
                     "⚠ PASS (partial match) [{}]: {} - Found {:?}, Missing {:?}",
-                    result.category, result.description, result.defects_found, result.missing_defects
+                    result.category,
+                    result.description,
+                    result.defects_found,
+                    result.missing_defects
                 );
                 allure_builder = allure_builder.passed();
             }
             ValidationResult::FalsePositive => {
                 failed += 1;
                 false_positives += 1;
-                let message = format!("FALSE POSITIVE: Expected CLEAN but detected defects: {:?}", 
-                    result.defects_found);
+                let message = format!(
+                    "FALSE POSITIVE: Expected CLEAN but detected defects: {:?}",
+                    result.defects_found
+                );
                 println!(
                     "✗ FALSE POSITIVE [{}]: {} - Found: {:?}",
                     result.category, result.description, result.defects_found
@@ -234,8 +253,10 @@ fn test_qualification_genre_suite() {
             ValidationResult::FalseNegative => {
                 failed += 1;
                 false_negatives += 1;
-                let message = format!("FALSE NEGATIVE: Expected defects {:?} but got CLEAN", 
-                    result.expected_defects);
+                let message = format!(
+                    "FALSE NEGATIVE: Expected defects {:?} but got CLEAN",
+                    result.expected_defects
+                );
                 println!(
                     "✗ FALSE NEGATIVE [{}]: {}",
                     result.category, result.description
@@ -251,7 +272,10 @@ fn test_qualification_genre_suite() {
                 );
                 println!(
                     "✗ WRONG DEFECT [{}]: {} - Expected {:?}, Got {:?}",
-                    result.category, result.description, result.expected_defects, result.defects_found
+                    result.category,
+                    result.description,
+                    result.expected_defects,
+                    result.defects_found
                 );
                 allure_builder = allure_builder.failed(&message, Some(&result.stdout));
             }
@@ -265,12 +289,15 @@ fn test_qualification_genre_suite() {
                 );
                 println!(
                     "✗ EXTRA DEFECTS [{}]: {} - Expected {:?}, Extra {:?}",
-                    result.category, result.description, result.expected_defects, result.extra_defects
+                    result.category,
+                    result.description,
+                    result.expected_defects,
+                    result.extra_defects
                 );
                 allure_builder = allure_builder.failed(&message, Some(&result.stdout));
             }
         }
-        
+
         allure_suite.add_result(allure_builder.build());
     }
 
@@ -289,7 +316,10 @@ fn test_qualification_genre_suite() {
         (passed as f32 / total_tests as f32) * 100.0
     );
     println!("  - Clean passes: {}", passed - passed_with_warning);
-    println!("  - Passed with warnings (partial match, missing some expected): {}", passed_with_warning);
+    println!(
+        "  - Passed with warnings (partial match, missing some expected): {}",
+        passed_with_warning
+    );
     println!("Failed: {}", failed);
     println!("  - False Positives: {}", false_positives);
     println!("  - False Negatives: {}", false_negatives);
@@ -300,22 +330,30 @@ fn test_qualification_genre_suite() {
     println!("\n{}", "-".repeat(70));
     println!("Results by Category:");
     println!("{}", "-".repeat(70));
-    
+
     let mut categories: Vec<_> = results_by_category.iter().collect();
     categories.sort_by_key(|(k, _)| k.as_str());
-    
+
     for (category, cat_results) in categories {
-        let cat_passed = cat_results.iter()
-            .filter(|r| matches!(r.validation_result, ValidationResult::Pass | ValidationResult::PassWithWarning))
+        let cat_passed = cat_results
+            .iter()
+            .filter(|r| {
+                matches!(
+                    r.validation_result,
+                    ValidationResult::Pass | ValidationResult::PassWithWarning
+                )
+            })
             .count();
         let cat_total = cat_results.len();
-        let cat_wrong = cat_results.iter()
+        let cat_wrong = cat_results
+            .iter()
             .filter(|r| matches!(r.validation_result, ValidationResult::WrongDefectType))
             .count();
-        let cat_extra = cat_results.iter()
+        let cat_extra = cat_results
+            .iter()
             .filter(|r| matches!(r.validation_result, ValidationResult::ExtraDefects))
             .count();
-        
+
         let mut status = String::new();
         if cat_wrong > 0 {
             status.push_str(&format!(" [⚠ {} wrong type]", cat_wrong));
@@ -323,7 +361,7 @@ fn test_qualification_genre_suite() {
         if cat_extra > 0 {
             status.push_str(&format!(" [⚠ {} extra defects]", cat_extra));
         }
-        
+
         println!(
             "{:35} {:3}/{:3} ({:.0}%){}",
             category,
@@ -334,8 +372,11 @@ fn test_qualification_genre_suite() {
         );
     }
     println!("{}", "=".repeat(70));
-    
-    println!("\nAllure results written to: {}", allure_results_dir.display());
+
+    println!(
+        "\nAllure results written to: {}",
+        allure_results_dir.display()
+    );
 
     assert_eq!(
         failed, 0,
@@ -346,12 +387,12 @@ fn test_qualification_genre_suite() {
 
 fn setup_allure_environment(results_dir: &Path, suite_name: &str) {
     let mut env = AllureEnvironment::new();
-    
+
     env.add("OS", std::env::consts::OS);
     env.add("Architecture", std::env::consts::ARCH);
     env.add("Rust Version", env!("CARGO_PKG_VERSION"));
     env.add("Test Suite", suite_name);
-    
+
     if let Ok(hostname) = std::env::var("HOSTNAME") {
         env.add("Host", &hostname);
     }
@@ -364,7 +405,7 @@ fn setup_allure_environment(results_dir: &Path, suite_name: &str) {
     if let Ok(branch) = std::env::var("GIT_BRANCH") {
         env.add("Git Branch", &branch);
     }
-    
+
     let _ = env.write(results_dir);
 }
 
@@ -386,7 +427,7 @@ fn scan_and_build_test_cases(base: &Path) -> Vec<GenreTestCase> {
         };
 
         let path = entry.path();
-        
+
         if path.is_dir() {
             let category = match path.file_name().and_then(|n| n.to_str()) {
                 Some(name) => name.to_string(),
@@ -435,11 +476,7 @@ fn scan_and_build_test_cases(base: &Path) -> Vec<GenreTestCase> {
             let category = if let Some(pos) = filename.find("__") {
                 filename[..pos].to_string()
             } else {
-                filename
-                    .split('_')
-                    .take(3)
-                    .collect::<Vec<_>>()
-                    .join("_")
+                filename.split('_').take(3).collect::<Vec<_>>().join("_")
             };
 
             let (should_pass, expected_defects) = categorize_expected_result(&category);
@@ -516,19 +553,33 @@ fn categorize_expected_result(category: &str) -> (bool, Vec<String>) {
 }
 
 fn extract_genre_from_filename(filename: &str) -> String {
-    if filename.contains("Boogieman") { "HipHopRnB".to_string() }
-    else if filename.contains("Paranoid_Android") || filename.contains("Instant_Destiny") { "Alternative".to_string() }
-    else if filename.contains("inconsist") || filename.contains("An_Ending") { "AmbientDrone".to_string() }
-    else if filename.contains("Different_Masks") || filename.contains("Windowlicker") { "ElectronicDance".to_string() }
-    else if filename.contains("Could_You_Be_Loved") { "ReggaeDub".to_string() }
-    else if filename.contains("MALAMENTE") || filename.contains("Chan_Chan") { "LatinWorld".to_string() }
-    else if filename.contains("Wake_Up") || filename.contains("Punisher") { "Indie".to_string() }
-    else if filename.contains("Pride_and_Joy") { "Blues".to_string() }
-    else if filename.contains("Brandenburg") || filename.contains("Missa_Pange") { "Classical".to_string() }
-    else if filename.contains("Dream_of_Arrakis") || filename.contains("Bene_Gesserit") { "SoundtrackScore".to_string() }
-    else if filename.contains("Enter_Sandman") || filename.contains("Crack_the_Skye") { "Metal".to_string() }
-    else if filename.contains("So_What") { "Jazz".to_string() }
-    else { "Unknown".to_string() }
+    if filename.contains("Boogieman") {
+        "HipHopRnB".to_string()
+    } else if filename.contains("Paranoid_Android") || filename.contains("Instant_Destiny") {
+        "Alternative".to_string()
+    } else if filename.contains("inconsist") || filename.contains("An_Ending") {
+        "AmbientDrone".to_string()
+    } else if filename.contains("Different_Masks") || filename.contains("Windowlicker") {
+        "ElectronicDance".to_string()
+    } else if filename.contains("Could_You_Be_Loved") {
+        "ReggaeDub".to_string()
+    } else if filename.contains("MALAMENTE") || filename.contains("Chan_Chan") {
+        "LatinWorld".to_string()
+    } else if filename.contains("Wake_Up") || filename.contains("Punisher") {
+        "Indie".to_string()
+    } else if filename.contains("Pride_and_Joy") {
+        "Blues".to_string()
+    } else if filename.contains("Brandenburg") || filename.contains("Missa_Pange") {
+        "Classical".to_string()
+    } else if filename.contains("Dream_of_Arrakis") || filename.contains("Bene_Gesserit") {
+        "SoundtrackScore".to_string()
+    } else if filename.contains("Enter_Sandman") || filename.contains("Crack_the_Skye") {
+        "Metal".to_string()
+    } else if filename.contains("So_What") {
+        "Jazz".to_string()
+    } else {
+        "Unknown".to_string()
+    }
 }
 
 fn count_categories(cases: &[GenreTestCase]) -> usize {
@@ -539,10 +590,7 @@ fn count_categories(cases: &[GenreTestCase]) -> usize {
     categories.len()
 }
 
-fn run_tests_parallel(
-    test_cases: Vec<GenreTestCase>,
-    num_threads: usize,
-) -> Vec<TestResult> {
+fn run_tests_parallel(test_cases: Vec<GenreTestCase>, num_threads: usize) -> Vec<TestResult> {
     let test_cases = Arc::new(test_cases);
     let results = Arc::new(Mutex::new(Vec::new()));
     let index = Arc::new(Mutex::new(0usize));
@@ -555,28 +603,30 @@ fn run_tests_parallel(
         let results = Arc::clone(&results);
         let index = Arc::clone(&index);
 
-        let handle = thread::spawn(move || {
-            loop {
-                let current_idx = {
-                    let mut idx = index.lock().unwrap();
-                    if *idx >= test_cases.len() {
-                        return;
-                    }
-                    let current = *idx;
-                    *idx += 1;
-                    current
-                };
-
-                let test_case = &test_cases[current_idx];
-                let result = run_single_test(test_case);
-
-                if current_idx > 0 && current_idx % 10 == 0 {
-                    println!("Progress: {}/{} tests completed", current_idx, test_cases.len());
+        let handle = thread::spawn(move || loop {
+            let current_idx = {
+                let mut idx = index.lock().unwrap();
+                if *idx >= test_cases.len() {
+                    return;
                 }
+                let current = *idx;
+                *idx += 1;
+                current
+            };
 
-                let mut results_guard = results.lock().unwrap();
-                results_guard.push((current_idx, result));
+            let test_case = &test_cases[current_idx];
+            let result = run_single_test(test_case);
+
+            if current_idx > 0 && current_idx % 10 == 0 {
+                println!(
+                    "Progress: {}/{} tests completed",
+                    current_idx,
+                    test_cases.len()
+                );
             }
+
+            let mut results_guard = results.lock().unwrap();
+            results_guard.push((current_idx, result));
         });
         handles.push(handle);
     }
@@ -640,7 +690,7 @@ fn parse_defects_from_output(stdout: &str) -> Vec<String> {
 }
 
 /// Validate test results with STRICT defect type matching
-/// 
+///
 /// Returns:
 /// - Pass: Correct detection (clean==clean, or all expected defects found with no extras)
 /// - PassWithWarning: Some expected defects found but some missing (partial match OK for fine-tuning)
@@ -656,18 +706,20 @@ fn validate_test_result(
 ) -> (ValidationResult, Vec<String>, Vec<String>) {
     let expected_set: HashSet<&String> = expected_defects.iter().collect();
     let found_set: HashSet<&String> = defects_found.iter().collect();
-    
+
     // Calculate missing and extra defects
-    let missing: Vec<String> = expected_defects.iter()
+    let missing: Vec<String> = expected_defects
+        .iter()
         .filter(|d| !found_set.contains(d))
         .cloned()
         .collect();
-    
-    let extra: Vec<String> = defects_found.iter()
+
+    let extra: Vec<String> = defects_found
+        .iter()
         .filter(|d| !expected_set.contains(d))
         .cloned()
         .collect();
-    
+
     // Case 1: Expected CLEAN
     if should_pass {
         if is_clean {
@@ -678,36 +730,36 @@ fn validate_test_result(
             return (ValidationResult::FalsePositive, missing, extra);
         }
     }
-    
+
     // Case 2: Expected DEFECTIVE
     if is_clean {
         // Expected defective, got clean -> FALSE NEGATIVE
         return (ValidationResult::FalseNegative, missing, extra);
     }
-    
+
     // File is defective as expected, now check if correct defects were found
-    
+
     // If no specific defects expected (just "should be defective"), any defect is OK
     if expected_defects.is_empty() {
         // No specific defects expected, any detection is fine
         return (ValidationResult::Pass, missing, extra);
     }
-    
+
     // Check if ANY expected defect was found
     let any_expected_found = expected_defects.iter().any(|d| found_set.contains(d));
-    
+
     if !any_expected_found {
         // None of the expected defects were found -> WRONG DEFECT TYPE
         return (ValidationResult::WrongDefectType, missing, extra);
     }
-    
+
     // At least one expected defect was found
     // Now check for extra defects (wrong additional detections)
     if !extra.is_empty() {
         // Expected defects found BUT also extra wrong defects -> FAIL (ExtraDefects)
         return (ValidationResult::ExtraDefects, missing, extra);
     }
-    
+
     // No extra defects, check if all expected were found
     if missing.is_empty() {
         // All expected defects found, no extras -> PASS
@@ -721,7 +773,7 @@ fn validate_test_result(
 
 fn run_single_test(test_case: &GenreTestCase) -> TestResult {
     let start = std::time::Instant::now();
-    
+
     // Use the shared run_audiocheckr helper via positional args
     // Use high sensitivity for testing to ensure strict checking
     let output = run_audiocheckr(&test_case.file_path)
@@ -762,12 +814,22 @@ fn run_single_test(test_case: &GenreTestCase) -> TestResult {
 
 fn sanitize_name(s: &str) -> String {
     s.chars()
-        .map(|c| if c.is_alphanumeric() || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 
 #[test]
 fn test_binary_exists() {
     let binary_path = get_binary_path();
-    assert!(binary_path.exists(), "Binary not found at {:?}", binary_path);
+    assert!(
+        binary_path.exists(),
+        "Binary not found at {:?}",
+        binary_path
+    );
 }

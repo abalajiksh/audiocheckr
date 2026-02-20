@@ -1,7 +1,7 @@
-use std::path::{Path, PathBuf};
-use std::process::Command;
 use serde::Serialize;
 use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 use uuid::Uuid;
 
 pub fn get_binary_path() -> PathBuf {
@@ -73,14 +73,16 @@ pub struct AllureEnvironment {
 }
 
 impl AllureEnvironment {
-    pub fn new() -> Self { 
-        Self { properties: std::collections::HashMap::new() } 
+    pub fn new() -> Self {
+        Self {
+            properties: std::collections::HashMap::new(),
+        }
     }
-    
+
     pub fn add(&mut self, key: &str, value: &str) {
         self.properties.insert(key.to_string(), value.to_string());
     }
-    
+
     pub fn write(&self, output_dir: &Path) -> std::io::Result<()> {
         let _ = fs::create_dir_all(output_dir);
         let path = output_dir.join("environment.properties");
@@ -186,55 +188,82 @@ impl AllureTestBuilder {
                 parameters: Vec::new(),
                 status_details: None,
                 attachments: Vec::new(),
-            }
+            },
         }
     }
 
-    pub fn full_name(mut self, name: &str) -> Self { 
-        self.result.labels.push(Label { name: "fullName".to_string(), value: name.to_string() });
-        self 
+    pub fn full_name(mut self, name: &str) -> Self {
+        self.result.labels.push(Label {
+            name: "fullName".to_string(),
+            value: name.to_string(),
+        });
+        self
     }
 
-    pub fn severity(mut self, severity: AllureSeverity) -> Self { 
-        self.result.labels.push(Label { name: "severity".to_string(), value: format!("{:?}", severity).to_lowercase() });
-        self 
+    pub fn severity(mut self, severity: AllureSeverity) -> Self {
+        self.result.labels.push(Label {
+            name: "severity".to_string(),
+            value: format!("{:?}", severity).to_lowercase(),
+        });
+        self
     }
 
-    pub fn epic(mut self, v: &str) -> Self { 
-        self.result.labels.push(Label { name: "epic".to_string(), value: v.to_string() });
-        self 
+    pub fn epic(mut self, v: &str) -> Self {
+        self.result.labels.push(Label {
+            name: "epic".to_string(),
+            value: v.to_string(),
+        });
+        self
     }
 
-    pub fn feature(mut self, v: &str) -> Self { 
-        self.result.labels.push(Label { name: "feature".to_string(), value: v.to_string() });
-        self 
+    pub fn feature(mut self, v: &str) -> Self {
+        self.result.labels.push(Label {
+            name: "feature".to_string(),
+            value: v.to_string(),
+        });
+        self
     }
 
-    pub fn story(mut self, v: &str) -> Self { 
-        self.result.labels.push(Label { name: "story".to_string(), value: v.to_string() });
-        self 
+    pub fn story(mut self, v: &str) -> Self {
+        self.result.labels.push(Label {
+            name: "story".to_string(),
+            value: v.to_string(),
+        });
+        self
     }
 
-    pub fn suite(mut self, v: &str) -> Self { 
-        self.result.labels.push(Label { name: "suite".to_string(), value: v.to_string() });
-        self 
+    pub fn suite(mut self, v: &str) -> Self {
+        self.result.labels.push(Label {
+            name: "suite".to_string(),
+            value: v.to_string(),
+        });
+        self
     }
 
-    pub fn sub_suite(mut self, v: &str) -> Self { 
-        self.result.labels.push(Label { name: "subSuite".to_string(), value: v.to_string() });
-        self 
+    pub fn sub_suite(mut self, v: &str) -> Self {
+        self.result.labels.push(Label {
+            name: "subSuite".to_string(),
+            value: v.to_string(),
+        });
+        self
     }
 
-    pub fn tag(mut self, v: &str) -> Self { 
-        self.result.labels.push(Label { name: "tag".to_string(), value: v.to_string() });
-        self 
+    pub fn tag(mut self, v: &str) -> Self {
+        self.result.labels.push(Label {
+            name: "tag".to_string(),
+            value: v.to_string(),
+        });
+        self
     }
 
     /// Add a test parameter — shows up in Allure's dedicated "Parameters"
     /// table rather than the labels section.
-    pub fn parameter(mut self, k: &str, v: &str) -> Self { 
-        self.result.parameters.push(Parameter { name: k.to_string(), value: v.to_string() });
-        self 
+    pub fn parameter(mut self, k: &str, v: &str) -> Self {
+        self.result.parameters.push(Parameter {
+            name: k.to_string(),
+            value: v.to_string(),
+        });
+        self
     }
 
     pub fn description(mut self, desc: &str) -> Self {
@@ -242,7 +271,7 @@ impl AllureTestBuilder {
         self
     }
 
-    pub fn attach_text(mut self, name: &str, content: &str, dir: &Path) -> Self { 
+    pub fn attach_text(mut self, name: &str, content: &str, dir: &Path) -> Self {
         let uuid = Uuid::new_v4().to_string();
         let file_name = format!("{}-attachment.txt", uuid);
         let path = dir.join(&file_name);
@@ -253,7 +282,7 @@ impl AllureTestBuilder {
                 mime_type: "text/plain".to_string(),
             });
         }
-        self 
+        self
     }
 
     pub fn passed(mut self) -> Self {

@@ -43,13 +43,25 @@ fn test_cli_help() {
         .expect("Failed to execute --help");
 
     assert!(output.status.success(), "--help should succeed");
-    
+
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("audiocheckr"), "Help should mention audiocheckr");
+    assert!(
+        stdout.contains("audiocheckr"),
+        "Help should mention audiocheckr"
+    );
     // New CLI parameter checks
-    assert!(stdout.contains("<INPUT>"), "Help should document INPUT positional argument");
-    assert!(stdout.contains("--sensitivity"), "Help should document --sensitivity flag");
-    assert!(stdout.contains("--format"), "Help should document --format flag");
+    assert!(
+        stdout.contains("<INPUT>"),
+        "Help should document INPUT positional argument"
+    );
+    assert!(
+        stdout.contains("--sensitivity"),
+        "Help should document --sensitivity flag"
+    );
+    assert!(
+        stdout.contains("--format"),
+        "Help should document --format flag"
+    );
 }
 
 #[test]
@@ -61,10 +73,12 @@ fn test_cli_version() {
         .expect("Failed to execute --version");
 
     assert!(output.status.success(), "--version should succeed");
-    
+
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("0.12.0") || stdout.contains("audiocheckr"), 
-        "Version output should contain version number or program name");
+    assert!(
+        stdout.contains("0.12.0") || stdout.contains("audiocheckr"),
+        "Version output should contain version number or program name"
+    );
 }
 
 #[test]
@@ -77,29 +91,35 @@ fn test_cli_missing_file() {
 
     // Clap should report error about missing required argument
     assert!(!output.status.success(), "Should fail without input");
-    
+
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("required") || stderr.contains("INPUT"), 
-        "Stderr should mention missing required input");
+    assert!(
+        stderr.contains("required") || stderr.contains("INPUT"),
+        "Stderr should mention missing required input"
+    );
 }
 
 #[test]
 fn test_cli_json_output_format() {
     let temp_dir = create_temp_test_dir("json_output");
-    
+
     // Test JSON output flag doesn't crash even without valid input
     let output = run_json_analysis(&temp_dir);
 
     // Should produce valid JSON or report no files
     let stdout = String::from_utf8_lossy(&output.stdout);
-    
+
     // Either valid JSON output or empty results
     if !stdout.is_empty() && !stdout.contains("No audio files") {
         // Try to parse as JSON
         let parse_result: Result<serde_json::Value, _> = serde_json::from_str(&stdout);
-        assert!(parse_result.is_ok(), "JSON output should be valid JSON: {}", stdout);
+        assert!(
+            parse_result.is_ok(),
+            "JSON output should be valid JSON: {}",
+            stdout
+        );
     }
-    
+
     cleanup_temp_dir(&temp_dir);
 }
 
@@ -107,20 +127,22 @@ fn test_cli_json_output_format() {
 fn test_cli_invalid_sensitivity() {
     let binary = get_binary_path();
     let temp_dir = create_temp_test_dir("invalid_sensitivity");
-    
+
     let output = Command::new(&binary)
         .arg(&temp_dir)
         .arg("--sensitivity")
-        .arg("super_ultra_high")  // Invalid enum value
+        .arg("super_ultra_high") // Invalid enum value
         .output()
         .expect("Failed to execute with invalid sensitivity");
 
     // Program should error out (clap validation)
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("value") && stderr.contains("sensitivity"), 
-        "Should report invalid sensitivity value");
-    
+    assert!(
+        stderr.contains("value") && stderr.contains("sensitivity"),
+        "Should report invalid sensitivity value"
+    );
+
     cleanup_temp_dir(&temp_dir);
 }
 
@@ -147,9 +169,9 @@ mod lib_tests {
 #[test]
 fn test_concurrent_cli_invocations() {
     use std::thread;
-    
+
     let binary = get_binary_path();
-    
+
     // Spawn multiple help requests concurrently
     let handles: Vec<_> = (0..4)
         .map(|_| {
@@ -162,7 +184,7 @@ fn test_concurrent_cli_invocations() {
             })
         })
         .collect();
-    
+
     for handle in handles {
         let output = handle.join().expect("Thread panicked");
         assert!(output.status.success());
@@ -180,7 +202,7 @@ mod format_tests {
     fn get_test_files_dir() -> Option<PathBuf> {
         let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let test_base = project_root.join("TestFiles");
-        
+
         if test_base.exists() {
             Some(test_base)
         } else {
@@ -196,7 +218,7 @@ mod format_tests {
                 let output = run_audiocheckr(&flac_file)
                     .output()
                     .expect("Failed to analyze FLAC");
-                
+
                 let stdout = String::from_utf8_lossy(&output.stdout);
                 assert!(
                     stdout.contains("Sample Rate") || stdout.contains("Analyzing"),
@@ -214,7 +236,7 @@ mod format_tests {
 #[test]
 fn test_empty_directory_handling() {
     let temp_dir = create_temp_test_dir("empty_dir");
-    
+
     let output = run_audiocheckr(&temp_dir)
         .output()
         .expect("Failed to execute on empty directory");
@@ -224,7 +246,7 @@ fn test_empty_directory_handling() {
         stdout.contains("No audio files") || stdout.is_empty(),
         "Should handle empty directories gracefully"
     );
-    
+
     cleanup_temp_dir(&temp_dir);
 }
 
@@ -238,7 +260,7 @@ mod spectrogram_tests {
     #[test]
     fn test_spectrogram_flag_accepted() {
         let temp_dir = create_temp_test_dir("spectrogram");
-        
+
         let output = run_audiocheckr(&temp_dir)
             .arg("--spectrogram")
             .output()
@@ -246,7 +268,7 @@ mod spectrogram_tests {
 
         // Should not crash (might exit with success even if no files)
         let _ = output.status;
-        
+
         cleanup_temp_dir(&temp_dir);
     }
 }
@@ -261,14 +283,17 @@ mod output_tests {
     #[test]
     fn test_format_detailed() {
         let binary = get_binary_path();
-        
+
         let output = Command::new(&binary)
             .arg("--help") // Just checking help for now as we need input
             .output()
             .expect("Command should run");
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        assert!(stdout.contains("detailed"), "Help should list detailed format");
+        assert!(
+            stdout.contains("detailed"),
+            "Help should list detailed format"
+        );
     }
 }
 
@@ -279,7 +304,7 @@ mod output_tests {
 #[test]
 fn test_verbose_mode() {
     let binary = get_binary_path();
-    
+
     let output = Command::new(&binary)
         .arg("--verbose")
         .arg("--help")
@@ -297,63 +322,75 @@ fn test_verbose_mode() {
 fn test_full_analysis_pipeline() {
     let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let test_base = project_root.join("TestFiles");
-    
+
     if !test_base.exists() {
         println!("Skipping full pipeline test - TestFiles not found");
         return;
     }
-    
+
     let test_file = test_base.join("CleanOrigin/input96.flac");
     if !test_file.exists() {
         println!("Skipping full pipeline test - input96.flac not found");
         return;
     }
-    
+
     // Run full analysis with high sensitivity
     let output = run_verbose_analysis(&test_file);
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    
+
     // Verify output contains expected sections
     assert!(stdout.contains("Sample Rate"), "Should show sample rate");
     assert!(stdout.contains("Bit Depth"), "Should show bit depth");
-    assert!(stdout.contains("Quality Score"), "Should show quality score");
+    assert!(
+        stdout.contains("Quality Score"),
+        "Should show quality score"
+    );
 }
 
 #[test]
 fn test_json_output_structure() {
     let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let test_base = project_root.join("TestFiles");
-    
+
     if !test_base.exists() {
         println!("Skipping JSON structure test - TestFiles not found");
         return;
     }
-    
+
     let test_file = test_base.join("CleanOrigin/input96.flac");
     if !test_file.exists() {
         println!("Skipping JSON structure test - input96.flac not found");
         return;
     }
-    
+
     let output = run_json_analysis(&test_file);
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    
+
     // Parse JSON
-    let json: serde_json::Value = serde_json::from_str(&stdout)
-        .expect("Output should be valid JSON");
-    
+    let json: serde_json::Value =
+        serde_json::from_str(&stdout).expect("Output should be valid JSON");
+
     // Verify structure
-    assert!(json.get("files_analyzed").is_some(), "Should have files_analyzed");
+    assert!(
+        json.get("files_analyzed").is_some(),
+        "Should have files_analyzed"
+    );
     assert!(json.get("results").is_some(), "Should have results array");
-    
+
     if let Some(results) = json.get("results").and_then(|r| r.as_array()) {
         if !results.is_empty() {
             let first = &results[0];
             assert!(first.get("file").is_some(), "Result should have file");
-            assert!(first.get("sample_rate").is_some(), "Result should have sample_rate");
-            assert!(first.get("quality_score").is_some(), "Result should have quality_score");
+            assert!(
+                first.get("sample_rate").is_some(),
+                "Result should have sample_rate"
+            );
+            assert!(
+                first.get("quality_score").is_some(),
+                "Result should have quality_score"
+            );
         }
     }
 }

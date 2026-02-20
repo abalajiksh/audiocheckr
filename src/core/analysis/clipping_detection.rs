@@ -2,7 +2,9 @@
 //!
 //! Detects digital clipping, inter-sample peaks, and related issues.
 
-use crate::core::analysis::{Detection, DetectionMethod, DefectType, Severity, TemporalDistribution};
+use crate::core::analysis::{
+    DefectType, Detection, DetectionMethod, Severity, TemporalDistribution,
+};
 
 /// Clipping detection analyzer
 pub struct ClippingDetector {
@@ -119,7 +121,7 @@ impl ClippingDetector {
         let temporal = if !clipped_regions.is_empty() {
             let duration = samples.len() as f64 / sample_rate as f64;
             let distribution = self.build_distribution(&clipped_regions, samples.len(), 100);
-            
+
             let start_time = clipped_regions.first().unwrap().0 as f64 / sample_rate as f64;
             let end_time = clipped_regions.last().unwrap().1 as f64 / sample_rate as f64;
             let peak_idx = distribution
@@ -161,27 +163,32 @@ impl ClippingDetector {
     /// Detect inter-sample peaks using simple interpolation
     fn detect_intersample_peaks(&self, samples: &[f32]) -> usize {
         let mut count = 0;
-        
+
         for window in samples.windows(3) {
             let (a, b, c) = (window[0] as f64, window[1] as f64, window[2] as f64);
-            
+
             // Simple parabolic interpolation to find peak between samples
             let peak_offset = (a - c) / (2.0 * (a - 2.0 * b + c));
-            
+
             if peak_offset.abs() < 1.0 && !peak_offset.is_nan() {
                 let interpolated_peak = b - 0.25 * (a - c) * peak_offset;
-                
+
                 if interpolated_peak.abs() > 1.0 && b.abs() < self.clip_threshold {
                     count += 1;
                 }
             }
         }
-        
+
         count
     }
 
     /// Build temporal distribution histogram
-    fn build_distribution(&self, regions: &[(usize, usize)], total_samples: usize, bins: usize) -> Vec<f64> {
+    fn build_distribution(
+        &self,
+        regions: &[(usize, usize)],
+        total_samples: usize,
+        bins: usize,
+    ) -> Vec<f64> {
         let mut distribution = vec![0.0; bins];
         let samples_per_bin = total_samples as f64 / bins as f64;
 
@@ -214,7 +221,7 @@ mod tests {
     fn test_no_clipping() {
         let detector = ClippingDetector::new();
         let samples: Vec<f32> = (0..1000).map(|i| (i as f32 / 2000.0).sin() * 0.5).collect();
-        
+
         let result = detector.analyze(&samples, 44100);
         assert!(result.is_none());
     }
@@ -223,17 +230,20 @@ mod tests {
     fn test_clipping_detection() {
         let detector = ClippingDetector::new();
         let mut samples: Vec<f32> = (0..1000).map(|i| (i as f32 / 100.0).sin()).collect();
-        
+
         // Add some clipped samples
         for i in 100..110 {
             samples[i] = 1.0;
         }
-        
+
         let result = detector.analyze(&samples, 44100);
         assert!(result.is_some());
-        
+
         let detection = result.unwrap();
-        if let DefectType::Clipping { clipped_samples, .. } = detection.defect_type {
+        if let DefectType::Clipping {
+            clipped_samples, ..
+        } = detection.defect_type
+        {
             assert!(clipped_samples >= 10);
         } else {
             panic!("Expected Clipping defect type");
