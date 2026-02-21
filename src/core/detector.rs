@@ -247,8 +247,12 @@ impl AudioDetector {
             detections.push(det);
         }
 
-        // 5) Upsampling shelf (P2) – gated by resampling / transcode / bit inflation
-        if !has_resampling && !has_transcode && !has_bit_inflation {
+        // 5) Upsampling shelf (P2).
+        // We allow this even when resampling or bit‑inflation were detected,
+        // but skip it if we already have a strong codec-specific transcode
+        // (MP3/AAC/Opus/Vorbis), since in that case the codec label is
+        // more informative than a generic upsampling flag.
+        if !has_transcode {
             if let Some(det) = self.detect_upsampling_shelf(&samples_f64, sample_rate)? {
                 detections.push(det);
             }
@@ -300,6 +304,17 @@ impl AudioDetector {
         // 10) Multi‑generation heuristic (P6)
         if let Some(det) = self.detect_multigeneration_lossy(&detections) {
             detections.push(det);
+        }
+
+        // 11) Post‑processing: prioritise codec / lossy evidence over generic
+        // bit‑depth inflation to avoid mislabelling lossy transcodes as purely
+        // "BitDepthMismatch".
+        let has_lossy = detections
+            .iter()
+            .any(|d| d.defect_type.is_lossy_transcode());
+
+        if has_lossy {
+            detections.retain(|d| !matches!(d.defect_type, DefectType::BitDepthInflated { .. }));
         }
 
         // Final confidence gating with per‑defect tiers (P5)
@@ -479,7 +494,9 @@ impl AudioDetector {
         samples: &[f32],
         claimed_bits: u16,
     ) -> Result<Option<Detection>> {
-        if samples.is_empty() || claimed_bits < 16 {
+        // Only bother for high-bit-depth containers; 16‑bit containers are not
+        // considered "inflated" here and this avoids flagging clean 16‑bit content.
+        if samples.is_empty() || claimed_bits < 20 {
             return Ok(None);
         }
 
@@ -507,8 +524,9 @@ impl AudioDetector {
 
         let mut highest_used_bit = 0usize;
         for b in (0..claimed_bits as usize).rev() {
+            // Require at least 1% of samples to hit this bit to consider it "used"
             let usage = bit_counts[b] as f64 / total;
-            if usage > 0.001 {
+            if usage > 0.01 {
                 highest_used_bit = b;
                 break;
             }
@@ -550,11 +568,11 @@ impl AudioDetector {
             -120.0
         };
 
-        // 5) Voting
+        // 5) Voting – now stricter, we require ALL three conditions
         let mut votes = 0usize;
 
-        // Vote 1: significant gap between claimed and effective bits
-        if effective_bits + 2 <= claimed_bits {
+        // Vote 1: significant gap between claimed and effective bits (≥ 4 bits)
+        if effective_bits + 4 <= claimed_bits {
             votes += 1;
         }
 
@@ -563,12 +581,13 @@ impl AudioDetector {
             votes += 1;
         }
 
-        // Vote 3: residual noise too small for genuine 24‑bit
-        if claimed_bits >= 24 && q_noise_db < -90.0 {
+        // Vote 3: residual noise too small for genuine 24‑bit+
+        if claimed_bits >= 24 && q_noise_db < -96.0 {
             votes += 1;
         }
 
-        if votes < 2 {
+        // Require all three – this will cut false‑positives on clean material.
+        if votes < 3 {
             return Ok(None);
         }
 
@@ -579,7 +598,7 @@ impl AudioDetector {
         if entropy < 0.1 || entropy > 0.95 {
             confidence = (confidence + 0.1).min(1.0);
         }
-        if q_noise_db < -96.0 {
+        if q_noise_db < -100.0 {
             confidence = (confidence + 0.1).min(1.0);
         }
 
