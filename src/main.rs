@@ -166,10 +166,7 @@ fn generate_spectrogram_for_file(path: &PathBuf) -> Result<()> {
 
     // Place the spectrogram image alongside the source file:
     //   song.flac → song.spectrogram.png
-    let stem = path
-        .file_stem()
-        .unwrap_or_default()
-        .to_string_lossy();
+    let stem = path.file_stem().unwrap_or_default().to_string_lossy();
     let output_path = path.with_file_name(format!("{}.spectrogram.png", stem));
 
     generate_mel_spectrogram(&mono, audio.sample_rate, &config, &output_path)?;

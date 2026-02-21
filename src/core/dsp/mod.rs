@@ -133,19 +133,63 @@ impl SpectralAnalyzer {
             .collect()
     }
 
-    /// Compute power spectrum in dB
+    /// Compute power spectrum in dB (median across multiple distributed frames)
     pub fn compute_power_spectrum_db(&mut self, samples: &[f64]) -> Vec<f64> {
-        let magnitude = self.compute_spectrum(samples);
-        magnitude
-            .iter()
-            .map(|&m| {
-                if m > 0.0 {
-                    20.0 * (m / self.fft_size as f64).log10()
-                } else {
-                    -200.0
-                }
-            })
-            .collect()
+        let num_windows = 40; // Sample 40 windows across the file
+
+        // If the file is too short to skip around, just process what we have as a block
+        if samples.len() < self.fft_size * 2 {
+            let magnitude = self.compute_spectrum(samples);
+            return magnitude
+                .iter()
+                .map(|&m| {
+                    if m > 1e-10 {
+                        20.0 * (m / self.fft_size as f64).log10()
+                    } else {
+                        -200.0
+                    }
+                })
+                .collect();
+        }
+
+        // Calculate a safe stride to distribute our 40 windows across the entire file
+        let stride = (samples.len() - self.fft_size) / num_windows;
+        let mut all_spectra: Vec<Vec<f64>> = Vec::with_capacity(num_windows);
+
+        for i in 0..num_windows {
+            let start = i * stride;
+            let frame = &samples[start..start + self.fft_size];
+            let magnitude = self.compute_spectrum(frame);
+
+            // Convert to power space first (not dB yet) so we can median filter real energy
+            let power_spectrum: Vec<f64> = magnitude
+                .iter()
+                .map(|&m| (m / self.fft_size as f64).powi(2))
+                .collect();
+
+            all_spectra.push(power_spectrum);
+        }
+
+        let num_bins = all_spectra[0].len();
+        let mut median_db_spectrum = Vec::with_capacity(num_bins);
+
+        // Find the median energy per frequency bin
+        for bin in 0..num_bins {
+            let mut bin_energies: Vec<f64> = all_spectra.iter().map(|s| s[bin]).collect();
+            // Sort to find median
+            bin_energies.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            let median_energy = bin_energies[num_windows / 2];
+
+            // Convert the median energy back to dB
+            let db = if median_energy > 1e-20 {
+                10.0 * median_energy.log10()
+            } else {
+                -200.0
+            };
+            median_db_spectrum.push(db);
+        }
+
+        median_db_spectrum
     }
 
     /// Compute spectrogram for entire signal

@@ -585,7 +585,9 @@ impl AudioDetector {
     /// This complements MFCC analysis: MFCCs capture envelope shape while
     /// SFM captures the ratio of noise-like to tonal energy. Together they
     /// catch codecs that MFCC alone misses (e.g., high-bitrate Opus which
-    /// preserves envelope shape but still flattens fine structure).
+    /// preserves envelope shape
+
+    /// Detect lossy transcode via Spectral Flatness Measure (SFM).
     fn detect_lossy_via_sfm(&self, mono_samples: &[f64], sample_rate: u32) -> Option<Detection> {
         use rustfft::{num_complex::Complex, FftPlanner};
 
@@ -596,18 +598,15 @@ impl AudioDetector {
             return None;
         }
 
-        // We measure SFM in the 8 kHz – 20 kHz band where lossy artifacts
-        // are most visible, but only up to Nyquist.
         let nyquist = sample_rate as f64 / 2.0;
         let bin_hz = sample_rate as f64 / fft_size as f64;
         let lo_bin = (8000.0 / bin_hz).ceil() as usize;
         let hi_bin = ((20000.0f64.min(nyquist - 100.0)) / bin_hz).floor() as usize;
 
         if hi_bin <= lo_bin + 10 {
-            return None; // Not enough bandwidth for meaningful SFM
+            return None;
         }
 
-        // Hann window
         let window: Vec<f64> = (0..fft_size)
             .map(|i| {
                 0.5 * (1.0 - (2.0 * std::f64::consts::PI * i as f64 / (fft_size - 1) as f64).cos())
@@ -617,18 +616,24 @@ impl AudioDetector {
         let mut planner = FftPlanner::<f64>::new();
         let fft = planner.plan_fft_forward(fft_size);
 
-        let num_frames = ((mono_samples.len().saturating_sub(fft_size)) / hop_size + 1).min(120);
+        // FIX: Skip the first 5 seconds to avoid ambient intros or silence
+        let skip_samples = (sample_rate * 5) as usize;
+        let start_sample = skip_samples.min(mono_samples.len().saturating_sub(fft_size * 10));
+        let valid_samples = &mono_samples[start_sample..];
+
+        // FIX: Remove the hard 120 frame limit, evaluate up to 500 frames of actual music
+        let num_frames = ((valid_samples.len().saturating_sub(fft_size)) / hop_size + 1).min(500);
 
         let mut sfm_accum = 0.0_f64;
         let mut frame_count = 0usize;
 
         for f in 0..num_frames {
             let start = f * hop_size;
-            if start + fft_size > mono_samples.len() {
+            if start + fft_size > valid_samples.len() {
                 break;
             }
 
-            let mut buf: Vec<Complex<f64>> = mono_samples[start..start + fft_size]
+            let mut buf: Vec<Complex<f64>> = valid_samples[start..start + fft_size]
                 .iter()
                 .enumerate()
                 .map(|(i, &s)| Complex::new(s * window[i], 0.0))
@@ -636,10 +641,9 @@ impl AudioDetector {
 
             fft.process(&mut buf);
 
-            // Power spectrum in the target band
             let powers: Vec<f64> = buf[lo_bin..=hi_bin.min(fft_size / 2)]
                 .iter()
-                .map(|c| c.re * c.re + c.im * c.im + 1e-30) // floor avoids log(0)
+                .map(|c| c.re * c.re + c.im * c.im + 1e-30)
                 .collect();
 
             let n = powers.len() as f64;
@@ -647,7 +651,8 @@ impl AudioDetector {
             let geo_mean = (log_sum / n).exp();
             let arith_mean = powers.iter().sum::<f64>() / n;
 
-            if arith_mean > 1e-25 {
+            if arith_mean > 1e-15 {
+                // Slightly raised silence gate
                 sfm_accum += geo_mean / arith_mean;
                 frame_count += 1;
             }
@@ -658,14 +663,6 @@ impl AudioDetector {
         }
 
         let avg_sfm = sfm_accum / frame_count as f64;
-
-        // Empirical thresholds (measured on a corpus of ~200 files):
-        //   Genuine lossless:   SFM(8-20k) ≈ 0.02 – 0.25
-        //   Lossy 128–256 kbps: SFM(8-20k) ≈ 0.30 – 0.65
-        //   Lossy 320 kbps:     SFM(8-20k) ≈ 0.25 – 0.40
-        //
-        // Threshold 0.35 catches most sub-256 kbps transcodes while
-        // staying clear of lossless material.
         let sfm_threshold = 0.35;
 
         if avg_sfm <= sfm_threshold {
@@ -688,8 +685,7 @@ impl AudioDetector {
             },
             method: DetectionMethod::StatisticalAnalysis,
             evidence: Some(format!(
-                "SFM(8–20 kHz) = {:.4} (threshold {:.2}) — \
-                 elevated spectral flatness indicates lossy quantisation noise",
+                "SFM(8–20 kHz) = {:.4} (threshold {:.2})",
                 avg_sfm, sfm_threshold
             )),
             temporal: None,
@@ -722,6 +718,8 @@ impl AudioDetector {
                 WindowFunction::BlackmanHarris,
             );
 
+            // Because compute_power_spectrum_db is now a median of the whole file,
+            // this spectrum represents the entire track.
             let spectrum = analyzer.compute_power_spectrum_db(samples);
             let freq_resolution = sample_rate as f64 / self.config.fft_size as f64;
 
@@ -732,6 +730,7 @@ impl AudioDetector {
                 continue;
             }
 
+            // Convert median dB back to linear energy for ratio calculation
             let high_freq_energy: f64 = spectrum[start_bin..end_bin]
                 .iter()
                 .map(|&x| 10.0_f64.powf(x / 10.0))
@@ -744,9 +743,13 @@ impl AudioDetector {
                 .sum::<f64>()
                 / start_bin.max(1) as f64;
 
-            let ratio = high_freq_energy / low_freq_energy.max(1e-10);
+            // FIX: Prevent triggering on total digital silence
+            if low_freq_energy < 1e-12 {
+                continue;
+            }
 
-            // ── Lowered threshold: 0.01 → 0.001 ────────────────
+            let ratio = high_freq_energy / low_freq_energy;
+
             if ratio < 0.001 {
                 let confidence = (1.0 - ratio * 1000.0).clamp(0.0, 1.0);
 
@@ -759,9 +762,8 @@ impl AudioDetector {
                     severity: Severity::High,
                     method: DetectionMethod::SpectralShape,
                     evidence: Some(format!(
-                        "Null energy above {} Hz suggests upsampling from {} Hz \
-                         (energy ratio {:.2e})",
-                        original_nyquist as u32, original_rate, ratio
+                        "Null energy above {} Hz suggests upsampling from {} Hz",
+                        original_nyquist as u32, original_rate
                     )),
                     temporal: None,
                 }));

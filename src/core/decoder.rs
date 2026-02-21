@@ -3,15 +3,15 @@
 // Audio decoding module with enhanced metadata extraction and validation.
 // Uses Symphonia for format-agnostic decoding.
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
+use std::fs::File;
+use std::path::Path;
 use symphonia::core::audio::SampleBuffer;
 use symphonia::core::codecs::{DecoderOptions, CODEC_TYPE_NULL};
 use symphonia::core::formats::FormatOptions;
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
-use std::fs::File;
-use std::path::Path;
 
 /// Container for decoded audio data and metadata
 #[derive(Debug, Clone)]
@@ -36,9 +36,9 @@ pub struct AudioData {
 
 /// Decode audio file to floating-point samples
 pub fn decode_audio(path: &Path) -> Result<AudioData> {
-    let file = File::open(path)
-        .with_context(|| format!("Failed to open file: {}", path.display()))?;
-    
+    let file =
+        File::open(path).with_context(|| format!("Failed to open file: {}", path.display()))?;
+
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
 
     let mut hint = Hint::new();
@@ -53,30 +53,33 @@ pub fn decode_audio(path: &Path) -> Result<AudioData> {
         .format(&hint, mss, &fmt_opts, &meta_opts)
         .context("Failed to probe file format - may be corrupted or unsupported")?;
 
-    let format_name = probed.format.metadata()
+    let format_name = probed
+        .format
+        .metadata()
         .current()
         .map(|m| format!("{:?}", m))
         .unwrap_or_else(|| "Unknown".to_string());
-    
-    let track = probed.format
+
+    let track = probed
+        .format
         .tracks()
         .iter()
         .find(|t| t.codec_params.codec != CODEC_TYPE_NULL)
         .context("No supported audio track found in file")?;
 
     let track_id = track.id;
-    let sample_rate = track.codec_params.sample_rate
+    let sample_rate = track
+        .codec_params
+        .sample_rate
         .context("File does not specify sample rate")?;
-    
-    let channels = track.codec_params.channels
-        .map(|c| c.count())
-        .unwrap_or(2);
-    
+
+    let channels = track.codec_params.channels.map(|c| c.count()).unwrap_or(2);
+
     if channels == 0 {
         bail!("File reports 0 audio channels");
     }
 
-    let (claimed_bit_depth, bit_depth_inferred) = 
+    let (claimed_bit_depth, bit_depth_inferred) =
         if let Some(bps) = track.codec_params.bits_per_sample {
             (bps, false)
         } else if let Some(bps) = track.codec_params.bits_per_coded_sample {
@@ -100,8 +103,11 @@ pub fn decode_audio(path: &Path) -> Result<AudioData> {
     loop {
         let packet = match probed.format.next_packet() {
             Ok(packet) => packet,
-            Err(symphonia::core::errors::Error::IoError(ref e)) 
-                if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+            Err(symphonia::core::errors::Error::IoError(ref e))
+                if e.kind() == std::io::ErrorKind::UnexpectedEof =>
+            {
+                break
+            }
             Err(symphonia::core::errors::Error::ResetRequired) => {
                 decoder.reset();
                 continue;
@@ -151,7 +157,12 @@ pub fn decode_audio(path: &Path) -> Result<AudioData> {
 
 /// Infer bit depth from file extension
 fn infer_bit_depth_from_extension(path: &Path) -> u32 {
-    match path.extension().and_then(|e| e.to_str()).map(|s| s.to_lowercase()).as_deref() {
+    match path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|s| s.to_lowercase())
+        .as_deref()
+    {
         // Lossless formats - typically 16 or 24 bit
         Some("flac") => 24,
         Some("wav") => 24,
@@ -159,14 +170,14 @@ fn infer_bit_depth_from_extension(path: &Path) -> u32 {
         Some("alac") | Some("m4a") => 24,
         Some("ape") => 24,
         Some("wv") => 24,
-        
+
         // Lossy formats - effectively 16-bit or less precision
         Some("mp3") => 16,
         Some("aac") => 16,
         Some("ogg") => 16,
         Some("opus") => 16,
         Some("wma") => 16,
-        
+
         // Default assumption
         _ => 16,
     }
@@ -177,10 +188,10 @@ pub fn extract_mono(audio: &AudioData) -> Vec<f32> {
     if audio.channels == 1 {
         return audio.samples.clone();
     }
-    
+
     let num_samples = audio.samples.len() / audio.channels;
     let mut mono = Vec::with_capacity(num_samples);
-    
+
     for i in 0..num_samples {
         let mut sum = 0.0f32;
         for ch in 0..audio.channels {
@@ -188,7 +199,7 @@ pub fn extract_mono(audio: &AudioData) -> Vec<f32> {
         }
         mono.push(sum / audio.channels as f32);
     }
-    
+
     mono
 }
 
@@ -197,31 +208,33 @@ pub fn extract_stereo(audio: &AudioData) -> Option<(Vec<f32>, Vec<f32>)> {
     if audio.channels < 2 {
         return None;
     }
-    
+
     let num_samples = audio.samples.len() / audio.channels;
     let mut left = Vec::with_capacity(num_samples);
     let mut right = Vec::with_capacity(num_samples);
-    
+
     for i in 0..num_samples {
         left.push(audio.samples[i * audio.channels]);
         right.push(audio.samples[i * audio.channels + 1]);
     }
-    
+
     Some((left, right))
 }
 
 /// Compute mid-side from stereo
 pub fn compute_mid_side(left: &[f32], right: &[f32]) -> (Vec<f32>, Vec<f32>) {
-    let mid: Vec<f32> = left.iter()
+    let mid: Vec<f32> = left
+        .iter()
         .zip(right.iter())
         .map(|(l, r)| (l + r) * 0.5)
         .collect();
-    
-    let side: Vec<f32> = left.iter()
+
+    let side: Vec<f32> = left
+        .iter()
         .zip(right.iter())
         .map(|(l, r)| (l - r) * 0.5)
         .collect();
-    
+
     (mid, side)
 }
 
@@ -241,7 +254,7 @@ mod tests {
             codec_name: "Test".to_string(),
             format_name: "Test".to_string(),
         };
-        
+
         let mono = extract_mono(&audio);
         assert_eq!(mono.len(), 2);
         assert!((mono[0] - 0.0).abs() < 0.001);
@@ -252,22 +265,34 @@ mod tests {
     fn test_mid_side() {
         let left = vec![1.0, 0.5];
         let right = vec![1.0, -0.5];
-        
+
         let (mid, side) = compute_mid_side(&left, &right);
-        
+
         assert!((mid[0] - 1.0).abs() < 0.001);
         assert!((side[0] - 0.0).abs() < 0.001);
         assert!((mid[1] - 0.0).abs() < 0.001);
         assert!((side[1] - 0.5).abs() < 0.001);
     }
-    
+
     #[test]
     fn test_infer_bit_depth() {
         use std::path::PathBuf;
-        
-        assert_eq!(infer_bit_depth_from_extension(&PathBuf::from("test.flac")), 24);
-        assert_eq!(infer_bit_depth_from_extension(&PathBuf::from("test.mp3")), 16);
-        assert_eq!(infer_bit_depth_from_extension(&PathBuf::from("test.wav")), 24);
-        assert_eq!(infer_bit_depth_from_extension(&PathBuf::from("test.ogg")), 16);
+
+        assert_eq!(
+            infer_bit_depth_from_extension(&PathBuf::from("test.flac")),
+            24
+        );
+        assert_eq!(
+            infer_bit_depth_from_extension(&PathBuf::from("test.mp3")),
+            16
+        );
+        assert_eq!(
+            infer_bit_depth_from_extension(&PathBuf::from("test.wav")),
+            24
+        );
+        assert_eq!(
+            infer_bit_depth_from_extension(&PathBuf::from("test.ogg")),
+            16
+        );
     }
 }
