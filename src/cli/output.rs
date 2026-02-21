@@ -36,6 +36,28 @@ const CAT_INFO: &str = "info";
 
 fn defect_term_badge(defect: &DefectType) -> TermBadge {
     match defect {
+        // ── Codec-specific transcode variants ───────────────────
+        DefectType::Mp3Transcode { .. } => TermBadge {
+            label: " MP3 ",
+            fg: Color::White,
+            bg: Color::Red,
+        },
+        DefectType::AacTranscode { .. } => TermBadge {
+            label: " AAC ",
+            fg: Color::White,
+            bg: Color::Red,
+        },
+        DefectType::OpusTranscode { .. } => TermBadge {
+            label: " OPUS ",
+            fg: Color::White,
+            bg: Color::Red,
+        },
+        DefectType::OggVorbisTranscode { .. } => TermBadge {
+            label: " VORBIS ",
+            fg: Color::White,
+            bg: Color::Red,
+        },
+        // ── Generic lossy fallback ──────────────────────────────
         DefectType::LossyTranscode { codec, .. } => match codec.to_uppercase().as_str() {
             "MP3" => TermBadge {
                 label: " MP3 ",
@@ -115,6 +137,12 @@ fn defect_term_badge(defect: &DefectType) -> TermBadge {
 /// Used by both terminal rendering and JSON enrichment.
 pub fn defect_badge_info(defect: &DefectType) -> BadgeInfo {
     let (label, category) = match defect {
+        // ── Codec-specific transcode variants ───────────────────
+        DefectType::Mp3Transcode { .. } => ("MP3".into(), CAT_CRITICAL.to_string()),
+        DefectType::AacTranscode { .. } => ("AAC".into(), CAT_CRITICAL.to_string()),
+        DefectType::OpusTranscode { .. } => ("OPUS".into(), CAT_CRITICAL.to_string()),
+        DefectType::OggVorbisTranscode { .. } => ("VORBIS".into(), CAT_CRITICAL.to_string()),
+        // ── Generic lossy fallback ──────────────────────────────
         DefectType::LossyTranscode { codec, .. } => {
             (codec.to_uppercase(), CAT_CRITICAL.to_string())
         }
@@ -225,18 +253,39 @@ fn compute_quality_score(result: &AnalysisResult) -> f64 {
 // Defect Detail Formatting
 // ============================================================================
 
+/// Helper: format bitrate + cutoff for any transcode variant
+fn format_transcode_detail(codec: &str, estimated_bitrate: &Option<u32>, cutoff_hz: u32) -> String {
+    let bitrate = estimated_bitrate
+        .map(|b| format!(" @ ~{} kbps", b))
+        .unwrap_or_default();
+    format!("{}{}, cutoff {} Hz", codec, bitrate, cutoff_hz)
+}
+
 fn format_defect_detail(defect: &DefectType) -> String {
     match defect {
+        // ── Codec-specific transcode variants ───────────────────
+        DefectType::Mp3Transcode {
+            estimated_bitrate,
+            cutoff_hz,
+        } => format_transcode_detail("MP3", estimated_bitrate, *cutoff_hz),
+        DefectType::AacTranscode {
+            estimated_bitrate,
+            cutoff_hz,
+        } => format_transcode_detail("AAC", estimated_bitrate, *cutoff_hz),
+        DefectType::OpusTranscode {
+            estimated_bitrate,
+            cutoff_hz,
+        } => format_transcode_detail("Opus", estimated_bitrate, *cutoff_hz),
+        DefectType::OggVorbisTranscode {
+            estimated_bitrate,
+            cutoff_hz,
+        } => format_transcode_detail("OggVorbis", estimated_bitrate, *cutoff_hz),
+        // ── Generic lossy fallback ──────────────────────────────
         DefectType::LossyTranscode {
             codec,
             estimated_bitrate,
             cutoff_hz,
-        } => {
-            let bitrate = estimated_bitrate
-                .map(|b| format!(" @ ~{} kbps", b))
-                .unwrap_or_default();
-            format!("{}{}, cutoff {} Hz", codec, bitrate, cutoff_hz)
-        }
+        } => format_transcode_detail(codec, estimated_bitrate, *cutoff_hz),
         DefectType::Upsampled {
             original_rate,
             current_rate,

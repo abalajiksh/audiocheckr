@@ -386,7 +386,13 @@ impl AudioDetector {
         Ok(None)
     }
 
-    /// Detect lossy transcode via spectral cutoff
+    /// Detect lossy transcode via spectral cutoff.
+    ///
+    /// Now emits codec-specific `DefectType` variants (`Mp3Transcode`,
+    /// `AacTranscode`, `OpusTranscode`, `OggVorbisTranscode`) instead of
+    /// the generic `LossyTranscode`, so that downstream consumers (test
+    /// harnesses, JSON frontends, badge renderers) can match on the exact
+    /// codec without parsing a freeform string field.
     fn detect_spectral_cutoff(
         &self,
         samples: &[f64],
@@ -406,7 +412,7 @@ impl AudioDetector {
             let cutoff_ratio = cutoff_hz / nyquist;
 
             if cutoff_ratio < 0.95 {
-                let (codec, bitrate) = self.estimate_codec(cutoff_hz);
+                let (codec_id, bitrate) = self.estimate_codec(cutoff_hz);
 
                 let confidence = (0.95 - cutoff_ratio) / 0.3;
                 let confidence = confidence.clamp(0.0, 1.0);
@@ -421,12 +427,33 @@ impl AudioDetector {
                     Severity::Low
                 };
 
-                return Ok(Some(Detection {
-                    defect_type: DefectType::LossyTranscode {
-                        codec,
+                // ── Codec-specific variant dispatch ─────────────
+                let defect_type = match codec_id.to_lowercase().as_str() {
+                    "mp3" => DefectType::Mp3Transcode {
                         estimated_bitrate: Some(bitrate),
                         cutoff_hz: cutoff_hz as u32,
                     },
+                    "aac" => DefectType::AacTranscode {
+                        estimated_bitrate: Some(bitrate),
+                        cutoff_hz: cutoff_hz as u32,
+                    },
+                    "opus" => DefectType::OpusTranscode {
+                        estimated_bitrate: Some(bitrate),
+                        cutoff_hz: cutoff_hz as u32,
+                    },
+                    "ogg" | "vorbis" | "oggvorbis" => DefectType::OggVorbisTranscode {
+                        estimated_bitrate: Some(bitrate),
+                        cutoff_hz: cutoff_hz as u32,
+                    },
+                    other => DefectType::LossyTranscode {
+                        codec: other.to_string(),
+                        estimated_bitrate: Some(bitrate),
+                        cutoff_hz: cutoff_hz as u32,
+                    },
+                };
+
+                return Ok(Some(Detection {
+                    defect_type,
                     confidence,
                     severity,
                     method: DetectionMethod::SpectralCutoff,
@@ -443,20 +470,25 @@ impl AudioDetector {
         Ok(None)
     }
 
-    /// Estimate original codec based on cutoff frequency
+    /// Estimate original codec based on cutoff frequency.
+    ///
+    /// Returns a canonical codec identifier that maps directly to
+    /// `DefectType` variants: "mp3", "aac", "ogg", or "unknown".
     fn estimate_codec(&self, cutoff_hz: f64) -> (String, u32) {
         if cutoff_hz < 11025.0 {
-            ("MP3".to_string(), 64)
+            ("mp3".to_string(), 64)
         } else if cutoff_hz < 14000.0 {
-            ("MP3".to_string(), 128)
+            ("mp3".to_string(), 128)
         } else if cutoff_hz < 16000.0 {
-            ("MP3".to_string(), 192)
+            ("mp3".to_string(), 192)
         } else if cutoff_hz < 18000.0 {
-            ("MP3/AAC".to_string(), 256)
+            // Ambiguous region — could be high-bitrate MP3 or mid-bitrate AAC
+            ("mp3".to_string(), 256)
         } else if cutoff_hz < 20000.0 {
-            ("AAC/OGG".to_string(), 320)
+            // 18–20 kHz: likely AAC 256+ or Ogg Vorbis quality 7+
+            ("aac".to_string(), 320)
         } else {
-            ("Unknown".to_string(), 0)
+            ("unknown".to_string(), 0)
         }
     }
 
@@ -547,6 +579,7 @@ impl AudioDetector {
             confidence
         };
 
+        // MFCC can't identify the specific codec — use LossyTranscode fallback
         Some(Detection {
             defect_type: DefectType::LossyTranscode {
                 codec: "Unknown (cepstral analysis)".to_string(),
@@ -585,9 +618,7 @@ impl AudioDetector {
     /// This complements MFCC analysis: MFCCs capture envelope shape while
     /// SFM captures the ratio of noise-like to tonal energy. Together they
     /// catch codecs that MFCC alone misses (e.g., high-bitrate Opus which
-    /// preserves envelope shape
-
-    /// Detect lossy transcode via Spectral Flatness Measure (SFM).
+    /// preserves envelope shape).
     fn detect_lossy_via_sfm(&self, mono_samples: &[f64], sample_rate: u32) -> Option<Detection> {
         use rustfft::{num_complex::Complex, FftPlanner};
 
@@ -671,6 +702,7 @@ impl AudioDetector {
 
         let confidence = ((avg_sfm - sfm_threshold) / (0.7 - sfm_threshold)).clamp(0.3, 0.95);
 
+        // SFM can't identify the specific codec — use LossyTranscode fallback
         Some(Detection {
             defect_type: DefectType::LossyTranscode {
                 codec: "Unknown (spectral flatness)".to_string(),
@@ -986,11 +1018,11 @@ mod tests {
         let detector = AudioDetector::with_default_config();
 
         let (codec, bitrate) = detector.estimate_codec(11000.0);
-        assert_eq!(codec, "MP3");
+        assert_eq!(codec, "mp3");
         assert_eq!(bitrate, 64);
 
         let (codec, bitrate) = detector.estimate_codec(15000.0);
-        assert_eq!(codec, "MP3");
+        assert_eq!(codec, "mp3");
         assert_eq!(bitrate, 192);
     }
 }

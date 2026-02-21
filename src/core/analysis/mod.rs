@@ -89,13 +89,41 @@ pub struct Detection {
 }
 
 /// Types of defects that can be detected
+///
+/// ## Codec-specific transcode variants
+///
+/// Each lossy codec has its own variant so that downstream consumers
+/// (test harnesses, JSON frontends, badge renderers) can match on the
+/// exact codec without parsing a freeform `codec: String` field.
+///
+/// `LossyTranscode` is retained as a catch-all for cases where the
+/// codec cannot be identified precisely (e.g. MFCC/SFM-only detection).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum DefectType {
+    // ── Codec-specific transcode variants ───────────────────────
+    Mp3Transcode {
+        estimated_bitrate: Option<u32>,
+        cutoff_hz: u32,
+    },
+    AacTranscode {
+        estimated_bitrate: Option<u32>,
+        cutoff_hz: u32,
+    },
+    OpusTranscode {
+        estimated_bitrate: Option<u32>,
+        cutoff_hz: u32,
+    },
+    OggVorbisTranscode {
+        estimated_bitrate: Option<u32>,
+        cutoff_hz: u32,
+    },
+    /// Fallback for unidentified codec or statistical-only detection
     LossyTranscode {
         codec: String,
         estimated_bitrate: Option<u32>,
         cutoff_hz: u32,
     },
+    // ── Other defect types ──────────────────────────────────────
     Upsampled {
         original_rate: u32,
         current_rate: u32,
@@ -140,6 +168,34 @@ pub enum DefectType {
         integrated_lufs: f64,
         plr_db: f64,
     },
+}
+
+impl DefectType {
+    /// Returns true if this defect represents any kind of lossy transcode
+    pub fn is_lossy_transcode(&self) -> bool {
+        matches!(
+            self,
+            DefectType::Mp3Transcode { .. }
+                | DefectType::AacTranscode { .. }
+                | DefectType::OpusTranscode { .. }
+                | DefectType::OggVorbisTranscode { .. }
+                | DefectType::LossyTranscode { .. }
+                | DefectType::UpsampledLossyTranscode { .. }
+        )
+    }
+
+    /// Canonical short codec name for any transcode variant
+    pub fn codec_name(&self) -> Option<&str> {
+        match self {
+            DefectType::Mp3Transcode { .. } => Some("MP3"),
+            DefectType::AacTranscode { .. } => Some("AAC"),
+            DefectType::OpusTranscode { .. } => Some("Opus"),
+            DefectType::OggVorbisTranscode { .. } => Some("OggVorbis"),
+            DefectType::LossyTranscode { codec, .. } => Some(codec.as_str()),
+            DefectType::UpsampledLossyTranscode { codec, .. } => Some(codec.as_str()),
+            _ => None,
+        }
+    }
 }
 
 /// Severity levels for detections
