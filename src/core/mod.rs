@@ -1,6 +1,7 @@
 //! Core analysis and detection modules
 
 pub mod analysis;
+pub mod decoder;
 pub mod detector;
 pub mod dsp;
 pub mod visualization;

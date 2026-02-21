@@ -16,7 +16,9 @@ mod core;
 use cli::args::{Args, OutputFormat, Sensitivity};
 use cli::output::OutputHandler;
 use core::analysis::{AnalysisConfig, AnalysisResult, AnalysisSensitivity};
+use core::decoder::{decode_audio, extract_mono};
 use core::detector::AudioDetector;
+use core::visualization::{generate_mel_spectrogram, SpectrogramConfig};
 
 fn main() -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
@@ -111,6 +113,17 @@ fn main() -> Result<()> {
                         output_handler.print_both(&analysis)?;
                     }
                 }
+
+                // Generate spectrogram if requested
+                if args.spectrogram {
+                    if let Err(e) = generate_spectrogram_for_file(&analysis.file_path) {
+                        eprintln!(
+                            "Warning: spectrogram generation failed for {}: {}",
+                            analysis.file_path.display(),
+                            e
+                        );
+                    }
+                }
             }
             Err(e) => {
                 error_count += 1;
@@ -141,6 +154,27 @@ fn main() -> Result<()> {
         export_report(&report_path)?;
     }
 
+    Ok(())
+}
+
+/// Decode an audio file and write a mel-scale spectrogram PNG next to it.
+fn generate_spectrogram_for_file(path: &PathBuf) -> Result<()> {
+    let audio = decode_audio(path)?;
+    let mono = extract_mono(&audio);
+
+    let config = SpectrogramConfig::default();
+
+    // Place the spectrogram image alongside the source file:
+    //   song.flac → song.spectrogram.png
+    let stem = path
+        .file_stem()
+        .unwrap_or_default()
+        .to_string_lossy();
+    let output_path = path.with_file_name(format!("{}.spectrogram.png", stem));
+
+    generate_mel_spectrogram(&mono, audio.sample_rate, &config, &output_path)?;
+
+    eprintln!("Spectrogram saved to {}", output_path.display());
     Ok(())
 }
 
