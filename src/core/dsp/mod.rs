@@ -209,33 +209,99 @@ impl SpectralAnalyzer {
         spectrogram
     }
 
-    /// Detect spectral cutoff frequency
+    /// Detect spectral cutoff frequency.
+    ///
+    /// # P0 FIX — complete rewrite
+    ///
+    /// The previous implementation estimated the noise floor as the average
+    /// of the bottom 10 % of spectral bins, then scanned *backwards* from
+    /// Nyquist for the first bin above `noise_floor + threshold_db`.
+    ///
+    /// **Why it was broken:**
+    /// - The bottom 10 % includes DC leakage and empty bins, giving an
+    ///   extremely low noise floor (e.g. −170 dB).
+    /// - Adding 10 dB to that yields −160 dB, far below actual noise.
+    /// - Scanning backwards, even residual noise near Nyquist (−120 dB)
+    ///   exceeded −160 dB, so the method *always* returned near-Nyquist.
+    /// - Result: `None` was never returned for lossy files because the
+    ///   Nyquist-proximity check then discarded it.  Actually it returned
+    ///   `Some(near_nyquist)` which the caller then treated as "no cutoff".
+    ///
+    /// **New algorithm (matches `spectral.rs` approach):**
+    /// 1. Find peak signal level in 2–8 kHz reference band.
+    /// 2. Set drop threshold = peak − 25 dB.
+    /// 3. Scan forward from 10 kHz for a run of ≥ 30 consecutive bins
+    ///    below the threshold (sustained energy drop).
+    /// 4. Return `Some(cutoff_hz)` only if the cutoff is below 95 % of
+    ///    Nyquist; return `None` for genuine full-bandwidth signals.
     pub fn detect_cutoff(
         &mut self,
         samples: &[f64],
         sample_rate: u32,
-        threshold_db: f64,
+        _threshold_db: f64, // kept for API compat; internally we use adaptive logic
     ) -> Option<f64> {
         let spectrum = self.compute_power_spectrum_db(samples);
         let freq_resolution = sample_rate as f64 / self.fft_size as f64;
+        let nyquist = sample_rate as f64 / 2.0;
 
-        // Find noise floor (average of bottom 10% of spectrum)
-        let mut sorted_spectrum = spectrum.clone();
-        sorted_spectrum.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        let noise_floor = sorted_spectrum[..sorted_spectrum.len() / 10]
+        if spectrum.len() < 100 {
+            return None;
+        }
+
+        // ── 1. Reference energy in 2–8 kHz ────────────────────────
+        let ref_start = (2_000.0 / freq_resolution).ceil() as usize;
+        let ref_end = (8_000.0 / freq_resolution).floor() as usize;
+
+        if ref_end <= ref_start || ref_end >= spectrum.len() {
+            return None;
+        }
+
+        let ref_peak: f64 = spectrum[ref_start..ref_end]
             .iter()
-            .sum::<f64>()
-            / (sorted_spectrum.len() / 10) as f64;
+            .cloned()
+            .fold(f64::NEG_INFINITY, f64::max);
 
-        // Find cutoff (where signal drops to threshold above noise floor)
-        let cutoff_level = noise_floor + threshold_db;
+        // If the reference band itself is very quiet, the file is near-silence
+        // or extremely unusual — bail out to avoid false positives.
+        if ref_peak < -80.0 {
+            return None;
+        }
 
-        for (i, &level) in spectrum.iter().enumerate().rev() {
-            if level > cutoff_level {
-                return Some(i as f64 * freq_resolution);
+        // ── 2. Adaptive drop threshold ─────────────────────────────
+        // Lossy codecs typically exhibit a 30–60 dB cliff at their
+        // cutoff frequency.  25 dB catches even gentle rolloffs while
+        // staying above normal spectral tilt in music.
+        let drop_threshold = ref_peak - 25.0;
+
+        // ── 3. Forward scan from 10 kHz for sustained drop ─────────
+        let search_start = (10_000.0 / freq_resolution).ceil() as usize;
+        let consecutive_required: usize = 30;
+        let mut consecutive_below: usize = 0;
+        let mut first_drop_bin: usize = spectrum.len() - 1;
+
+        for i in search_start..spectrum.len() {
+            if spectrum[i] < drop_threshold {
+                if consecutive_below == 0 {
+                    first_drop_bin = i;
+                }
+                consecutive_below += 1;
+                if consecutive_below >= consecutive_required {
+                    let cutoff_hz = first_drop_bin as f64 * freq_resolution;
+
+                    // ── 4. Only report if meaningfully below Nyquist ───
+                    if cutoff_hz < nyquist * 0.95 {
+                        return Some(cutoff_hz);
+                    } else {
+                        // Cutoff right at Nyquist → genuine full-bandwidth
+                        return None;
+                    }
+                }
+            } else {
+                consecutive_below = 0;
             }
         }
 
+        // No sustained drop found → genuine lossless
         None
     }
 
@@ -269,5 +335,66 @@ mod tests {
 
         let spectrum = analyzer.compute_spectrum(&samples);
         assert_eq!(spectrum.len(), 513); // fft_size/2 + 1
+    }
+
+    #[test]
+    fn test_detect_cutoff_full_bandwidth() {
+        // Synthesise a signal with harmonics up to near-Nyquist → should return None
+        let sr = 44100u32;
+        let n = sr as usize * 2; // 2 seconds
+        let samples: Vec<f64> = (0..n)
+            .map(|i| {
+                let t = i as f64 / sr as f64;
+                let mut s = 0.0;
+                for h in 1..200 {
+                    let f = 100.0 * h as f64;
+                    if f < 20_000.0 {
+                        s += (2.0 * PI * f * t).sin() / h as f64;
+                    }
+                }
+                s * 0.3
+            })
+            .collect();
+
+        let mut analyzer = SpectralAnalyzer::new(8192, 2048, WindowFunction::BlackmanHarris);
+        let cutoff = analyzer.detect_cutoff(&samples, sr, 10.0);
+        assert!(
+            cutoff.is_none(),
+            "Full-bandwidth signal should not trigger cutoff; got {:?}",
+            cutoff
+        );
+    }
+
+    #[test]
+    fn test_detect_cutoff_lossy_simulation() {
+        // Synthesise a signal with content only up to 16 kHz (like MP3 128k)
+        let sr = 44100u32;
+        let n = sr as usize * 2;
+        let samples: Vec<f64> = (0..n)
+            .map(|i| {
+                let t = i as f64 / sr as f64;
+                let mut s = 0.0;
+                for h in 1..200 {
+                    let f = 100.0 * h as f64;
+                    if f < 16_000.0 {
+                        s += (2.0 * PI * f * t).sin() / h as f64;
+                    }
+                }
+                s * 0.3
+            })
+            .collect();
+
+        let mut analyzer = SpectralAnalyzer::new(8192, 2048, WindowFunction::BlackmanHarris);
+        let cutoff = analyzer.detect_cutoff(&samples, sr, 10.0);
+        assert!(
+            cutoff.is_some(),
+            "Signal with 16 kHz cutoff should be detected"
+        );
+        let hz = cutoff.unwrap();
+        assert!(
+            hz > 14_000.0 && hz < 18_000.0,
+            "Cutoff should be near 16 kHz, got {:.0}",
+            hz
+        );
     }
 }
