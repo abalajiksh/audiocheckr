@@ -230,8 +230,10 @@ impl SpectralAnalyzer {
     /// **New algorithm (matches `spectral.rs` approach):**
     /// 1. Find peak signal level in 2–8 kHz reference band.
     /// 2. Set drop threshold = peak − 25 dB.
-    /// 3. Scan forward from 10 kHz for a run of ≥ 30 consecutive bins
-    ///    below the threshold (sustained energy drop).
+    /// 3. Scan forward from 10 kHz using a sliding window: in any window
+    ///    of 40 bins, if ≥ 32 are below the threshold, declare cutoff.
+    ///    This tolerates up to 20% noise/SBR/artifact bins that would
+    ///    break a strict consecutive-bins requirement.
     /// 4. Return `Some(cutoff_hz)` only if the cutoff is below 95 % of
     ///    Nyquist; return `None` for genuine full-bandwidth signals.
     pub fn detect_cutoff(
@@ -274,30 +276,68 @@ impl SpectralAnalyzer {
         let drop_threshold = ref_peak - 25.0;
 
         // ── 3. Forward scan from 10 kHz for sustained drop ─────────
+        //
+        // FIX: Use a sliding window instead of strict consecutive-bins.
+        // Real lossy audio has noise spikes, SBR artifacts, and codec
+        // residue above the cutoff. Requiring 30 CONSECUTIVE bins below
+        // threshold fails on nearly all real-world files.
+        //
+        // New approach: in a window of 40 bins, if >= 32 are below the
+        // threshold, we consider that a cutoff region. This tolerates
+        // up to 20% noise/artifact bins.
         let search_start = (10_000.0 / freq_resolution).ceil() as usize;
-        let consecutive_required: usize = 30;
-        let mut consecutive_below: usize = 0;
-        let mut first_drop_bin: usize = spectrum.len() - 1;
+        let window_size: usize = 40;
+        let required_below: usize = 32; // 80% of window must be below threshold
 
-        for i in search_start..spectrum.len() {
-            if spectrum[i] < drop_threshold {
-                if consecutive_below == 0 {
-                    first_drop_bin = i;
-                }
-                consecutive_below += 1;
-                if consecutive_below >= consecutive_required {
-                    let cutoff_hz = first_drop_bin as f64 * freq_resolution;
+        if search_start + window_size >= spectrum.len() {
+            return None;
+        }
 
-                    // ── 4. Only report if meaningfully below Nyquist ───
-                    if cutoff_hz < nyquist * 0.95 {
-                        return Some(cutoff_hz);
-                    } else {
-                        // Cutoff right at Nyquist → genuine full-bandwidth
-                        return None;
+        // Pre-compute which bins are below threshold
+        let below: Vec<bool> = spectrum.iter().map(|&v| v < drop_threshold).collect();
+
+        // Seed the sliding window count
+        let mut count_below: usize = below[search_start..search_start + window_size]
+            .iter()
+            .filter(|&&b| b)
+            .count();
+
+        for i in search_start..spectrum.len() - window_size {
+            if count_below >= required_below {
+                // Walk back to find the actual transition point
+                // (first bin in this window that is below threshold)
+                let mut cutoff_bin = i;
+                for j in i..i + window_size {
+                    if below[j] {
+                        cutoff_bin = j;
+                        break;
                     }
                 }
-            } else {
-                consecutive_below = 0;
+
+                let cutoff_hz = cutoff_bin as f64 * freq_resolution;
+
+                // ── 4. Only report if meaningfully below Nyquist ───
+                if cutoff_hz < nyquist * 0.95 {
+                    return Some(cutoff_hz);
+                } else {
+                    return None;
+                }
+            }
+
+            // Slide the window: remove the leftmost bin, add the next
+            if below[i] {
+                count_below -= 1;
+            }
+            if i + window_size < below.len() && below[i + window_size] {
+                count_below += 1;
+            }
+        }
+
+        // Check the final window position
+        if count_below >= required_below {
+            let cutoff_hz = (spectrum.len() - window_size) as f64 * freq_resolution;
+            if cutoff_hz < nyquist * 0.95 {
+                return Some(cutoff_hz);
             }
         }
 

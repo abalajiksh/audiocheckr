@@ -246,15 +246,20 @@ impl AudioDetector {
             detections.push(det);
         }
 
-        // 2) Resampling artifacts
-        if let Some(det) = self.detect_resampling(samples, sample_rate)? {
+        // 2) Resampling artifacts — use mono downmix for spectral analysis
+        let mono_f32: Vec<f32> = samples
+            .chunks(channels as usize)
+            .map(|frame| frame.iter().sum::<f32>() / channels as f32)
+            .collect();
+        if let Some(det) = self.detect_resampling(&mono_f32, sample_rate)? {
             has_resampling = true;
             detections.push(det);
         }
 
         // 3) Spectral cutoff (codec‑specific, P0/P1) – skipped if resampled
+        //    FIX: use mono downmix, NOT interleaved stereo
         let spectral_det = if !has_resampling {
-            self.detect_spectral_cutoff(&samples_f64, sample_rate)?
+            self.detect_spectral_cutoff(&mono_f64, sample_rate)?
         } else {
             None
         };
@@ -272,16 +277,18 @@ impl AudioDetector {
         }
 
         // 5) Upsampling shelf (P2).
+        //    FIX: use mono downmix, NOT interleaved stereo
         if !has_transcode {
-            if let Some(det) = self.detect_upsampling_shelf(&samples_f64, sample_rate)? {
+            if let Some(det) = self.detect_upsampling_shelf(&mono_f64, sample_rate)? {
                 detections.push(det);
             }
         }
 
         // ── FIX P5: downsampling detection ──────────────────────────
         // 5b) Downsampling detection (new)
+        //    FIX: use mono downmix, NOT interleaved stereo
         if !has_transcode && !has_resampling {
-            if let Some(det) = self.detect_downsampling(&samples_f64, sample_rate)? {
+            if let Some(det) = self.detect_downsampling(&mono_f64, sample_rate)? {
                 detections.push(det);
             }
         }
@@ -342,6 +349,19 @@ impl AudioDetector {
 
         if has_lossy {
             detections.retain(|d| !matches!(d.defect_type, DefectType::BitDepthInflated { .. }));
+        }
+
+        // FIX 4: Suppress standalone BitDepthInflated with confidence < 0.85
+        // to avoid false positives on genuine 24-bit files with unusual
+        // characteristics (heavy limiting, shaped dither, etc.)
+        if !has_lossy && !has_resampling {
+            detections.retain(|d| {
+                if let DefectType::BitDepthInflated { .. } = &d.defect_type {
+                    d.confidence >= 0.85
+                } else {
+                    true
+                }
+            });
         }
 
         // Final confidence gating with per‑defect tiers (P5)
@@ -954,18 +974,13 @@ impl AudioDetector {
         Ok(det.analyze(samples, sample_rate))
     }
 
-    /// ── FIX P1: MFCC‑based generic lossy detector (tightened) ──────
+    /// ── FIX P1/v3: MFCC‑based generic lossy detector (relaxed) ─────
     ///
-    /// Changes:
-    /// - Lowered `base_threshold` from 2.2 → 1.8 to reduce false
-    ///   positives on tracks with naturally smooth spectral envelopes
-    ///   (electronic, ambient).
-    /// - Added a minimum signal-energy gate: skip if the upper MFCC
-    ///   std-dev is extremely low (< 0.3), which indicates near-silence
-    ///   rather than lossy encoding.
-    /// - Added stronger delta-std cross-check: genuine lossy transcodes
-    ///   have low delta-std in upper coefficients because the codec
-    ///   quantisation is temporally consistent.
+    /// Changes from v2 → v3:
+    /// - Raised `base_threshold` from 1.8 → 2.5 (1.8 was over-tightened,
+    ///   causing zero detections on real lossy files)
+    /// - Relaxed delta cross-check from 0.4 → 0.7
+    /// - Lowered energy gate from 0.3 → 0.15
     fn detect_lossy_via_mfcc(
         &self,
         mfcc: &crate::core::analysis::mfcc::MfccResult,
@@ -981,29 +996,26 @@ impl AudioDetector {
 
         let high_std = std[5..].iter().sum::<f64>() / (std.len() - 5) as f64;
 
-        // ── FIX P1: tightened from 2.2 → 1.8 ───────────────────────
-        // The old threshold of 2.2 was too high: natural tracks with
-        // low HF energy (electronic dance, ambient) have high_std around
-        // 1.5–2.0 and were incorrectly flagged as lossy transcodes.
-        let base_threshold = 1.8_f64;
+        // ── FIX v3: relaxed from 1.8 → 2.5 ─────────────────────────
+        // 1.8 was too aggressive — real lossy transcodes often have
+        // high_std in the 1.8–2.4 range and were being missed.
+        let base_threshold = 2.5_f64;
 
         if high_std >= base_threshold {
             return None;
         }
 
-        // ── FIX P1: minimum energy gate ─────────────────────────────
-        // Very low std-dev (< 0.3) indicates near-silence, not lossy.
-        if high_std < 0.3 {
+        // ── FIX v3: lowered energy gate from 0.3 → 0.15 ────────────
+        // Very low std-dev (< 0.15) indicates near-silence, not lossy.
+        if high_std < 0.15 {
             return None;
         }
 
-        // ── FIX P1: stronger delta cross-check ──────────────────────
+        // ── FIX v3: relaxed delta cross-check from 0.4 → 0.7 ───────
         let delta_ok = if let Some(ref dstd) = mfcc.stats.delta_std {
             if dstd.len() > 5 {
                 let high_delta = dstd[5..].iter().sum::<f64>() / (dstd.len() - 5) as f64;
-                // Tightened from 0.6 → 0.4: genuine lossy has very
-                // consistent temporal envelopes in upper MFCCs
-                high_delta < 0.4
+                high_delta < 0.7
             } else {
                 true
             }
@@ -1047,16 +1059,11 @@ impl AudioDetector {
         })
     }
 
-    /// ── FIX P1: SFM‑based lossy detector (tightened) ───────────────
+    /// ── FIX P1/v3: SFM‑based lossy detector (relaxed) ─────────────
     ///
-    /// Changes:
-    /// - Raised threshold from 0.35 → 0.45 to stop false positives on
-    ///   genres with naturally low HF energy.
-    /// - Clamped 5-second skip to file length so short files don't read
-    ///   garbage.
-    /// - Added minimum signal energy gate: if the 8–20 kHz band has
-    ///   very little energy (< −60 dBFS), skip — this is natural
-    ///   spectral tilt, not codec artefacts.
+    /// Changes from v2 → v3:
+    /// - Lowered threshold from 0.45 → 0.35
+    /// - Lowered band energy gate from -60 dB → -75 dB
     fn detect_lossy_via_sfm(&self, mono: &[f64], sample_rate: u32) -> Option<Detection> {
         use rustfft::{num_complex::Complex, FftPlanner};
 
@@ -1133,24 +1140,21 @@ impl AudioDetector {
             return None;
         }
 
-        // ── FIX P1: minimum band energy gate ────────────────────────
-        // If the 8–20 kHz band has very little energy, the track simply
-        // has a natural spectral tilt (electronic, ambient, bass-heavy).
-        // Don't flag it as lossy.
+        // ── FIX v3: lowered band energy gate from -60 → -75 dB ─────
         let avg_band_energy = band_energy_sum / n_frames as f64;
         let band_db = if avg_band_energy > 1e-20 {
             10.0 * avg_band_energy.log10()
         } else {
             -120.0
         };
-        if band_db < -60.0 {
+        if band_db < -75.0 {
             return None;
         }
 
         let sfm = sfm_sum / n_frames as f64;
 
-        // ── FIX P1: raised threshold from 0.35 → 0.45 ──────────────
-        let threshold = 0.45;
+        // ── FIX v3: lowered threshold from 0.45 → 0.35 ─────────────
+        let threshold = 0.35;
         if sfm <= threshold {
             return None;
         }
