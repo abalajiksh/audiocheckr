@@ -3,7 +3,7 @@
 Advanced audio analysis tool for detecting fake lossless files, transcodes, upsampled audio, and various audio quality issues. Uses pure DSP algorithms—no machine learning.
 
 ## Important Note
-After fighting the rust compiler for borrow-checker issues and other problems, I decidded to take a break from this project for a while, and probably rewrite the whole project in C++ 17 as I am more comfortable with that than Rust. I have developed a standalone tool named [crête](https://github.com/abalajiksh/Crete) which measures dynamic range of a music file, if you would like to give it a try. Thanks for your interest.
+After fighting the rust compiler for borrow-checker issues and other problems, I decided to take a break from this project for a while, and probably rewrite the whole project in C++ 17 as I am more comfortable with that than Rust. I have developed a standalone tool named [crête](https://github.com/abalajiksh/Crete) which measures dynamic range of a music file, if you would like to give it a try. Thanks for your interest.
 
 ## Features
 
