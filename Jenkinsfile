@@ -165,7 +165,7 @@ def fetchLatestBinary() {
 }
 
 pipeline {
-    agent {amd64}
+    agent { label 'amd64' }
     
 
 
